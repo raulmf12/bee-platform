@@ -1,0 +1,36 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+.env
+.env.local
+.env.*.local
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build artifacts
+tsconfig.tsbuildinfo
+
+# Supabase
+supabase/.branches
+supabase/.temp
+supabase/.env
+
+# OS
+Thumbs.db
+
+# Secrets — nunca commitar
+*.pem
+*.key
+secrets/
+
+# Scratch / TODO local
+scratch/
+TODO.md

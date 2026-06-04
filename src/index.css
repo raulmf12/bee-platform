@@ -1,0 +1,124 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400;1,700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Bee Consulting — modo claro (cream + navy) */
+    --background: 48 70% 93%;          /* cream #FBF5E2 */
+    --foreground: 204 35% 27%;         /* navy #2D4A5C */
+
+    --card: 48 60% 97%;
+    --card-foreground: 204 35% 27%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 204 35% 27%;
+
+    --primary: 204 35% 27%;            /* navy */
+    --primary-foreground: 48 70% 93%;  /* cream */
+
+    --secondary: 48 50% 88%;
+    --secondary-foreground: 204 35% 27%;
+
+    --muted: 48 40% 86%;
+    --muted-foreground: 204 18% 40%;
+
+    --accent: 33 76% 60%;              /* honey */
+    --accent-foreground: 204 50% 18%;
+
+    --destructive: 0 75% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 204 15% 78%;
+    --input: 48 30% 82%;
+    --ring: 33 76% 60%;
+
+    --radius: 0.65rem;
+  }
+
+  .dark {
+    --background: 204 30% 12%;         /* charcoal navy */
+    --foreground: 48 70% 93%;
+
+    --card: 204 30% 16%;
+    --card-foreground: 48 70% 93%;
+
+    --popover: 204 30% 14%;
+    --popover-foreground: 48 70% 93%;
+
+    --primary: 33 76% 60%;             /* honey */
+    --primary-foreground: 204 35% 12%;
+
+    --secondary: 204 25% 22%;
+    --secondary-foreground: 48 70% 93%;
+
+    --muted: 204 25% 22%;
+    --muted-foreground: 48 25% 70%;
+
+    --accent: 33 76% 60%;
+    --accent-foreground: 204 35% 12%;
+
+    --destructive: 0 70% 45%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 204 25% 25%;
+    --input: 204 25% 22%;
+    --ring: 33 76% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html, body, #root {
+    @apply h-full;
+  }
+  body {
+    @apply bg-background text-foreground antialiased font-sans;
+    font-feature-settings: "cv11", "ss01";
+  }
+  h1, h2, h3, h4, h5 {
+    @apply font-display tracking-tight;
+  }
+  ::selection {
+    background: hsl(var(--accent) / 0.4);
+  }
+}
+
+/* Tiptap editor base styles */
+.tiptap {
+  @apply outline-none min-h-[8rem];
+}
+.tiptap p {
+  @apply mb-2;
+}
+.tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  @apply text-muted-foreground float-left h-0 pointer-events-none;
+}
+.tiptap strong { @apply font-bold; }
+.tiptap em { @apply italic; }
+.tiptap ul { @apply list-disc list-inside; }
+.tiptap ol { @apply list-decimal list-inside; }
+
+/* Fabric.js canvas container */
+.canvas-stage {
+  @apply rounded-lg border border-border overflow-hidden bg-white shadow-sm;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  @apply w-2 h-2;
+}
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-border rounded-full;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-muted-foreground/40;
+}
