@@ -73,9 +73,9 @@ async function fetchRest<T>(path: string): Promise<T> {
 }
 
 interface BeeEditorial { slug: string; name: string; description: string; frequency_hint: string; structure_template: string; emotional_sequence: string[] }
-interface BeeArsenal { title: string; summary: string; details: string | null; type: string }
+interface BeeArsenal { id?: string; title: string; summary: string; details: string | null; type: string }
 interface BeeAvatar { slug: string; name: string; state: string; dor: string; gatilhos: string[]; example_phrases: string[] }
-interface BeeExamplePost { editorial_slug: string; image_quote: string; caption: string; why_good: string; headline_type: string; analogy: string }
+interface BeeExamplePost { id?: string; editorial_slug: string; image_quote: string; caption: string; why_good: string; headline_type: string; analogy: string }
 interface BeeGlossaryTerm { term: string; meaning: string; usage_note: string; must_appear: boolean }
 interface BeeStyleRule { rule: string; rationale: string }
 interface BeeHeadlineType { name: string; description: string; examples: string[] }
@@ -120,9 +120,12 @@ async function loadBeeContext(input: GenerateInput) {
     fetchRest<BeeEditorial[]>(`/bee_editorials?slug=eq.${input.editorial_slug}&limit=1`),
     input.arsenal_item_id
       ? fetchRest<BeeArsenal[]>(`/bee_arsenal?id=eq.${input.arsenal_item_id}&limit=1`)
-      : Promise.resolve([]),
+      // Sem item escolhido: ROTACIONA — pega o item ativo menos usado / mais antigo
+      // (metodologia viva: a cada geracao varia o material e evita repetir).
+      : fetchRest<BeeArsenal[]>(`/bee_arsenal?editorial_slug=eq.${input.editorial_slug}&is_active=eq.true&order=last_used_at.asc.nullsfirst,usage_count.asc&limit=1`),
     fetchRest<BeeAvatar[]>(`/bee_avatars?order=position.asc${avatarFilter}`),
-    fetchRest<BeeExamplePost[]>(`/bee_example_posts?editorial_slug=eq.${input.editorial_slug}&order=position.asc&limit=2`),
+    // Few-shot tambem rotaciona por frescor (exemplos ativos menos usados primeiro).
+    fetchRest<BeeExamplePost[]>(`/bee_example_posts?editorial_slug=eq.${input.editorial_slug}&is_active=eq.true&order=last_used_at.asc.nullsfirst,position.asc&limit=2`),
     fetchRest<BeeGlossaryTerm[]>(`/bee_glossary?select=term,meaning,usage_note,must_appear`),
     fetchRest<BeeStyleRule[]>(`/bee_style_rules?category=eq.do&order=position.asc`),
     fetchRest<BeeStyleRule[]>(`/bee_style_rules?category=eq.dont&order=position.asc`),
@@ -144,6 +147,21 @@ async function loadBeeContext(input: GenerateInput) {
     analogiesNew, analogiesUsed,
     hashtags,
   };
+}
+
+// Incrementa uso do material consumido na geracao (via RPC SQL).
+async function bumpUsage(arsenalId: string | undefined, exampleIds: (string | undefined)[]): Promise<void> {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  const calls: Promise<unknown>[] = [];
+  const rpc = (fn: string, body: object) =>
+    fetch(`${supabaseUrl}/rest/v1/rpc/${fn}`, {
+      method: 'POST',
+      headers: svcHeaders(),
+      body: JSON.stringify(body),
+    }).catch(() => undefined);
+  if (arsenalId) calls.push(rpc('bump_arsenal_usage', { p_id: arsenalId }));
+  for (const id of exampleIds) if (id) calls.push(rpc('bump_example_usage', { p_id: id }));
+  try { await Promise.all(calls); } catch { /* noop */ }
 }
 
 async function retrieveContext(apiKey: string, query: string, userId: string): Promise<string> {
@@ -523,6 +541,10 @@ Deno.serve(async (req: Request) => {
 
     const { text, usage, model_used } = await callGemini(apiKey, sys, usr);
     const parsed = parseGeminiJson(text);
+
+    // Metodologia viva: marca o material usado (incrementa uso + last_used_at)
+    // pra rotacionar nas proximas geracoes. Fire-and-forget — nao trava a resposta.
+    void bumpUsage(ctx.arsenalItem?.id, (ctx.examples as BeeExamplePost[]).map((e) => e.id));
 
     logUsage({
       userId,

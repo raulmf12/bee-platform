@@ -202,6 +202,11 @@ export function PostEditor() {
         published_url: result.published_url,
         published_at: new Date().toISOString(),
       });
+      // Metodologia viva: a frase publicada vira candidata a few-shot (passa pela
+      // curadoria). Fire-and-forget — nunca atrapalha a publicacao.
+      void import('@/lib/api').then(({ suggestionApi }) =>
+        suggestionApi.captureFromPublishedPost({ ...post, caption }),
+      );
       window.open(result.published_url, '_blank');
     } catch (e) {
       console.error(e);
