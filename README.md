@@ -153,6 +153,37 @@ A função `match_knowledge(embedding, top_k, threshold, user_id)` usa pgvector 
 
 ---
 
+## 🔄 Metodologia viva
+
+Em vez de seed estático, o arsenal e os editoriais **evoluem** com curadoria humana no meio:
+
+```
+FONTES                 mine-content       bee_suggestions      /curadoria        VIVO
+cortes de podcast  →   (Gemini destila →  (fila, pending)  →   humano aprova  →  bee_arsenal
+docs / posts           candidatos)                             edita/rejeita     bee_example_posts
+                                                                                  ↓ entra na geração
+                                                                                  e ROTACIONA por frescor
+```
+
+- **`/editoriais`** — CRUD dos 8 pilares (os oficiais editáveis, slug travado, não apagáveis; criar novos integra na hora à geração).
+- **`/arsenal`** — biblioteca viva: uso/frescor/ativo por item + frases-exemplo. O que está **ativo** entra na rotação.
+- **`/curadoria`** — a fila de sugestões: aprovar/editar/rejeitar. **Portão humano obrigatório** — nada minerado entra na metodologia sem aprovação (protege a voz de derivar).
+- **Feedback**: ao publicar um post, a frase vencedora vira candidata a few-shot (também passa pela curadoria).
+
+## 🎙 Podcasts (`/podcasts`)
+
+Fluxo dedicado de corte de podcast:
+1. Vincula ao episódio do **YouTube** → `youtube-meta` puxa título + descrição.
+2. Sobe o corte (TUS resumable) → `process-video` **transcreve na hora** → o corte é **guardado** (`podcast_clips`, aparece na Biblioteca, aba "Cortes").
+3. Emenda na geração da caption e cria o(s) post(s), ligados ao corte e ao episódio.
+4. Botão **Minerar** em cada corte → alimenta a Curadoria a partir da transcrição.
+
+## ⚡ Piloto automático
+
+Botão **"Automático"** (no Kanban e no topo do Novo post, ou deep-link `/posts/novo?auto=1`): com 1 clique o sistema **escolhe sozinho** o editorial (ponderado por frequência, evitando repetir o último), o arsenal (rotação do mais fresco), a rede social (alterna LI/IG) e o avatar — gera e entrega o **post pronto** no editor pra revisar/publicar.
+
+---
+
 ## 🛠 Stack técnica
 
 ### Front-end
@@ -228,7 +259,7 @@ VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_xxxxxxxxxxxx
 
 ### 3. Aplicar migrations no Supabase
 
-Existem 6 migrations em `supabase/migrations/`. Aplica na ordem:
+Existem 9 migrations em `supabase/migrations/`. Aplica na ordem:
 
 **Opção A — via CLI:**
 ```bash
@@ -244,6 +275,11 @@ Cola cada `.sql` no SQL Editor, rode na ordem:
 4. `20260528_products_editorial_lines.sql` — `bee_products` + `editorial_lines` + cron tick setup
 5. `20260604_arsenal_diagnostico_sistemico.sql` — adiciona 11 padrões corporativos como arsenal pra Diagnóstico Sistêmico
 6. `20260604_publish_integrations.sql` — colunas em `user_settings` (tokens) e `user_posts` (tracking de publicação)
+7. `20260609000001_bee_editorials_crud.sql` — `is_system` + policies de escrita pra editar/criar editoriais pela UI
+8. `20260609000002_podcasts.sql` — `podcasts` + `podcast_clips` (cortes + transcrição)
+9. `20260610000001_living_methodology.sql` — lifecycle em `bee_arsenal`/`bee_example_posts` + fila `bee_suggestions` + RPCs de uso
+
+> ⚠️ **Nota sobre versões colididas**: as migrations antigas usam prefixo de data de 8 dígitos (várias `20260527_*`), e os seeds não têm todos `ON CONFLICT`. Se o histórico remoto estiver vazio, **não** rode `db push` cego (duplicaria seed). Aplique só as migrations novas (idempotentes) isolando-as, ou use o SQL Editor.
 
 ### 4. Criar bucket `media` no Storage
 
@@ -264,6 +300,7 @@ supabase secrets set GEMINI_API_KEY=AIzaSyXXX...
 supabase secrets set GEMINI_MODEL=gemini-3.5-flash  # opcional, default já é flash
 supabase secrets set RAG_TOP_K=8                     # opcional
 supabase secrets set RAG_THRESHOLD=0.25              # opcional
+supabase secrets set YOUTUBE_API_KEY=AIzaSyYYY...    # opcional — sem ela, youtube-meta usa oEmbed + scrape
 ```
 
 `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` são auto-injetadas pelo Supabase.
@@ -274,7 +311,7 @@ supabase secrets set RAG_THRESHOLD=0.25              # opcional
 npx supabase functions deploy generate-content generate-image-ai \
   generate-caption-from-video process-video hybrid-image-search \
   ingest-document search-knowledge editorial-line-tick \
-  download-proxy publish-post
+  download-proxy publish-post youtube-meta mine-content
 ```
 
 ### 7. Configurar pg_cron (publicação agendada futura)
@@ -404,6 +441,11 @@ bee-platform/
 | `bee_products` | Produtos pra referência em posts (pre/launch/post-launch) |
 | `editorial_lines` + `editorial_line_runs` | Campanhas recorrentes |
 | `usage_logs` | Tracking de uso de IA por user (tokens, custo aprox) |
+| `podcasts` | Episódios (1 por vídeo do YouTube — title/description puxados do YouTube) |
+| `podcast_clips` | Cortes subidos: video_path, **transcript** guardada, vínculo ao podcast e ao post gerado |
+| `bee_suggestions` | **Fila de curadoria** — material minerado pela IA aguardando aprovação humana (kind: arsenal/example_post/analogy) |
+
+**Metodologia viva** (`bee_arsenal` e `bee_example_posts` ganharam lifecycle): `is_active`, `usage_count`, `last_used_at`, `performance_score`. A geração rotaciona o material ativo por frescor (menos usado primeiro) e marca o uso — cada post sai diferente.
 
 ### Conventions
 
@@ -418,7 +460,9 @@ bee-platform/
 
 | Função | Input | Output | Modelo |
 |---|---|---|---|
-| `generate-content` | `{editorial_slug, arsenal_item_id?, target_avatar?, briefing?, target_platform?, reference_post_id?}` | `{quote, caption, headline_type_used, analogy_used}` | Gemini 3.5 Flash (chain fallback) |
+| `generate-content` | `{editorial_slug, arsenal_item_id?, target_avatar?, briefing?, target_platform?, reference_post_id?}` | `{quote, caption, headline_type_used, analogy_used}` | Gemini 3.5 Flash (chain fallback). Sem `arsenal_item_id` → **rotaciona** o arsenal ativo mais fresco e marca uso |
+| `youtube-meta` | `{url}` | `{video_id, title, description, channel, thumbnail_url}` | oEmbed + scrape (ou YouTube Data API se `YOUTUBE_API_KEY`) |
+| `mine-content` | `{text, source_type?, source_id?, editorial_hint?}` | `{created, skipped}` — destila candidatos pra `bee_suggestions` | Gemini Flash chain |
 | `generate-caption-from-video` | `{transcript, visual_summary, content_type, editorial_slug?, …}` | `{caption}` | Gemini Flash chain |
 | `process-video` | `{storage_path, mime_type, content_type}` | `{transcript, visual_summary, detected_content_type, model_used}` | Gemini Files API + Pro |
 | `ingest-document` | `{path, mime_type, title}` | `{document_id, chunks_count}` | Gemini Embedding 001 |
@@ -655,6 +699,12 @@ git push origin main
 - [x] Integração de publicação LinkedIn + Instagram
 - [x] Botão "Publicar agora" no PostEditor
 - [x] Aba "Integrações" em Settings com test connection
+- [x] **Frase do template**: quebra de linha balanceada (measureText + busca binária, evita órfãs)
+- [x] **Editoriais editáveis** (`/editoriais`) — CRUD dos 8 pilares, integra na hora à geração
+- [x] **Fluxo de podcast** (`/podcasts`) — vínculo YouTube + transcrição guardada + cortes na Biblioteca
+- [x] **Metodologia viva** — mineração IA (`mine-content`) + fila `bee_suggestions` + curadoria humana (`/curadoria`)
+- [x] **Lifecycle + rotação** do arsenal/exemplos (uso/frescor/ativo) na geração
+- [x] **Piloto automático** — 1 botão escolhe tudo e entrega o post pronto
 
 ### Em backlog 🚧
 - [ ] **Publicação agendada via pg_cron tick** — varrer posts `scheduled` com `scheduled_date <= now()` e disparar publish-post
