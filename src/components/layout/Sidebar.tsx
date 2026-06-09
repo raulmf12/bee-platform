@@ -8,6 +8,9 @@ import {
   BrainCircuit,
   Package,
   CalendarClock,
+  BookOpen,
+  Mic,
+  Boxes,
   Paintbrush,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -22,7 +25,11 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/posts', label: 'Posts', icon: FolderKanban },
+  { to: '/podcasts', label: 'Podcasts', icon: Mic },
   { to: '/editor', label: 'Editor', icon: Paintbrush },
+  { to: '/editoriais', label: 'Editoriais', icon: BookOpen },
+  { to: '/arsenal', label: 'Arsenal', icon: Boxes },
+  { to: '/curadoria', label: 'Curadoria', icon: Sparkles },
   { to: '/linhas', label: 'Linhas editoriais', icon: CalendarClock },
   { to: '/produtos', label: 'Produtos', icon: Package },
   { to: '/conhecimento', label: 'Conhecimento', icon: BrainCircuit },

@@ -188,6 +188,55 @@ export interface ContentIdea {
 }
 
 // ---------------------------------------------------------------------------
+// PODCASTS + CORTES
+// ---------------------------------------------------------------------------
+// Um "podcast" = o video do YouTube do episodio completo (titulo/descricao
+// puxados do YouTube). Cada corte (clip) e um trecho subido, transcrito e
+// guardado, vinculado a um podcast.
+export interface Podcast {
+  id: string;
+  user_id: string;
+  youtube_url?: string | null;
+  youtube_video_id?: string | null;
+  title: string;
+  description?: string | null;
+  channel?: string | null;
+  thumbnail_url?: string | null;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  // agregado opcional (preenchido em algumas queries)
+  clip_count?: number;
+}
+
+export interface PodcastClip {
+  id: string;
+  user_id: string;
+  podcast_id?: string | null;
+  title?: string | null;
+  video_path?: string | null;
+  video_url?: string | null;
+  transcript?: string | null;
+  visual_summary?: string | null;
+  duration_seconds?: number | null;
+  content_type?: string;
+  post_id?: string | null;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+// Metadados puxados do YouTube pela edge function youtube-meta.
+export interface YoutubeMeta {
+  video_id: string;
+  url: string;
+  title: string;
+  description: string;
+  channel?: string;
+  thumbnail_url?: string;
+}
+
+// ---------------------------------------------------------------------------
 // BEE EDITORIAL ARCHITECTURE
 // ---------------------------------------------------------------------------
 export interface BeeEditorial {
@@ -200,6 +249,7 @@ export interface BeeEditorial {
   emotional_sequence?: string[];
   position: number;
   is_active: boolean;
+  is_system?: boolean;
 }
 
 export interface BeeArsenalItem {
@@ -212,6 +262,13 @@ export interface BeeArsenalItem {
   source?: string;
   metadata: Record<string, unknown>;
   position: number;
+  // lifecycle (metodologia viva)
+  is_active?: boolean;
+  usage_count?: number;
+  last_used_at?: string | null;
+  performance_score?: number;
+  source_type?: string | null;
+  source_id?: string | null;
 }
 
 export interface BeeGlossaryTerm {
@@ -293,6 +350,36 @@ export interface BeeExamplePost {
   analogy?: string;
   source?: string;
   position: number;
+  // lifecycle (metodologia viva)
+  is_active?: boolean;
+  usage_count?: number;
+  last_used_at?: string | null;
+  performance_score?: number;
+  source_type?: string | null;
+  source_id?: string | null;
+}
+
+// Sugestao na fila de curadoria — material minerado pela IA que aguarda
+// aprovacao humana antes de virar arsenal/exemplo/analogia de verdade.
+export type SuggestionKind = 'arsenal' | 'example_post' | 'analogy';
+export type SuggestionStatus = 'pending' | 'approved' | 'rejected';
+
+export interface BeeSuggestion {
+  id: string;
+  kind: SuggestionKind;
+  status: SuggestionStatus;
+  editorial_slug?: string | null;
+  // forma do payload depende do kind (campos do arsenal / example_post / analogy)
+  payload: Record<string, unknown>;
+  source_type?: string | null;
+  source_id?: string | null;
+  source_excerpt?: string | null;
+  confidence?: number;
+  created_by?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  approved_target_id?: string | null;
+  created_at: string;
 }
 
 export interface BeeHashtag {

@@ -184,4 +184,43 @@ export const edge = {
     if (!res.ok) throw new Error(`publish-post HTTP ${res.status}: ${text.slice(0, 500)}`);
     return JSON.parse(text);
   },
+
+  async fetchYoutubeMeta(input: { url: string }): Promise<{
+    success: boolean;
+    video_id: string;
+    url: string;
+    title: string;
+    description: string;
+    channel?: string;
+    thumbnail_url?: string;
+    error?: string;
+  }> {
+    const headers = await authHeader();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/youtube-meta`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(input),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`youtube-meta HTTP ${res.status}: ${text.slice(0, 300)}`);
+    return JSON.parse(text);
+  },
+
+  async mineContent(input: {
+    text: string;
+    source_type?: 'podcast_clip' | 'document' | 'post' | 'manual';
+    source_id?: string;
+    editorial_hint?: string;
+    context?: string;
+  }): Promise<{ success: boolean; created: number; skipped: number; error?: string }> {
+    const headers = await authHeader();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/mine-content`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(input),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`mine-content HTTP ${res.status}: ${text.slice(0, 400)}`);
+    return JSON.parse(text);
+  },
 };

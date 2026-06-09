@@ -3,15 +3,20 @@
 
 import { db, getCurrentUserId } from './db';
 import type {
+  BeeAnalogy,
   BeeArsenalItem,
   BeeAvatar,
   BeeEditorial,
+  BeeExamplePost,
   BeeProduct,
   BeeStyleRule,
+  BeeSuggestion,
   EditorialLine,
   EditorialLineRun,
   KanbanColumn,
   KnowledgeDocument,
+  Podcast,
+  PodcastClip,
   PostDraft,
   PostStatus,
   PostTemplate,
@@ -256,11 +261,37 @@ export const kanbanApi = {
 // BEE EDITORIAL ARCHITECTURE
 // ----------------------------------------------------------------------------
 export const beeApi = {
+  // So os ativos, ordenados — usado na geracao e na selecao de editorial.
   async editorials(): Promise<BeeEditorial[]> {
     return db.select<BeeEditorial>('bee_editorials', {
       is_active: 'eq.true',
       order: 'position.asc',
     });
+  },
+
+  // Todos (inclui inativos) — usado na tela de gerenciamento.
+  async listEditorials(): Promise<BeeEditorial[]> {
+    return db.select<BeeEditorial>('bee_editorials', {
+      order: 'position.asc',
+    });
+  },
+
+  async createEditorial(input: Partial<BeeEditorial>): Promise<BeeEditorial> {
+    const rows = await db.insert<BeeEditorial>('bee_editorials', input);
+    if (!rows[0]) throw new Error('Falha ao criar editorial');
+    return rows[0];
+  },
+
+  // Nunca deixa o slug/is_system serem alterados via update (slug travado).
+  async updateEditorial(id: string, patch: Partial<BeeEditorial>): Promise<BeeEditorial> {
+    const { slug: _slug, is_system: _sys, id: _id, ...safe } = patch;
+    const rows = await db.update<BeeEditorial>('bee_editorials', { id: `eq.${id}` }, safe);
+    if (!rows[0]) throw new Error('Editorial nao encontrado');
+    return rows[0];
+  },
+
+  async deleteEditorial(id: string): Promise<void> {
+    return db.delete('bee_editorials', { id: `eq.${id}` });
   },
 
   async arsenalForEditorial(editorial_slug: string): Promise<BeeArsenalItem[]> {
@@ -375,5 +406,271 @@ export const draftApi = {
     );
     if (!rows[0]) throw new Error('Falha ao salvar draft');
     return rows[0];
+  },
+};
+
+// ----------------------------------------------------------------------------
+// PODCASTS (episodios do YouTube) + CORTES
+// ----------------------------------------------------------------------------
+export const podcastApi = {
+  async list(): Promise<Podcast[]> {
+    return db.select<Podcast>('podcasts', { order: 'created_at.desc' });
+  },
+
+  async get(id: string): Promise<Podcast | null> {
+    return db.selectOne<Podcast>('podcasts', { id: `eq.${id}` });
+  },
+
+  async findByVideoId(videoId: string): Promise<Podcast | null> {
+    const userId = requireUserId();
+    return db.selectOne<Podcast>('podcasts', {
+      user_id: `eq.${userId}`,
+      youtube_video_id: `eq.${videoId}`,
+    });
+  },
+
+  async create(input: Partial<Podcast>): Promise<Podcast> {
+    const userId = requireUserId();
+    const rows = await db.insert<Podcast>('podcasts', { ...input, user_id: userId });
+    if (!rows[0]) throw new Error('Falha ao criar podcast');
+    return rows[0];
+  },
+
+  async update(id: string, patch: Partial<Podcast>): Promise<Podcast> {
+    const { id: _id, user_id: _u, ...safe } = patch;
+    const rows = await db.update<Podcast>('podcasts', { id: `eq.${id}` }, safe);
+    if (!rows[0]) throw new Error('Podcast nao encontrado');
+    return rows[0];
+  },
+
+  async delete(id: string): Promise<void> {
+    return db.delete('podcasts', { id: `eq.${id}` });
+  },
+
+  // Acha o episodio pelo videoId ou cria um novo a partir dos metadados.
+  // Mantem titulo/descricao atualizados se ja existir.
+  async upsertFromYoutube(meta: {
+    video_id: string;
+    url: string;
+    title: string;
+    description?: string;
+    channel?: string;
+    thumbnail_url?: string;
+  }): Promise<Podcast> {
+    const existing = await podcastApi.findByVideoId(meta.video_id);
+    const fields: Partial<Podcast> = {
+      youtube_url: meta.url,
+      youtube_video_id: meta.video_id,
+      title: meta.title,
+      description: meta.description ?? null,
+      channel: meta.channel ?? null,
+      thumbnail_url: meta.thumbnail_url ?? null,
+    };
+    if (existing) return podcastApi.update(existing.id, fields);
+    return podcastApi.create(fields);
+  },
+};
+
+export const podcastClipApi = {
+  async list(): Promise<PodcastClip[]> {
+    return db.select<PodcastClip>('podcast_clips', { order: 'created_at.desc' });
+  },
+
+  async listByPodcast(podcastId: string): Promise<PodcastClip[]> {
+    return db.select<PodcastClip>('podcast_clips', {
+      podcast_id: `eq.${podcastId}`,
+      order: 'created_at.desc',
+    });
+  },
+
+  async get(id: string): Promise<PodcastClip | null> {
+    return db.selectOne<PodcastClip>('podcast_clips', { id: `eq.${id}` });
+  },
+
+  async create(input: Partial<PodcastClip>): Promise<PodcastClip> {
+    const userId = requireUserId();
+    const rows = await db.insert<PodcastClip>('podcast_clips', { ...input, user_id: userId });
+    if (!rows[0]) throw new Error('Falha ao salvar corte');
+    return rows[0];
+  },
+
+  async update(id: string, patch: Partial<PodcastClip>): Promise<PodcastClip> {
+    const { id: _id, user_id: _u, ...safe } = patch;
+    const rows = await db.update<PodcastClip>('podcast_clips', { id: `eq.${id}` }, safe);
+    if (!rows[0]) throw new Error('Corte nao encontrado');
+    return rows[0];
+  },
+
+  async delete(id: string): Promise<void> {
+    return db.delete('podcast_clips', { id: `eq.${id}` });
+  },
+};
+
+// ----------------------------------------------------------------------------
+// ARSENAL (CRUD + lifecycle) — metodologia viva
+// ----------------------------------------------------------------------------
+export const arsenalApi = {
+  async list(editorialSlug?: string): Promise<BeeArsenalItem[]> {
+    const params: Record<string, string> = { order: 'editorial_slug.asc,position.asc' };
+    if (editorialSlug) params.editorial_slug = `eq.${editorialSlug}`;
+    return db.select<BeeArsenalItem>('bee_arsenal', params);
+  },
+  async create(input: Partial<BeeArsenalItem>): Promise<BeeArsenalItem> {
+    const rows = await db.insert<BeeArsenalItem>('bee_arsenal', input);
+    if (!rows[0]) throw new Error('Falha ao criar item de arsenal');
+    return rows[0];
+  },
+  async update(id: string, patch: Partial<BeeArsenalItem>): Promise<BeeArsenalItem> {
+    const { id: _id, ...safe } = patch;
+    const rows = await db.update<BeeArsenalItem>('bee_arsenal', { id: `eq.${id}` }, safe);
+    if (!rows[0]) throw new Error('Item nao encontrado');
+    return rows[0];
+  },
+  async delete(id: string): Promise<void> {
+    return db.delete('bee_arsenal', { id: `eq.${id}` });
+  },
+};
+
+// ----------------------------------------------------------------------------
+// EXAMPLE POSTS (few-shot, CRUD + lifecycle)
+// ----------------------------------------------------------------------------
+export const exampleApi = {
+  async list(editorialSlug?: string): Promise<BeeExamplePost[]> {
+    const params: Record<string, string> = { order: 'editorial_slug.asc,position.asc' };
+    if (editorialSlug) params.editorial_slug = `eq.${editorialSlug}`;
+    return db.select<BeeExamplePost>('bee_example_posts', params);
+  },
+  async create(input: Partial<BeeExamplePost>): Promise<BeeExamplePost> {
+    const rows = await db.insert<BeeExamplePost>('bee_example_posts', input);
+    if (!rows[0]) throw new Error('Falha ao criar exemplo');
+    return rows[0];
+  },
+  async update(id: string, patch: Partial<BeeExamplePost>): Promise<BeeExamplePost> {
+    const { id: _id, ...safe } = patch;
+    const rows = await db.update<BeeExamplePost>('bee_example_posts', { id: `eq.${id}` }, safe);
+    if (!rows[0]) throw new Error('Exemplo nao encontrado');
+    return rows[0];
+  },
+  async delete(id: string): Promise<void> {
+    return db.delete('bee_example_posts', { id: `eq.${id}` });
+  },
+};
+
+// ----------------------------------------------------------------------------
+// SUGGESTIONS (fila de curadoria) — aprovar promove pro destino real
+// ----------------------------------------------------------------------------
+export const suggestionApi = {
+  async listPending(): Promise<BeeSuggestion[]> {
+    return db.select<BeeSuggestion>('bee_suggestions', {
+      status: 'eq.pending',
+      order: 'created_at.desc',
+    });
+  },
+
+  async countPending(): Promise<number> {
+    const rows = await db.select<{ id: string }>('bee_suggestions', {
+      status: 'eq.pending',
+      select: 'id',
+    });
+    return rows.length;
+  },
+
+  async create(input: Partial<BeeSuggestion>): Promise<BeeSuggestion> {
+    const rows = await db.insert<BeeSuggestion>('bee_suggestions', {
+      ...input,
+      created_by: getCurrentUserId(),
+    });
+    if (!rows[0]) throw new Error('Falha ao criar sugestao');
+    return rows[0];
+  },
+
+  async reject(id: string): Promise<void> {
+    await db.update('bee_suggestions', { id: `eq.${id}` }, {
+      status: 'rejected',
+      reviewed_by: getCurrentUserId(),
+      reviewed_at: new Date().toISOString(),
+    });
+  },
+
+  // Feedback de performance: ao publicar, a frase vencedora vira candidata a
+  // example_post (few-shot) — mas ainda passa pela curadoria. O indice de dedup
+  // impede duplicar a mesma frase do mesmo post. Falha silenciosa (nao trava publish).
+  async captureFromPublishedPost(post: UserPost): Promise<void> {
+    try {
+      const quote =
+        (post.carousel_text?.quote as string | undefined) ??
+        (post.carousel_text?.['bee-quote'] as string | undefined);
+      const caption = post.caption ?? (post.carousel_text?.caption as string | undefined) ?? '';
+      if (!quote || quote.trim().length < 8) return; // sem frase clara, nao captura
+      const editorialSlug = (post.metadata?.editorial_slug as string | undefined) ?? null;
+      await suggestionApi.create({
+        kind: 'example_post',
+        editorial_slug: editorialSlug,
+        payload: {
+          image_quote: quote.trim(),
+          caption: caption.trim(),
+          why_good: 'Publicado de verdade — validado na prática.',
+          headline_type: (post.metadata?.headline_type_used as string) ?? '',
+        },
+        source_type: 'post',
+        source_id: post.id,
+        source_excerpt: quote.trim().slice(0, 200),
+        confidence: 0.7,
+      });
+    } catch (e) {
+      console.warn('[captureFromPublishedPost] ignorado', e);
+    }
+  },
+
+  // Promove a sugestao (ja com edicoes do revisor) pro destino real e marca approved.
+  async approve(s: BeeSuggestion): Promise<void> {
+    const p = s.payload ?? {};
+    let targetId: string | undefined;
+
+    if (s.kind === 'arsenal') {
+      const row = await arsenalApi.create({
+        editorial_slug: s.editorial_slug ?? undefined,
+        type: (p.type as string) ?? 'insight',
+        title: (p.title as string) ?? 'Sem titulo',
+        summary: (p.summary as string) ?? undefined,
+        details: (p.details as string) ?? undefined,
+        source: (p.source as string) ?? undefined,
+        source_type: s.source_type ?? undefined,
+        source_id: s.source_id ?? undefined,
+      });
+      targetId = row.id;
+    } else if (s.kind === 'example_post') {
+      const row = await exampleApi.create({
+        editorial_slug: s.editorial_slug ?? undefined,
+        avatar_slug: (p.avatar_slug as string) ?? undefined,
+        image_quote: (p.image_quote as string) ?? '',
+        caption: (p.caption as string) ?? '',
+        why_good: (p.why_good as string) ?? undefined,
+        headline_type: (p.headline_type as string) ?? undefined,
+        analogy: (p.analogy as string) ?? undefined,
+        source: (p.source as string) ?? undefined,
+        source_type: s.source_type ?? undefined,
+        source_id: s.source_id ?? undefined,
+      });
+      targetId = row.id;
+    } else if (s.kind === 'analogy') {
+      const rows = await db.insert<BeeAnalogy>('bee_analogies', {
+        name: (p.name as string) ?? 'Analogia',
+        description: (p.description as string) ?? undefined,
+        domain: (p.domain as string) ?? 'natureza',
+        best_for: (p.best_for as string) ?? undefined,
+      });
+      targetId = rows[0]?.id;
+    }
+
+    await db.update('bee_suggestions', { id: `eq.${s.id}` }, {
+      status: 'approved',
+      reviewed_by: getCurrentUserId(),
+      reviewed_at: new Date().toISOString(),
+      approved_target_id: targetId ?? null,
+      // persiste eventuais edicoes do revisor
+      payload: p,
+      editorial_slug: s.editorial_slug ?? null,
+    });
   },
 };

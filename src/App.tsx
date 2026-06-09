@@ -13,8 +13,13 @@ import { SettingsPage } from '@/pages/settings/SettingsPage';
 import { OnboardingWizard } from '@/pages/onboarding/OnboardingWizard';
 import { KnowledgeBase } from '@/pages/conhecimento/KnowledgeBase';
 import { Produtos } from '@/pages/produtos/Produtos';
+import { Editoriais } from '@/pages/editoriais/Editoriais';
+import { Arsenal } from '@/pages/arsenal/Arsenal';
+import { Curadoria } from '@/pages/curadoria/Curadoria';
 import { LinhasEditoriais } from '@/pages/linhas/LinhasEditoriais';
 import { NewVideoPost } from '@/pages/posts/NewVideoPost';
+import { Podcasts } from '@/pages/podcasts/Podcasts';
+import { NewPodcastClip } from '@/pages/podcasts/NewPodcastClip';
 import { EditorPage } from '@/pages/editor/EditorPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -78,8 +83,13 @@ export default function App() {
           <Route path="posts" element={<PostsKanban />} />
           <Route path="posts/novo" element={<NewPost />} />
           <Route path="posts/novo-video" element={<NewVideoPost />} />
+          <Route path="podcasts" element={<Podcasts />} />
+          <Route path="podcasts/novo" element={<NewPodcastClip />} />
           <Route path="posts/:id" element={<PostEditor />} />
           <Route path="produtos" element={<Produtos />} />
+          <Route path="editoriais" element={<Editoriais />} />
+          <Route path="arsenal" element={<Arsenal />} />
+          <Route path="curadoria" element={<Curadoria />} />
           <Route path="linhas" element={<LinhasEditoriais />} />
           <Route path="biblioteca" element={<Biblioteca />} />
           <Route path="conhecimento" element={<KnowledgeBase />} />
