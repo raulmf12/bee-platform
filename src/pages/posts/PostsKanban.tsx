@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Video } from 'lucide-react';
+import { Plus, Trash2, Video, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { usePostStore } from '@/store/postStore';
@@ -83,6 +83,12 @@ export function PostsKanban() {
             <Link to="/posts/novo-video">
               <Video className="h-4 w-4" />
               Vídeo
+            </Link>
+          </Button>
+          <Button asChild variant="outline" className="border-accent/50 text-accent hover:bg-accent/10">
+            <Link to="/posts/novo?auto=1">
+              <Zap className="h-4 w-4" />
+              Automático
             </Link>
           </Button>
           <Button asChild variant="accent">

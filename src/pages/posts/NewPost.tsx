@@ -4,9 +4,9 @@
 //   3. Briefing: contexto adicional opcional
 //   4. Preview: IA gera quote + caption no estilo Bee, voce edita, cria.
 
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Copy, Linkedin, Instagram, Loader2, Sparkles, Wand2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { ArrowLeft, ArrowRight, Copy, Linkedin, Instagram, Loader2, Sparkles, Wand2, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -17,7 +17,7 @@ import { useTemplateStore } from '@/store/templateStore';
 import { usePostStore } from '@/store/postStore';
 import { beeApi } from '@/lib/api';
 import { edge } from '@/lib/edge';
-import { hydrateBeeQuote } from '@/lib/templates/beeQuote';
+import { hydrateBeeQuote, ensureQuoteFontLoaded } from '@/lib/templates/beeQuote';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { BeeArsenalItem, BeeAvatar, BeeEditorial, Platform, TargetAvatar, UserPost } from '@/types';
@@ -26,10 +26,13 @@ type Step = 1 | 2 | 3 | 4 | 5;
 
 export function NewPost() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { templates, loaded, load } = useTemplateStore();
   const { create, posts, load: loadPosts } = usePostStore();
 
   const [step, setStep] = useState<Step>(1);
+  const [autoRunning, setAutoRunning] = useState(false);
+  const autoFired = useRef(false);
   const [editorials, setEditorials] = useState<BeeEditorial[]>([]);
   const [arsenal, setArsenal] = useState<BeeArsenalItem[]>([]);
   const [avatars, setAvatars] = useState<BeeAvatar[]>([]);
@@ -75,6 +78,115 @@ export function NewPost() {
 
   // Template visual padrao = Bee Quote (linkedin/image) — pega o primeiro is_system
   const beeTemplate = templates.find((t) => t.platform === 'linkedin' && t.is_system) ?? templates[0];
+
+  // -------------------------------------------------------------------------
+  // PILOTO AUTOMATICO — 1 botao: o sistema escolhe editorial, arsenal,
+  // plataforma e avatar, gera e cria o post pronto.
+  // -------------------------------------------------------------------------
+  // Peso por frequencia sugerida (editoriais "1-2x/semana" saem mais).
+  function editorialWeight(e: BeeEditorial): number {
+    const h = (e.frequency_hint ?? '').toLowerCase();
+    if (h.includes('semana')) return 4;
+    if (h.includes('pelo menos') || h.includes('1-2')) return 3;
+    return 1; // 1x/mes
+  }
+
+  function weightedPick<T>(items: T[], weight: (x: T) => number): T {
+    const total = items.reduce((s, x) => s + Math.max(0.1, weight(x)), 0);
+    let r = Math.random() * total;
+    for (const x of items) {
+      r -= Math.max(0.1, weight(x));
+      if (r <= 0) return x;
+    }
+    return items[items.length - 1];
+  }
+
+  function autoChoose() {
+    // Olha os posts recentes pra ROTACIONAR (nao repetir o ultimo editorial/rede).
+    const recent = [...posts].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    );
+    const lastEditorial = recent.map((p) => p.metadata?.editorial_slug as string | undefined).find(Boolean);
+    const lastPlatform = recent.map((p) => p.platform).find(Boolean);
+
+    // Editorial: evita o ultimo usado, escolhe ponderado por frequencia.
+    let pool = editorials.filter((e) => e.slug !== lastEditorial);
+    if (pool.length === 0) pool = editorials;
+    const editorial = weightedPick(pool, editorialWeight);
+
+    // Plataforma: alterna em relacao ao ultimo post.
+    const platform: Platform = lastPlatform === 'linkedin' ? 'instagram' : 'linkedin';
+
+    // Avatar: viesado pra "ambos", mas as vezes mira um especifico.
+    const avatarPool: TargetAvatar[] = ['ambos', 'ambos', 'ambos', ...(avatars.map((a) => a.slug as TargetAvatar))];
+    const targetAvatar = avatarPool[Math.floor(Math.random() * avatarPool.length)];
+
+    return { editorial, platform, targetAvatar };
+  }
+
+  async function handleAutoGenerate() {
+    if (editorials.length === 0) {
+      toast.error('Editoriais ainda carregando — tenta de novo em 1s.');
+      return;
+    }
+    setAutoRunning(true);
+    try {
+      const pick = autoChoose();
+      // Sem arsenal_item_id: a geracao auto-seleciona o item de arsenal mais fresco.
+      const result = await edge.generateContent({
+        editorial_slug: pick.editorial.slug,
+        target_avatar: pick.targetAvatar,
+        quote_max_chars: 200,
+        target_platform: pick.platform,
+      });
+
+      await ensureQuoteFontLoaded();
+      const sizeId = pick.platform === 'instagram' ? 'square' : 'portrait';
+      const fabricJson = hydrateBeeQuote({ quote: result.quote, sizeId });
+
+      const post = await create({
+        template_id: beeTemplate?.id,
+        title: pick.editorial.name,
+        platform: pick.platform,
+        format: 'image',
+        carousel_text: {
+          quote: result.quote,
+          caption: result.caption,
+          headline_type: result.headline_type_used,
+          analogy: result.analogy_used,
+        },
+        carousel_fabric_json: [fabricJson],
+        caption: result.caption,
+        metadata: {
+          canvas_size: sizeId,
+          editorial_slug: pick.editorial.slug,
+          target_avatar: pick.targetAvatar,
+          headline_type_used: result.headline_type_used,
+          source: 'auto-pilot',
+          auto_generated: true,
+        },
+      });
+
+      toast.success(
+        `Post pronto · ${pick.editorial.name} · ${pick.platform === 'instagram' ? 'Instagram' : 'LinkedIn'}`,
+      );
+      navigate(`/posts/${post.id}`);
+    } catch (e) {
+      console.error(e);
+      toast.error(`Falha no automático: ${(e as Error).message.slice(0, 200)}`);
+      setAutoRunning(false);
+    }
+  }
+
+  // Deep-link: /posts/novo?auto=1 dispara o piloto automatico assim que carrega.
+  useEffect(() => {
+    if (autoFired.current) return;
+    if (searchParams.get('auto') !== '1') return;
+    if (editorials.length === 0 || avatars.length === 0) return; // espera dados
+    autoFired.current = true;
+    void handleAutoGenerate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, editorials, avatars]);
 
   async function handleGenerate() {
     if (!editorialSlug) {
@@ -131,6 +243,9 @@ export function NewPost() {
       const editorial = editorials.find((e) => e.slug === editorialSlug);
       const arsenalItem = arsenal.find((a) => a.id === arsenalItemId);
       const baseTitle = arsenalItem?.title ?? editorial?.name ?? 'Novo post';
+
+      // Garante a fonte carregada antes de medir/balancear as quebras de linha.
+      await ensureQuoteFontLoaded();
 
       // Cria 1 post por plataforma selecionada. Cada um com seu sizeId/fabric.
       const createdIds: string[] = [];
@@ -216,6 +331,39 @@ export function NewPost() {
           </p>
         </div>
       </header>
+
+      {/* Estado: piloto automatico rodando */}
+      {autoRunning && (
+        <Card className="border-accent/40">
+          <CardContent className="flex flex-col items-center gap-3 py-16 text-center">
+            <Zap className="h-10 w-10 animate-pulse text-accent" />
+            <p className="font-display text-lg font-semibold">Montando seu post no automático…</p>
+            <p className="max-w-sm text-sm text-muted-foreground">
+              A IA está escolhendo o editorial, o arsenal, a rede e escrevendo a frase + caption no estilo Bee. Leva ~10-20s.
+            </p>
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          </CardContent>
+        </Card>
+      )}
+
+      {!autoRunning && (
+      <>
+      {/* Piloto automatico — 1 botao entrega tudo pronto */}
+      <Card className="border-accent/40 bg-accent/5">
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+          <div>
+            <p className="flex items-center gap-1.5 font-display font-semibold">
+              <Zap className="h-4 w-4 text-accent" /> Piloto automático
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Deixa o sistema escolher tudo — editorial, arsenal, rede e avatar — e te entregar um post pronto.
+            </p>
+          </div>
+          <Button variant="accent" onClick={() => void handleAutoGenerate()} disabled={editorials.length === 0}>
+            <Zap className="h-4 w-4" /> Gerar post pronto
+          </Button>
+        </CardContent>
+      </Card>
 
       {/* Stepper */}
       <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -577,6 +725,8 @@ export function NewPost() {
             </div>
           </CardContent>
         </Card>
+      )}
+      </>
       )}
     </div>
   );
