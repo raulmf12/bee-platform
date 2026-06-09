@@ -75,8 +75,27 @@ export async function uploadVideo(
   onProgress?: (pct: number) => void,
 ): Promise<{ path: string; publicUrl: string }> {
   const ext = file.name.split('.').pop() ?? 'mp4';
-  const path = `${userId}/videos/${postId}/source.${ext}`;
+  return uploadVideoToPath(`${userId}/videos/${postId}/source.${ext}`, file, onProgress);
+}
 
+// Upload de corte de podcast.
+// Path: {user_id}/podcasts/{clip_id}/source.{ext}
+export async function uploadPodcastClip(
+  userId: string,
+  clipId: string,
+  file: File,
+  onProgress?: (pct: number) => void,
+): Promise<{ path: string; publicUrl: string }> {
+  const ext = file.name.split('.').pop() ?? 'mp4';
+  return uploadVideoToPath(`${userId}/podcasts/${clipId}/source.${ext}`, file, onProgress);
+}
+
+// Core do upload TUS pra um path arbitrario no bucket media.
+async function uploadVideoToPath(
+  path: string,
+  file: File,
+  onProgress?: (pct: number) => void,
+): Promise<{ path: string; publicUrl: string }> {
   const { data: { session } } = await supabase.auth.getSession();
   const jwt = session?.access_token;
   if (!jwt) throw new Error('Nao autenticado');
