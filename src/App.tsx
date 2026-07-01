@@ -21,6 +21,7 @@ import { NewVideoPost } from '@/pages/posts/NewVideoPost';
 import { Podcasts } from '@/pages/podcasts/Podcasts';
 import { NewPodcastClip } from '@/pages/podcasts/NewPodcastClip';
 import { EditorPage } from '@/pages/editor/EditorPage';
+import { Alma } from '@/pages/alma/Alma';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { currentUser, settings, initialized } = useAuthStore();
@@ -80,6 +81,7 @@ export default function App() {
           }
         >
           <Route index element={<Dashboard />} />
+          <Route path="alma" element={<Alma />} />
           <Route path="posts" element={<PostsKanban />} />
           <Route path="posts/novo" element={<NewPost />} />
           <Route path="posts/novo-video" element={<NewVideoPost />} />

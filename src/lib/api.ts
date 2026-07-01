@@ -674,3 +674,92 @@ export const suggestionApi = {
     });
   },
 };
+
+// ----------------------------------------------------------------------------
+// ALMA — a psique viva (Fase 1: leitura do estado + editar objetivo)
+// ----------------------------------------------------------------------------
+export const almaApi = {
+  async snapshot(): Promise<import('@/types').AlmaSnapshot> {
+    const [estado, objetivo, dimensoes, crencas, sombra, pulsoes, eventos, lexico] =
+      await Promise.all([
+        db.selectOne<import('@/types').AlmaEstado>('alma_estado', {}),
+        db.selectOne<import('@/types').AlmaObjetivo>('alma_objetivo', {
+          is_current: 'eq.true', order: 'created_at.desc',
+        }),
+        db.select<import('@/types').AlmaDimensao>('alma_dimensoes', { order: 'ordem.asc' }),
+        db.select<import('@/types').AlmaCrenca>('alma_crencas', { order: 'forca.desc' }),
+        db.select<import('@/types').AlmaSombra>('alma_sombra', { ativa: 'eq.true' }),
+        db.select<import('@/types').AlmaPulsao>('alma_pulsoes', { order: 'ordem.asc' }),
+        db.select<import('@/types').AlmaEvento>('alma_eventos', {
+          order: 'created_at.desc', limit: '8',
+        }),
+        db.select<import('@/types').AlmaLexico>('bee_glossary', {
+          select: 'term,is_mantra', order: 'is_mantra.desc,term.asc',
+        }),
+      ]);
+    return { estado, objetivo, dimensoes, crencas, sombra, pulsoes, eventos, lexico };
+  },
+
+  // Objetivo é vivo: cada edição cria uma nova versão vigente (histórico preservado)
+  async updateObjetivo(texto: string): Promise<import('@/types').AlmaObjetivo> {
+    const userId = getCurrentUserId();
+    await db.update('alma_objetivo', { is_current: 'eq.true' }, { is_current: false });
+    const rows = await db.insert<import('@/types').AlmaObjetivo>('alma_objetivo', {
+      texto, is_current: true, edited_by: userId,
+    });
+    await db.insert(
+      'alma_eventos',
+      {
+        tipo: 'objetivo',
+        descricao: 'O criador reorientou o objetivo da Alma',
+        source: 'alma',
+        user_id: userId,
+        payload: { texto },
+      },
+      { returning: false },
+    );
+    return rows[0];
+  },
+
+  // Barramento: qualquer ação do sistema alimenta a Alma. Se vier dimensão+delta,
+  // move a oitava (clamp 0..100). Fire-and-forget: nunca quebra o fluxo chamador.
+  async emitEvento(evt: {
+    tipo: string;
+    descricao: string;
+    source?: string;
+    dimensao_slug?: string | null;
+    delta?: number | null;
+  }): Promise<void> {
+    try {
+      const userId = getCurrentUserId();
+      await db.insert(
+        'alma_eventos',
+        {
+          tipo: evt.tipo,
+          descricao: evt.descricao,
+          source: evt.source ?? 'app',
+          dimensao_slug: evt.dimensao_slug ?? null,
+          delta: evt.delta ?? null,
+          user_id: userId,
+        },
+        { returning: false },
+      );
+      if (evt.dimensao_slug && evt.delta) {
+        const dim = await db.selectOne<import('@/types').AlmaDimensao>('alma_dimensoes', {
+          slug: `eq.${evt.dimensao_slug}`,
+          select: 'slug,oitava',
+        });
+        if (dim) {
+          const nova = Math.max(0, Math.min(100, dim.oitava + evt.delta));
+          await db.update(
+            'alma_dimensoes',
+            { slug: `eq.${evt.dimensao_slug}` },
+            { oitava: nova, updated_at: new Date().toISOString() },
+          );
+        }
+      }
+    } catch (e) {
+      console.warn('[alma.emitEvento]', e);
+    }
+  },
+};

@@ -12,6 +12,7 @@ import {
   Mic,
   Boxes,
   Paintbrush,
+  Heart,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BeeLogo } from '@/components/shared/BeeLogo';
@@ -24,6 +25,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/alma', label: 'Alma', icon: Heart },
   { to: '/posts', label: 'Posts', icon: FolderKanban },
   { to: '/podcasts', label: 'Podcasts', icon: Mic },
   { to: '/editor', label: 'Editor', icon: Paintbrush },
@@ -67,18 +69,6 @@ export function Sidebar() {
           );
         })}
       </nav>
-
-      <div className="border-t border-border p-4">
-        <div className="rounded-lg bg-accent/15 p-3">
-          <div className="flex items-center gap-2 text-xs font-semibold text-accent-foreground">
-            <Sparkles className="h-3.5 w-3.5" />
-            Etapa 1 — Fundacao
-          </div>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            Reset feito. Aguardando deploy das edge functions pra liberar IA.
-          </p>
-        </div>
-      </div>
     </aside>
   );
 }

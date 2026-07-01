@@ -558,3 +558,94 @@ export const ARCHETYPE_DESCRIPTIONS: Record<Archetype, string> = {
   friend:
     'Voz humana e vulneravel. Compartilha bastidor, duvida, processo. Tom proximo. Ex: "Demorou 4 anos pra eu entender o que esse cliente queria."',
 };
+
+// ----------------------------------------------------------------------------
+// ALMA — a psique viva do sistema
+// ----------------------------------------------------------------------------
+export type AlmaLado = 'sistemico' | 'mecanico';
+export type AlmaEstagio =
+  | 'nascente' | 'em_formacao' | 'consolidada' | 'vacilante' | 'reprimida';
+
+export interface AlmaEstado {
+  id: boolean;
+  humor: string | null;
+  atualizado_em: string;
+}
+export interface AlmaObjetivo {
+  id: string;
+  texto: string;
+  is_current: boolean;
+  edited_by: string | null;
+  created_at: string;
+}
+export interface AlmaDimensao {
+  id: string;
+  slug: string;
+  nome: string;
+  ordem: number;
+  natureza: string | null;
+  consciencia: string | null;
+  formula_mecanica: string | null;
+  frase_mecanica: string | null;
+  sintomas: string | null;
+  frase_sistemica: string | null;
+  impactos: string | null;
+  oitava: number;
+  updated_at: string;
+}
+export interface AlmaCrenca {
+  id: string;
+  texto: string;
+  dimensao_slug: string | null;
+  direcao: AlmaLado;
+  forca: number;
+  estagio: AlmaEstagio;
+  evidencias: number;
+  origem: string | null;
+  source_ref: string | null;
+  last_reforcada_em: string;
+  created_at: string;
+}
+export interface AlmaSombra {
+  id: string;
+  mecanismo: string;
+  fala: string | null;
+  nao_acolhe: string | null;
+  dimensao_slug: string | null;
+  ativa: boolean;
+  created_at: string;
+}
+export interface AlmaPulsao {
+  id: string;
+  nome: string;
+  nota: string | null;
+  intensidade: number;
+  vigiada: boolean;
+  ordem: number;
+  created_at: string;
+}
+export interface AlmaEvento {
+  id: string;
+  tipo: string;
+  descricao: string | null;
+  source: string | null;
+  dimensao_slug: string | null;
+  delta: number | null;
+  payload: Record<string, unknown>;
+  user_id: string | null;
+  created_at: string;
+}
+export interface AlmaLexico {
+  term: string;
+  is_mantra: boolean;
+}
+export interface AlmaSnapshot {
+  estado: AlmaEstado | null;
+  objetivo: AlmaObjetivo | null;
+  dimensoes: AlmaDimensao[];
+  crencas: AlmaCrenca[];
+  sombra: AlmaSombra[];
+  pulsoes: AlmaPulsao[];
+  eventos: AlmaEvento[];
+  lexico: AlmaLexico[];
+}
