@@ -116,6 +116,10 @@ async function loadBeeContext(input: GenerateInput) {
     analogiesNew,
     analogiesUsed,
     hashtags,
+    almaObjetivo,
+    almaDimensoes,
+    almaPulsoes,
+    almaCrencas,
   ] = await Promise.all([
     fetchRest<BeeEditorial[]>(`/bee_editorials?slug=eq.${input.editorial_slug}&limit=1`),
     input.arsenal_item_id
@@ -134,6 +138,11 @@ async function loadBeeContext(input: GenerateInput) {
     fetchRest<BeeAnalogy[]>(`/bee_analogies?used=eq.false`),
     fetchRest<BeeAnalogy[]>(`/bee_analogies?used=eq.true`),
     fetchRest<BeeHashtag[]>(`/bee_hashtags?order=position.asc`),
+    // ALMA — camada 0 (o principio vivo que guia tudo)
+    fetchRest<{ texto: string }[]>(`/alma_objetivo?is_current=eq.true&select=texto&limit=1`),
+    fetchRest<{ nome: string; oitava: number; frase_sistemica: string; natureza: string }[]>(`/alma_dimensoes?select=nome,oitava,frase_sistemica,natureza&order=ordem.asc`),
+    fetchRest<{ nome: string; intensidade: number }[]>(`/alma_pulsoes?select=nome,intensidade&order=intensidade.desc&limit=3`),
+    fetchRest<{ texto: string }[]>(`/alma_crencas?direcao=eq.sistemico&select=texto&order=forca.desc&limit=4`),
   ]);
 
   return {
@@ -146,7 +155,35 @@ async function loadBeeContext(input: GenerateInput) {
     headlineTypes,
     analogiesNew, analogiesUsed,
     hashtags,
+    alma: {
+      objetivo: almaObjetivo[0]?.texto ?? '',
+      dimensoes: almaDimensoes,
+      pulsoes: almaPulsoes,
+      crencas: almaCrencas,
+    },
   };
+}
+
+// Emite um evento pro barramento da Alma (fire-and-forget, service role).
+async function emitAlmaEvent(evt: {
+  tipo: string; descricao: string; source?: string;
+  dimensao_slug?: string | null; delta?: number | null; payload?: object;
+}): Promise<void> {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  try {
+    await fetch(`${supabaseUrl}/rest/v1/alma_eventos`, {
+      method: 'POST',
+      headers: { ...svcHeaders(), Prefer: 'return=minimal' },
+      body: JSON.stringify({
+        tipo: evt.tipo,
+        descricao: evt.descricao,
+        source: evt.source ?? 'generate-content',
+        dimensao_slug: evt.dimensao_slug ?? null,
+        delta: evt.delta ?? null,
+        payload: evt.payload ?? {},
+      }),
+    });
+  } catch { /* noop */ }
 }
 
 // Incrementa uso do material consumido na geracao (via RPC SQL).
@@ -203,6 +240,27 @@ function buildSystemPrompt(
   const ed = ctx.editorial;
   const ai = ctx.arsenalItem;
   const lines: string[] = [];
+
+  // CAMADA 0 — A ALMA (o principio vivo que guia TUDO abaixo)
+  const alma = ctx.alma;
+  if (alma) {
+    lines.push('=== CAMADA 0 — A ALMA (o principio vivo que guia tudo) ===');
+    if (alma.objetivo) lines.push(`Objetivo vivo da Bee: ${alma.objetivo}`);
+    lines.push('A Alma e AMORAL: nao escreve por "certo x errado" — mostra a consequencia de cada olhar. Considera possibilidades, nao pensa em binario.');
+    if (alma.dimensoes?.length) {
+      lines.push('As 6 Dimensoes agora (0=mecanico, 100=sistemico) — escreva SEMPRE do olhar sistemico, com atencao redobrada onde a oitava esta mais baixa:');
+      for (const d of alma.dimensoes) {
+        lines.push(`  • ${d.nome} (${d.oitava}): "${d.frase_sistemica}"`);
+      }
+    }
+    if (alma.crencas?.length) {
+      lines.push('Crencas vivas a sustentar: ' + alma.crencas.map((c) => `"${c.texto}"`).join(' · '));
+    }
+    if (alma.pulsoes?.length) {
+      lines.push('Pulsoes ativas (a energia do conteudo): ' + alma.pulsoes.map((p) => p.nome).join(' · '));
+    }
+    lines.push('');
+  }
 
   // PERSONA
   lines.push('Voce e Marcos Piccini, escrevendo para a Bee Academy.');
@@ -545,6 +603,13 @@ Deno.serve(async (req: Request) => {
     // Metodologia viva: marca o material usado (incrementa uso + last_used_at)
     // pra rotacionar nas proximas geracoes. Fire-and-forget — nao trava a resposta.
     void bumpUsage(ctx.arsenalItem?.id, (ctx.examples as BeeExamplePost[]).map((e) => e.id));
+
+    // Barramento da Alma: a geracao alimenta a psique (fire-and-forget).
+    void emitAlmaEvent({
+      tipo: 'post_gerado',
+      descricao: `A Alma gerou um "${ctx.editorial.name}"`,
+      source: 'generate-content',
+    });
 
     logUsage({
       userId,
