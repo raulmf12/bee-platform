@@ -13,7 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
-import { beeApi, suggestionApi } from '@/lib/api';
+import { almaApi, beeApi, suggestionApi } from '@/lib/api';
 import { edge } from '@/lib/edge';
 import type { BeeEditorial, BeeSuggestion, SuggestionKind } from '@/types';
 import { toast } from 'sonner';
@@ -89,6 +89,14 @@ export function Curadoria() {
       await suggestionApi.approve(s);
       toast.success('Aprovado — já entra na geração');
       setItems((cur) => cur.filter((x) => x.id !== s.id));
+      // Barramento da Alma: curar material novo é um ato de Integralidade (integrar o que chega).
+      void almaApi.emitEvento({
+        tipo: 'curadoria_aprovada',
+        descricao: `Curadoria aprovou ${s.kind}: "${(s.source_excerpt ?? '').slice(0, 55) || 'novo material'}"`,
+        source: 'curadoria',
+        dimensao_slug: 'integr',
+        delta: 1,
+      });
     } catch (e) {
       console.error(e);
       toast.error('Erro ao aprovar');

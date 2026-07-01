@@ -23,6 +23,7 @@ import { POST_STATUS_LABELS, type PostStatus } from '@/types';
 import { useAuthStore } from '@/store/authStore';
 import { uploadAssetImage, hashDataUrl } from '@/lib/storage';
 import { edge } from '@/lib/edge';
+import { almaApi } from '@/lib/api';
 import { toast } from 'sonner';
 
 // Mapeia plataforma+formato pro preset inicial mais adequado.
@@ -141,6 +142,13 @@ export function PostEditor() {
     if (!post) return;
     await update(post.id, { status });
     toast.success(`Status: ${POST_STATUS_LABELS[status]}`);
+    if (status === 'published') {
+      void almaApi.emitEvento({
+        tipo: 'post_publicado',
+        descricao: `Post publicado: "${(post.title ?? post.caption ?? 'sem título').slice(0, 60)}"`,
+        source: 'posts',
+      });
+    }
   }
 
   async function exportAndPublish() {
@@ -207,6 +215,12 @@ export function PostEditor() {
       void import('@/lib/api').then(({ suggestionApi }) =>
         suggestionApi.captureFromPublishedPost({ ...post, caption }),
       );
+      // Barramento da Alma: a publicação ao vivo é uma experiência que a alimenta.
+      void almaApi.emitEvento({
+        tipo: 'post_publicado',
+        descricao: `Publicado ao vivo no ${platformLabel}: "${(post.title ?? caption ?? '').slice(0, 55)}"`,
+        source: 'posts',
+      });
       window.open(result.published_url, '_blank');
     } catch (e) {
       console.error(e);
