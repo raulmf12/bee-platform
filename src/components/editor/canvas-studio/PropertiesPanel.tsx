@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import type { EditorApi } from './useEditor';
+import { SlotSection } from './SlotSection';
 
 const FONTS = ['Inter', 'Plus Jakarta Sans', 'Playfair Display', 'Georgia', 'Helvetica', 'Arial'];
 
@@ -32,7 +33,7 @@ function prettyType(t?: string): string {
   }
 }
 
-export function PropertiesPanel({ api }: { api: EditorApi }) {
+export function PropertiesPanel({ api, templateMode = false }: { api: EditorApi; templateMode?: boolean }) {
   const obj = api.activeObject;
 
   if (!obj) {
@@ -84,6 +85,9 @@ export function PropertiesPanel({ api }: { api: EditorApi }) {
           </Button>
         </div>
       </div>
+
+      {/* --------- SLOT (so no editor de templates) --------- */}
+      {templateMode && <SlotSection api={api} />}
 
       {/* --------- TEXTO --------- */}
       {isText && (

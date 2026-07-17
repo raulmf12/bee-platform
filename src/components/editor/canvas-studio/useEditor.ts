@@ -7,8 +7,16 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as fabric from 'fabric';
+import { FABRIC_CUSTOM_PROPS, type BeeSlotMeta } from '@/lib/templates/slots';
 
 const HISTORY_LIMIT = 40;
+
+// canvas.toJSON() NAO serializa props custom: `name` (identidade do slot) e
+// `beeSlot` (regras) somem. Isso apagava o slot em todo save/undo. Sempre
+// serialize por aqui.
+function serialize(c: fabric.Canvas): object {
+  return c.toObject(FABRIC_CUSTOM_PROPS);
+}
 
 export interface CanvasSize {
   width: number;
@@ -18,10 +26,19 @@ export interface CanvasSize {
 export const CANVAS_PRESETS: Record<string, CanvasSize & { label: string }> = {
   'linkedin-portrait': { width: 1080, height: 1350, label: 'LinkedIn 4:5 (1080x1350)' },
   'linkedin-square': { width: 1200, height: 1200, label: 'LinkedIn / IG 1:1 (1200x1200)' },
+  'linkedin-landscape': { width: 1200, height: 628, label: 'LinkedIn 1.91:1 (1200x628)' },
   'instagram-square': { width: 1080, height: 1080, label: 'Instagram 1:1 (1080x1080)' },
   'instagram-portrait': { width: 1080, height: 1350, label: 'Instagram 4:5 (1080x1350)' },
   'instagram-story': { width: 1080, height: 1920, label: 'Story / Reel 9:16' },
 };
+
+// Preset que casa com um tamanho. Abrir um template num preset de dimensao
+// diferente re-salvaria ele com o tamanho errado, entao isto tem que bater.
+export function presetForSize(width: number, height: number): string | undefined {
+  return Object.keys(CANVAS_PRESETS).find(
+    (k) => CANVAS_PRESETS[k].width === width && CANVAS_PRESETS[k].height === height,
+  );
+}
 
 interface UseEditorOptions {
   width: number;
@@ -41,6 +58,11 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
   const notifyTimerRef = useRef<number | null>(null);
 
   const [activeObject, setActiveObject] = useState<fabric.Object | null>(null);
+  // Muda toda vez que um canvas Fabric NOVO nasce. Quem carrega conteudo
+  // inicial precisa saber disso: em StrictMode o React monta, descarta e
+  // remonta, entao o primeiro canvas e jogado fora. Sem este contador o
+  // conteudo ia parar no canvas descartado e o visivel ficava vazio.
+  const [canvasEpoch, setCanvasEpoch] = useState(0);
   const [zoom, setZoomState] = useState(1);
   // 'fit' = ajusta automaticamente ao container; numero = zoom manual fixo.
   const zoomModeRef = useRef<'fit' | 'manual'>('fit');
@@ -55,7 +77,7 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
   const pushHistory = useCallback(() => {
     const c = fabricRef.current;
     if (!c || mutatingRef.current) return;
-    const snap = JSON.stringify(c.toJSON());
+    const snap = JSON.stringify(serialize(c));
     const h = historyRef.current;
     if (h.states[h.index] === snap) return;
     h.states = h.states.slice(0, h.index + 1);
@@ -72,7 +94,7 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
       const cb = onChangeRef.current;
       if (!c || !cb) return;
       cb({
-        fabricJson: c.toJSON(),
+        fabricJson: serialize(c),
         dataUrl: c.toDataURL({ format: 'png', quality: 1, multiplier: 1 }),
       });
     }, 400);
@@ -128,6 +150,8 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
     c.on('text:changed', onChange_);
 
     pushHistory();
+    // Canvas novo em folha: avisa quem precisa (re)carregar conteudo nele.
+    setCanvasEpoch((e) => e + 1);
   }, [width, height, background, pushHistory, notify, bump]);
 
   // dispose final ao desmontar o hook
@@ -256,6 +280,47 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
     }
   }, [width, height]);
 
+  // Troca o bitmap da Image ativa preservando o enquadramento: a caixa que voce
+  // desenhou e o que importa, a imagem de exemplo so ocupa ela.
+  const replaceActiveImage = useCallback(async (url: string) => {
+    const c = fabricRef.current;
+    const obj = c?.getActiveObject();
+    if (!c || !obj) return;
+    if (obj.type !== 'image' && obj.type !== 'Image') return;
+    const old = obj as fabric.FabricImage;
+    const boxW = (old.width ?? 1) * (old.scaleX ?? 1);
+    const boxH = (old.height ?? 1) * (old.scaleY ?? 1);
+    try {
+      const img = await fabric.FabricImage.fromURL(url, { crossOrigin: 'anonymous' });
+      const iw = img.width ?? 1;
+      const ih = img.height ?? 1;
+      // "contain" na caixa antiga — nao distorce a nova imagem
+      const s = Math.min(boxW / iw, boxH / ih);
+      img.set({
+        left: (old.left ?? 0) + (boxW - iw * s) / 2,
+        top: (old.top ?? 0) + (boxH - ih * s) / 2,
+        scaleX: s,
+        scaleY: s,
+        angle: old.angle ?? 0,
+        opacity: old.opacity ?? 1,
+        // leva junto a identidade de slot
+        name: (old as unknown as { name?: string }).name,
+        beeSlot: (old as unknown as { beeSlot?: BeeSlotMeta }).beeSlot,
+      } as Record<string, unknown>);
+      const idx = c.getObjects().indexOf(old);
+      c.remove(old);
+      c.add(img);
+      if (idx >= 0) c.moveObjectTo(img, idx);
+      c.setActiveObject(img);
+      c.requestRenderAll();
+      pushHistory();
+      notify();
+      bump();
+    } catch (e) {
+      console.error('[useEditor.replaceActiveImage]', e);
+    }
+  }, [pushHistory, notify, bump]);
+
   const setBackground = useCallback((color: string) => {
     const c = fabricRef.current;
     if (!c) return;
@@ -369,6 +434,46 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
     notify();
   }, [pushHistory, notify]);
 
+  // Serializa incluindo as props custom (name/beeSlot) — nunca use toJSON().
+  const toJson = useCallback((): object => {
+    const c = fabricRef.current;
+    if (!c) return {};
+    return serialize(c);
+  }, []);
+
+  // ---------- SLOTS (modo template) ----------
+  // Marca/desmarca o objeto ativo como campo dinamico. Passar null desmarca.
+  const setActiveSlot = useCallback((meta: BeeSlotMeta | null) => {
+    const c = fabricRef.current;
+    const obj = c?.getActiveObject();
+    if (!c || !obj) return;
+    if (meta) {
+      obj.set({ beeSlot: meta, name: meta.content_key } as Record<string, unknown>);
+    } else {
+      obj.set({ beeSlot: undefined, name: undefined } as Record<string, unknown>);
+    }
+    c.requestRenderAll();
+    c.fire('object:modified', { target: obj });
+    bump();
+  }, [bump]);
+
+  // Todos os slots do canvas, na ordem das camadas.
+  const listSlots = useCallback((): Array<{ meta: BeeSlotMeta; obj: fabric.Object }> => {
+    const c = fabricRef.current;
+    if (!c) return [];
+    return c
+      .getObjects()
+      .map((o) => ({ meta: (o as unknown as { beeSlot?: BeeSlotMeta }).beeSlot, obj: o }))
+      .filter((x): x is { meta: BeeSlotMeta; obj: fabric.Object } => !!x.meta?.content_key);
+  }, []);
+
+  const selectObject = useCallback((obj: fabric.Object) => {
+    const c = fabricRef.current;
+    if (!c) return;
+    c.setActiveObject(obj);
+    c.requestRenderAll();
+  }, []);
+
   const exportPng = useCallback((multiplier = 2): string | null => {
     const c = fabricRef.current;
     if (!c) return null;
@@ -393,6 +498,7 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
     attach,
     containerRef,
     fabric: fabricRef,
+    canvasEpoch,
     activeObject,
     zoom,
     canUndo,
@@ -403,6 +509,7 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
     addCircle,
     addLine,
     addImageFromUrl,
+    replaceActiveImage,
     setBackground,
     deleteActive,
     updateActive,
@@ -411,8 +518,13 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
     undo,
     redo,
     loadFromJson,
+    toJson,
     exportPng,
     downloadPng,
+    // slots (modo template)
+    setActiveSlot,
+    listSlots,
+    selectObject,
     // zoom
     setZoom,
     zoomIn,

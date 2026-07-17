@@ -1,16 +1,19 @@
 // Sidebar esquerda com icones — navegacao entre paineis (estilo Canva).
 
-import { LayoutTemplate, Palette, Shapes, Type, Upload } from 'lucide-react';
+import { LayoutTemplate, Palette, Shapes, Type, Upload, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type PanelKey = 'templates' | 'text' | 'elements' | 'uploads' | 'brand' | null;
+export type PanelKey = 'templates' | 'slots' | 'text' | 'elements' | 'uploads' | 'brand' | null;
 
 interface SidebarLeftProps {
   active: PanelKey;
   onChange: (key: PanelKey) => void;
+  templateMode?: boolean;
 }
 
-const ITEMS: Array<{ key: Exclude<PanelKey, null>; icon: typeof Type; label: string }> = [
+type Item = { key: Exclude<PanelKey, null>; icon: typeof Type; label: string };
+
+const ITEMS: Item[] = [
   { key: 'templates', icon: LayoutTemplate, label: 'Templates' },
   { key: 'text', icon: Type, label: 'Texto' },
   { key: 'elements', icon: Shapes, label: 'Elementos' },
@@ -18,10 +21,18 @@ const ITEMS: Array<{ key: Exclude<PanelKey, null>; icon: typeof Type; label: str
   { key: 'brand', icon: Palette, label: 'Marca' },
 ];
 
-export function SidebarLeft({ active, onChange }: SidebarLeftProps) {
+// No editor de templates a galeria nao faz sentido (voce esta editando UM
+// template); no lugar dela entra a lista de campos dinamicos.
+const TEMPLATE_ITEMS: Item[] = [
+  { key: 'slots', icon: Zap, label: 'Campos' },
+  ...ITEMS.filter((i) => i.key !== 'templates'),
+];
+
+export function SidebarLeft({ active, onChange, templateMode = false }: SidebarLeftProps) {
+  const items = templateMode ? TEMPLATE_ITEMS : ITEMS;
   return (
     <nav className="flex h-full w-[72px] shrink-0 flex-col items-center gap-1 border-r border-border bg-card/40 py-3">
-      {ITEMS.map((item) => {
+      {items.map((item) => {
         const Icon = item.icon;
         const isActive = active === item.key;
         return (

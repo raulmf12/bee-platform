@@ -6,11 +6,12 @@ import { useEffect, useRef, useState } from 'react';
 import { Image as ImageIcon, Trash2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { fileToDataUrl, MAX_UPLOAD_BYTES } from '@/lib/templates/upload';
 import type { EditorApi } from '../useEditor';
 
 const LS_KEY = 'bee_canvas_uploads_v1';
 const MAX_ITEMS = 12;
-const MAX_BYTES = 4 * 1024 * 1024; // 4MB por imagem (limite de dataURL no LS)
+const MAX_BYTES = MAX_UPLOAD_BYTES;
 
 interface UploadItem {
   id: string;
@@ -36,15 +37,6 @@ function saveUploads(items: UploadItem[]) {
   } catch (e) {
     console.warn('[uploads] localStorage cheio', e);
   }
-}
-
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result));
-    r.onerror = () => reject(r.error);
-    r.readAsDataURL(file);
-  });
 }
 
 export function UploadsPanel({ api }: { api: EditorApi }) {
