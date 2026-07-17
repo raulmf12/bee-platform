@@ -13,21 +13,29 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
-import { useTemplateStore } from '@/store/templateStore';
 import { usePostStore } from '@/store/postStore';
 import { beeApi } from '@/lib/api';
 import { edge } from '@/lib/edge';
-import { hydrateBeeQuote, ensureQuoteFontLoaded } from '@/lib/templates/beeQuote';
+import { renderBeeQuote } from '@/lib/templates/resolve';
+import { aiApi } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
-import type { BeeArsenalItem, BeeAvatar, BeeEditorial, Platform, TargetAvatar, UserPost } from '@/types';
+import type { AiVariation, BeeArsenalItem, BeeAvatar, BeeEditorial, Platform, TargetAvatar, UserPost } from '@/types';
 
 type Step = 1 | 2 | 3 | 4 | 5;
+
+// Quantos caminhos diferentes a IA abre pro mesmo tema. Cada um vira um post,
+// e cada post aprovado e uma medicao da eficacia da IA.
+//
+// Sai tudo numa UNICA chamada, entao 5 nao custa 5x: o prompt (persona +
+// arsenal + exemplos + Camada 0 da Alma) e enorme e a saida e curta. A escolha
+// aqui e sobre quanto VOCE quer revisar, nao sobre custo.
+const VARIATION_OPTIONS = [1, 2, 3, 4, 5] as const;
+const DEFAULT_VARIATIONS = 5;
 
 export function NewPost() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { templates, loaded, load } = useTemplateStore();
   const { create, posts, load: loadPosts } = usePostStore();
 
   const [step, setStep] = useState<Step>(1);
@@ -45,25 +53,22 @@ export function NewPost() {
   const [referencePostId, setReferencePostId] = useState<string | undefined>();
   const [briefing, setBriefing] = useState('');
   const [generating, setGenerating] = useState(false);
-  const [generated, setGenerated] = useState<{
-    quote: string;
-    caption: string;
-    headline_type_used?: string;
-    analogy_used?: string;
-  } | null>(null);
-  const [editedQuote, setEditedQuote] = useState('');
-  const [editedCaption, setEditedCaption] = useState('');
+  const [variations, setVariations] = useState<number>(DEFAULT_VARIATIONS);
+  // As 5 variacoes PRISTINAS gravadas no banco (ai_variations) — o lado
+  // esquerdo do diff. Nunca sao alteradas aqui.
+  const [pristine, setPristine] = useState<AiVariation[]>([]);
+  // O que voce edita na tela. Mesma ordem de `pristine`.
+  const [edits, setEdits] = useState<Array<{ quote: string; caption: string }>>([]);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
-    if (!loaded) void load();
     void loadPosts();
     void beeApi.editorials().then(setEditorials).catch((e) => {
       console.error(e);
       toast.error('Falha ao carregar editoriais Bee');
     });
     void beeApi.avatars().then(setAvatars).catch((e) => console.error(e));
-  }, [load, loaded, loadPosts]);
+  }, [loadPosts]);
 
   useEffect(() => {
     if (!editorialSlug) {
@@ -75,9 +80,6 @@ export function NewPost() {
       console.error(e);
     });
   }, [editorialSlug]);
-
-  // Template visual padrao = Bee Quote (linkedin/image) — pega o primeiro is_system
-  const beeTemplate = templates.find((t) => t.platform === 'linkedin' && t.is_system) ?? templates[0];
 
   // -------------------------------------------------------------------------
   // PILOTO AUTOMATICO — 1 botao: o sistema escolhe editorial, arsenal,
@@ -140,12 +142,11 @@ export function NewPost() {
         target_platform: pick.platform,
       });
 
-      await ensureQuoteFontLoaded();
       const sizeId = pick.platform === 'instagram' ? 'square' : 'portrait';
-      const fabricJson = hydrateBeeQuote({ quote: result.quote, sizeId });
+      const { fabricJson, templateId } = await renderBeeQuote(sizeId, result.quote);
 
       const post = await create({
-        template_id: beeTemplate?.id,
+        template_id: templateId,
         title: pick.editorial.name,
         platform: pick.platform,
         format: 'image',
@@ -209,10 +210,35 @@ export function NewPost() {
         quote_max_chars: 200,
         reference_post_id: referencePostId,
         target_platform: targetPlatforms[0] as 'linkedin' | 'instagram',
+        // As 5 saem numa unica chamada — vide edge.ts.
+        variations,
       });
-      setGenerated(result);
-      setEditedQuote(result.quote);
-      setEditedCaption(result.caption);
+
+      const list = result.variations?.length ? result.variations : [result];
+
+      // Grava o ORIGINAL antes de voce encostar nele. Sem isto nao ha o que
+      // comparar depois, e a eficacia da IA vira achismo.
+      const generation = await aiApi.createGeneration({
+        editorial_slug: editorialSlug,
+        target_avatar: targetAvatar,
+        platform: targetPlatforms[0],
+        briefing: briefing || undefined,
+        arsenal_item_id: arsenalItemId,
+        variations_count: list.length,
+      });
+      const rows = await aiApi.createVariations(
+        generation.id,
+        list.map((v, i) => ({
+          idx: i + 1,
+          quote: v.quote,
+          caption: v.caption,
+          headline_type: v.headline_type_used,
+          analogy: v.analogy_used,
+        })),
+      );
+
+      setPristine(rows.sort((a, b) => a.idx - b.idx));
+      setEdits(rows.sort((a, b) => a.idx - b.idx).map((v) => ({ quote: v.quote, caption: v.caption })));
       setStep(5);
     } catch (e) {
       console.error(e);
@@ -244,46 +270,69 @@ export function NewPost() {
       const arsenalItem = arsenal.find((a) => a.id === arsenalItemId);
       const baseTitle = arsenalItem?.title ?? editorial?.name ?? 'Novo post';
 
-      // Garante a fonte carregada antes de medir/balancear as quebras de linha.
-      await ensureQuoteFontLoaded();
-
-      // Cria 1 post por plataforma selecionada. Cada um com seu sizeId/fabric.
       const createdIds: string[] = [];
       let firstPost: { id: string } | null = null;
 
-      for (const platform of targetPlatforms) {
-        const sizeId = platform === 'instagram' ? 'square' : 'portrait';
-        const fabricJson = hydrateBeeQuote({ quote: editedQuote, sizeId });
+      // Cada variacao vira um post. Com 2 plataformas, vira um post por
+      // plataforma — mas a variacao fica ligada a UM so (vide abaixo).
+      for (let i = 0; i < pristine.length; i++) {
+        const v = pristine[i];
+        const edited = edits[i] ?? { quote: v.quote, caption: v.caption };
+        let primeiroDaVariacao: string | null = null;
 
-        const post = await create({
-          template_id: beeTemplate?.id,
-          title: targetPlatforms.length > 1 ? `${baseTitle} [${platform === 'linkedin' ? 'LI' : 'IG'}]` : baseTitle,
-          briefing,
-          platform,
-          format: 'image',
-          carousel_text: {
-            quote: editedQuote,
-            caption: editedCaption,
-            headline_type: generated?.headline_type_used,
-            analogy: generated?.analogy_used,
-          },
-          carousel_fabric_json: [fabricJson],
-          caption: editedCaption,
-          metadata: {
-            canvas_size: sizeId,
-            editorial_slug: editorialSlug,
-            arsenal_item_id: arsenalItemId,
-            target_avatar: targetAvatar,
-            adapted_from: referencePostId ?? null,
-            multi_platform_group: targetPlatforms.length > 1 ? targetPlatforms.join('+') : null,
-          },
-        });
-        createdIds.push(post.id);
-        if (!firstPost) firstPost = post;
+        for (const platform of targetPlatforms) {
+          const sizeId = platform === 'instagram' ? 'square' : 'portrait';
+          const { fabricJson, templateId } = await renderBeeQuote(sizeId, edited.quote);
+
+          const sufixo = [
+            pristine.length > 1 ? `#${i + 1}` : '',
+            targetPlatforms.length > 1 ? (platform === 'linkedin' ? 'LI' : 'IG') : '',
+          ].filter(Boolean).join(' ');
+
+          const post = await create({
+            template_id: templateId,
+            title: sufixo ? `${baseTitle} [${sufixo}]` : baseTitle,
+            briefing,
+            platform,
+            format: 'image',
+            // Todo post gerado nasce esperando o seu Aprovar — que e o que mede
+            // a eficacia da IA.
+            status: 'pending_approval',
+            carousel_text: {
+              quote: edited.quote,
+              caption: edited.caption,
+              headline_type: v.headline_type ?? undefined,
+              analogy: v.analogy ?? undefined,
+            },
+            carousel_fabric_json: [fabricJson],
+            caption: edited.caption,
+            metadata: {
+              canvas_size: sizeId,
+              editorial_slug: editorialSlug,
+              arsenal_item_id: arsenalItemId,
+              target_avatar: targetAvatar,
+              adapted_from: referencePostId ?? null,
+              variation_idx: v.idx,
+              multi_platform_group: targetPlatforms.length > 1 ? targetPlatforms.join('+') : null,
+            },
+          });
+          createdIds.push(post.id);
+          if (!primeiroDaVariacao) primeiroDaVariacao = post.id;
+          if (!firstPost) firstPost = post;
+        }
+
+        // A variacao aponta pra UM post so. O post irmao (outra plataforma) tem
+        // o mesmo texto: medir os dois contaria a mesma tentativa duas vezes e
+        // inflaria a amostra do portao.
+        if (primeiroDaVariacao) {
+          await aiApi.linkVariationToPost(v.id, primeiroDaVariacao);
+        }
       }
 
-      // Liga os 2 posts entre si via companion_post_id (cross-link)
-      if (createdIds.length === 2) {
+      // Cross-link LI<->IG so quando foi 1 variacao em 2 plataformas. Com 5
+      // variacoes os pares sao (2i, 2i+1) e o vinculo perderia o sentido de
+      // "o mesmo post nas duas redes" — deixa sem.
+      if (createdIds.length === 2 && pristine.length === 1) {
         try {
           const { postApi } = await import('@/lib/api');
           await postApi.update(createdIds[0], { companion_post_id: createdIds[1] });
@@ -302,11 +351,12 @@ export function NewPost() {
       }
 
       toast.success(
-        targetPlatforms.length > 1
-          ? `2 posts criados (LinkedIn + Instagram) — ligados como par.`
-          : 'Post criado.',
+        createdIds.length === 1
+          ? 'Post em "Pendente de aprovação" — aprove pra a IA aprender.'
+          : `${createdIds.length} posts em "Pendente de aprovação" — aprove cada um pra a IA aprender.`,
       );
-      if (firstPost) navigate(`/posts/${firstPost.id}`);
+      // Com varios posts, o kanban e o destino que faz sentido (nao um deles).
+      navigate(createdIds.length > 1 ? '/' : `/posts/${firstPost?.id}`);
     } catch (e) {
       console.error(e);
       toast.error('Falha ao criar post.');
@@ -654,6 +704,43 @@ export function NewPost() {
               </p>
             </div>
 
+            {/* Quantos caminhos a IA abre. Sai tudo numa chamada so — escolher
+                5 nao custa 5x; custa 5 revisoes suas. */}
+            <div className="space-y-2 rounded-md border border-border bg-secondary/30 p-3">
+              <Label className="text-xs">Quantas variações gerar</Label>
+              <div className="flex gap-1.5">
+                {VARIATION_OPTIONS.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setVariations(n)}
+                    className={cn(
+                      'h-9 flex-1 rounded-md border text-sm font-semibold transition-colors',
+                      variations === n
+                        ? 'border-accent bg-accent text-accent-foreground'
+                        : 'border-border bg-card hover:border-accent/50',
+                    )}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] leading-snug text-muted-foreground">
+                {variations === 1
+                  ? 'Um caminho só. Vira 1 post pra você revisar.'
+                  : `${variations} entradas diferentes no mesmo tema — cada uma com um ângulo próprio. Viram ${variations} posts pra revisar.`}
+                {' '}Tudo numa única chamada: escolher {variations} não custa {variations}x.
+              </p>
+              {/* A regra do portao e por POST medido: quem gera de 1 em 1 precisa
+                  de 30 gerações; de 5 em 5, precisa de 6. Vale saber antes. */}
+              <p className="text-[10px] leading-snug text-muted-foreground">
+                Cada post aprovado mede a IA · a campanha destrava com 30 posts de 6 gerações
+                {variations < 5 && ` — no ritmo de ${variations}, são ${Math.ceil(30 / variations)} gerações`}
+                {variations === 5 && ' — no ritmo de 5, são 6 gerações'}
+                .
+              </p>
+            </div>
+
             <div className="flex justify-between">
               <Button variant="ghost" onClick={() => setStep(3)}>Voltar</Button>
               <Button
@@ -662,9 +749,9 @@ export function NewPost() {
                 disabled={generating}
               >
                 {generating ? (
-                  <><Loader2 className="h-4 w-4 animate-spin" /> Gerando...</>
+                  <><Loader2 className="h-4 w-4 animate-spin" /> Gerando {variations > 1 ? `${variations} variações` : ''}...</>
                 ) : (
-                  <><Wand2 className="h-4 w-4" /> Gerar com IA</>
+                  <><Wand2 className="h-4 w-4" /> Gerar {variations > 1 ? `${variations} variações` : 'post'}</>
                 )}
               </Button>
             </div>
@@ -672,59 +759,109 @@ export function NewPost() {
         </Card>
       )}
 
-      {/* STEP 5 — Preview */}
-      {step === 5 && generated && (
-        <Card>
-          <CardContent className="space-y-4 p-6">
-            <div>
-              <h2 className="font-display text-lg font-semibold">Preview e edição</h2>
-              <div className="mt-1 flex flex-wrap gap-1.5 text-xs">
-                {generated.headline_type_used && (
-                  <Badge variant="secondary">Título: {generated.headline_type_used}</Badge>
-                )}
-                {generated.analogy_used && (
-                  <Badge variant="secondary">Analogia: {generated.analogy_used}</Badge>
-                )}
-                <Badge variant="outline">{editorial?.name}</Badge>
+      {/* STEP 5 — As 5 variacoes */}
+      {step === 5 && pristine.length > 0 && (
+        <div className="space-y-4">
+          <Card>
+            <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+              <div>
+                <h2 className="font-display text-lg font-semibold">
+                  {pristine.length === 1
+                    ? 'Revise o post'
+                    : `${pristine.length} caminhos pro mesmo tema`}
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  {pristine.length === 1 ? 'Vai' : 'Cada um vira um post e vai'} pra “Pendente de
+                  aprovação”. Corrija o que precisar — a IA aprende com cada correção, e aprovar sem
+                  mexer é o que prova que ela acertou.
+                </p>
               </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="quote">Frase do post (aparece na imagem)</Label>
-              <Textarea
-                id="quote"
-                rows={3}
-                value={editedQuote}
-                onChange={(e) => setEditedQuote(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">{editedQuote.length} chars</p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="caption">
-                Caption (texto do post no{' '}
-                {targetPlatforms.length > 1
-                  ? 'LinkedIn + Instagram'
-                  : targetPlatforms[0] === 'instagram' ? 'Instagram' : 'LinkedIn'})
-              </Label>
-              <Textarea
-                id="caption"
-                rows={14}
-                value={editedCaption}
-                onChange={(e) => setEditedCaption(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">{editedCaption.length} chars · ideal 1300-2000</p>
-            </div>
-            <div className="flex justify-between">
+              <Badge variant="outline">{editorial?.name}</Badge>
+            </CardContent>
+          </Card>
+
+          {pristine.map((v, i) => {
+            const e = edits[i] ?? { quote: v.quote, caption: v.caption };
+            const quoteTocada = e.quote.trim() !== v.quote.trim();
+            const captionTocada = e.caption.trim() !== v.caption.trim();
+            const tocada = quoteTocada || captionTocada;
+            return (
+              <Card key={v.id} className={cn(tocada && 'border-amber-500/50')}>
+                <CardContent className="space-y-3 p-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {pristine.length > 1 && (
+                      <Badge variant="accent" className="font-mono text-[10px]">#{v.idx}</Badge>
+                    )}
+                    {v.headline_type && (
+                      <Badge variant="secondary" className="text-[10px]">{v.headline_type}</Badge>
+                    )}
+                    {v.analogy && (
+                      <Badge variant="secondary" className="text-[10px]">analogia: {v.analogy}</Badge>
+                    )}
+                    <span className="ml-auto text-[10px] text-muted-foreground">
+                      {tocada ? '✏️ corrigida — a IA vai aprender' : '✓ como a IA escreveu'}
+                    </span>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-xs">Frase (aparece na imagem)</Label>
+                    <Textarea
+                      rows={2}
+                      value={e.quote}
+                      onChange={(ev) =>
+                        setEdits((cur) =>
+                          cur.map((x, j) => (j === i ? { ...x, quote: ev.target.value } : x)),
+                        )
+                      }
+                      className="text-sm"
+                    />
+                    <p className="text-[10px] text-muted-foreground">{e.quote.length} chars</p>
+                  </div>
+
+                  <details className="group">
+                    <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
+                      Caption ({e.caption.length} chars){captionTocada ? ' · corrigida' : ''}
+                    </summary>
+                    <Textarea
+                      rows={12}
+                      value={e.caption}
+                      onChange={(ev) =>
+                        setEdits((cur) =>
+                          cur.map((x, j) => (j === i ? { ...x, caption: ev.target.value } : x)),
+                        )
+                      }
+                      className="mt-2 text-xs"
+                    />
+                  </details>
+                </CardContent>
+              </Card>
+            );
+          })}
+
+          <Card>
+            <CardContent className="flex items-center justify-between gap-3 p-4">
               <Button variant="ghost" onClick={() => setStep(4)}>Voltar (regenerar)</Button>
-              <Button variant="accent" onClick={handleCreate} disabled={creating}>
-                {creating ? (
-                  <><Loader2 className="h-4 w-4 animate-spin" /> Criando...</>
-                ) : (
-                  <><Sparkles className="h-4 w-4" /> Criar post</>
-                )}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground">
+                  {edits.filter((e, i) =>
+                    e.quote.trim() !== pristine[i]?.quote.trim() ||
+                    e.caption.trim() !== pristine[i]?.caption.trim()).length} de {pristine.length} corrigida(s)
+                </span>
+                <Button variant="accent" onClick={handleCreate} disabled={creating}>
+                  {creating ? (
+                    <><Loader2 className="h-4 w-4 animate-spin" /> Criando...</>
+                  ) : (
+                    <>
+                      <Sparkles className="h-4 w-4" />
+                      Criar {pristine.length * targetPlatforms.length}{' '}
+                      {pristine.length * targetPlatforms.length === 1 ? 'post' : 'posts'}
+                    </>
+                  )}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       )}
       </>
       )}

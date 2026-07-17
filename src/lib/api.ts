@@ -3,6 +3,11 @@
 
 import { db, getCurrentUserId } from './db';
 import type {
+  AiGate,
+  AiGeneration,
+  AiLearning,
+  AiReview,
+  AiVariation,
   BeeAnalogy,
   BeeArsenalItem,
   BeeAvatar,
@@ -108,6 +113,12 @@ export const templateApi = {
     return db.selectOne<PostTemplate>('post_templates', { id: `eq.${id}` });
   },
 
+  // Templates de sistema tem slug estavel (ex: 'bee-quote-portrait').
+  // A geracao busca por aqui em vez de adivinhar por nome/plataforma.
+  async getBySlug(slug: string): Promise<PostTemplate | null> {
+    return db.selectOne<PostTemplate>('post_templates', { slug: `eq.${slug}` });
+  },
+
   async upsertSystem(input: {
     name: string;
     description?: string;
@@ -158,6 +169,62 @@ export const templateApi = {
     if (!rows[0]) throw new Error('Erro ao criar template');
     return rows[0];
   },
+
+  // ------ templates do usuario (editor de templates) ------
+
+  async createUser(input: {
+    name: string;
+    description?: string;
+    platform: string;
+    format: string;
+    template_config: TemplateConfig;
+    thumbnail_url?: string;
+  }): Promise<PostTemplate> {
+    const rows = await db.insert<PostTemplate>('post_templates', {
+      user_id: getCurrentUserId(),
+      // slug e reservado aos templates de sistema (chave estavel do seed).
+      slug: null,
+      is_system: false,
+      is_public: false,
+      is_default: false,
+      category: 'custom',
+      name: input.name,
+      description: input.description,
+      platform: input.platform,
+      format: input.format,
+      slides_count: input.template_config.slides_json.length,
+      template_config: input.template_config,
+      thumbnail_url: input.thumbnail_url,
+    });
+    if (!rows[0]) throw new Error('Erro ao criar template');
+    return rows[0];
+  },
+
+  async updateTemplate(
+    id: string,
+    patch: {
+      name?: string;
+      description?: string;
+      platform?: string;
+      format?: string;
+      template_config?: TemplateConfig;
+      thumbnail_url?: string;
+    },
+  ): Promise<PostTemplate> {
+    const body: Record<string, unknown> = { ...patch, updated_at: new Date().toISOString() };
+    if (patch.template_config) {
+      body.slides_count = patch.template_config.slides_json.length;
+    }
+    const rows = await db.update<PostTemplate>('post_templates', { id: `eq.${id}` }, body);
+    if (!rows[0]) throw new Error('Erro ao salvar template');
+    return rows[0];
+  },
+
+  // Arquiva em vez de apagar: posts apontam pra ca via template_id, e essa
+  // referencia e o registro de quem gerou cada post.
+  async archive(id: string): Promise<void> {
+    await db.update('post_templates', { id: `eq.${id}` }, { is_archived: true });
+  },
 };
 
 // ----------------------------------------------------------------------------
@@ -182,6 +249,9 @@ export const postApi = {
     carousel_fabric_json?: object[];
     caption?: string;
     metadata?: Record<string, unknown>;
+    // Post gerado pela IA nasce em 'pending_approval' — o Aprovar e o que mede
+    // a eficacia. Post feito a mao segue nascendo como rascunho.
+    status?: PostStatus;
   }): Promise<UserPost> {
     const userId = requireUserId();
     const rows = await db.insert<UserPost>('user_posts', {
@@ -195,7 +265,7 @@ export const postApi = {
       carousel_fabric_json: input.carousel_fabric_json ?? null,
       caption: input.caption,
       metadata: input.metadata ?? {},
-      status: 'draft',
+      status: input.status ?? 'draft',
     });
     if (!rows[0]) throw new Error('Falha ao criar post');
     return rows[0];
@@ -763,3 +833,146 @@ export const almaApi = {
     }
   },
 };
+
+// ----------------------------------------------------------------------------
+// EFICACIA DA IA
+// ----------------------------------------------------------------------------
+// Aprovar e o instrumento de medicao: aprovar intacto = a IA acertou; aprovar
+// depois de editar = errou, e o diff vira licao.
+//
+// A regua (decidida com o usuario): QUALQUER edicao de texto conta como erro.
+// Mexer no canvas nao conta — so quote e caption.
+
+// Normaliza so o que NAO deve contar como diferenca: espaco repetido e sobras
+// nas pontas. Acento, pontuacao e caixa contam — a regua e dura de proposito.
+function normalizeForCompare(s: string | undefined | null): string {
+  return (s ?? '').replace(/\s+/g, ' ').trim();
+}
+
+// Distancia de edicao em % do texto. INFORMATIVO — nao decide nada, so alimenta
+// o dashboard. Quem decide e o !==.
+function driftPct(a: string, b: string): number {
+  const x = normalizeForCompare(a);
+  const y = normalizeForCompare(b);
+  if (!x && !y) return 0;
+  if (!x || !y) return 100;
+  // Levenshtein com 2 linhas (evita matriz completa pra textos longos).
+  let prev = Array.from({ length: y.length + 1 }, (_, i) => i);
+  let cur = new Array<number>(y.length + 1);
+  for (let i = 1; i <= x.length; i++) {
+    cur[0] = i;
+    for (let j = 1; j <= y.length; j++) {
+      cur[j] = Math.min(
+        prev[j] + 1,
+        cur[j - 1] + 1,
+        prev[j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1),
+      );
+    }
+    [prev, cur] = [cur, prev];
+  }
+  return Math.round((prev[y.length] / Math.max(x.length, y.length)) * 1000) / 10;
+}
+
+export const aiApi = {
+  // O portao. Vem do banco (ai_gate_status) pra o frontend e o cron
+  // enxergarem a MESMA regra — duas implementacoes divergiriam.
+  async gate(): Promise<AiGate> {
+    const r = await db.rpc<AiGate>('ai_gate_status', {});
+    return r;
+  },
+
+  async createGeneration(input: {
+    editorial_slug?: string;
+    target_avatar?: string;
+    platform?: string;
+    briefing?: string;
+    arsenal_item_id?: string;
+    model?: string;
+    variations_count: number;
+  }): Promise<AiGeneration> {
+    const rows = await db.insert<AiGeneration>('ai_generations', {
+      user_id: requireUserId(),
+      ...input,
+    });
+    if (!rows[0]) throw new Error('Erro ao registrar a geração');
+    return rows[0];
+  },
+
+  // Grava o texto PRISTINO. Nunca atualize estas linhas depois.
+  async createVariations(
+    generationId: string,
+    variations: Array<{ idx: number; quote: string; caption: string; headline_type?: string; analogy?: string }>,
+  ): Promise<AiVariation[]> {
+    const uid = requireUserId();
+    return db.insert<AiVariation>(
+      'ai_variations',
+      variations.map((v) => ({ ...v, generation_id: generationId, user_id: uid })),
+    );
+  },
+
+  async linkVariationToPost(variationId: string, postId: string): Promise<void> {
+    await db.update('ai_variations', { id: `eq.${variationId}` }, { post_id: postId });
+  },
+
+  async variationForPost(postId: string): Promise<AiVariation | null> {
+    return db.selectOne<AiVariation>('ai_variations', { post_id: `eq.${postId}` });
+  },
+
+  // A MEDICAO. Compara o texto final com o original pristino.
+  // Idempotente por post (upsert): reaprovar corrige a medicao, nao duplica.
+  async recordReview(input: {
+    post_id: string;
+    variation: AiVariation;
+    quote_final: string;
+    caption_final: string;
+  }): Promise<AiReview> {
+    const { post_id, variation, quote_final, caption_final } = input;
+    const quote_changed =
+      normalizeForCompare(variation.quote) !== normalizeForCompare(quote_final);
+    const caption_changed =
+      normalizeForCompare(variation.caption) !== normalizeForCompare(caption_final);
+
+    const rows = await db.upsert<AiReview>(
+      'ai_reviews',
+      {
+        user_id: requireUserId(),
+        post_id,
+        variation_id: variation.id,
+        generation_id: variation.generation_id,
+        quote_original: variation.quote,
+        quote_final,
+        caption_original: variation.caption,
+        caption_final,
+        quote_changed,
+        caption_changed,
+        changed: quote_changed || caption_changed,
+        drift_pct: Math.max(
+          driftPct(variation.quote, quote_final),
+          driftPct(variation.caption, caption_final),
+        ),
+      },
+      'post_id',
+    );
+    if (!rows[0]) throw new Error('Erro ao registrar a revisão');
+    return rows[0];
+  },
+
+  async listReviews(limit = 30): Promise<AiReview[]> {
+    return db.select<AiReview>('ai_reviews', {
+      order: 'created_at.desc',
+      limit: String(limit),
+    });
+  },
+
+  async listLearnings(opts?: { onlyActive?: boolean }): Promise<AiLearning[]> {
+    const params: Record<string, string> = { order: 'evidencias.desc,last_reforcada_em.desc' };
+    if (opts?.onlyActive) params.ativo = 'eq.true';
+    return db.select<AiLearning>('ai_learnings', params);
+  },
+
+  async toggleLearning(id: string, ativo: boolean): Promise<void> {
+    await db.update('ai_learnings', { id: `eq.${id}` }, { ativo });
+  },
+};
+
+export const __aiInternals = { normalizeForCompare, driftPct };

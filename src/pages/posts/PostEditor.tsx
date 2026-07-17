@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ExternalLink, Loader2, Save, Send, UploadCloud } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ExternalLink, Loader2, Save, Send, UploadCloud } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -23,7 +23,8 @@ import { POST_STATUS_LABELS, type PostStatus } from '@/types';
 import { useAuthStore } from '@/store/authStore';
 import { uploadAssetImage, hashDataUrl } from '@/lib/storage';
 import { edge } from '@/lib/edge';
-import { almaApi } from '@/lib/api';
+import { aiApi, almaApi } from '@/lib/api';
+import { extractSlotText } from '@/lib/templates/extract';
 import { toast } from 'sonner';
 
 // Mapeia plataforma+formato pro preset inicial mais adequado.
@@ -52,6 +53,7 @@ export function PostEditor() {
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [postingLive, setPostingLive] = useState(false);
+  const [approving, setApproving] = useState(false);
   const [textDirty, setTextDirty] = useState(false);
   const [canvasDirty, setCanvasDirty] = useState(false);
   const lastUploadedHash = useRef<string | null>(null);
@@ -95,7 +97,7 @@ export function PostEditor() {
           <CardContent className="py-16 text-center">
             <p className="text-muted-foreground">Post nao encontrado.</p>
             <Button asChild variant="outline" className="mt-4">
-              <Link to="/posts">
+              <Link to="/">
                 <ArrowLeft className="h-4 w-4" /> Voltar
               </Link>
             </Button>
@@ -148,6 +150,64 @@ export function PostEditor() {
         descricao: `Post publicado: "${(post.title ?? post.caption ?? 'sem título').slice(0, 60)}"`,
         source: 'posts',
       });
+    }
+  }
+
+  // APROVAR — o instrumento de medicao da eficacia da IA.
+  //
+  // Aprovar sem ter tocado no texto = a IA acertou. Aprovar depois de editar =
+  // errou, e o diff vira licao pro proximo post. O post vai pra "Aprovado" no
+  // kanban de qualquer jeito; o que muda e o que a IA aprende.
+  async function handleApprove() {
+    if (!post) return;
+    setApproving(true);
+    try {
+      // Mede o que esta salvo, nao o que esta na tela: sem isso uma edicao
+      // ainda no debounce do auto-save ficaria de fora do diff.
+      if (textDirty) await saveText();
+      if (canvasDirty) await saveCanvas();
+
+      const variation = await aiApi.variationForPost(post.id);
+      if (!variation) {
+        // Post sem geracao pristina (feito antes da medicao existir, ou
+        // criado a mao). Aprova, mas nao inventa uma medicao.
+        await update(post.id, { status: 'approved' });
+        toast.success('Aprovado — este post não entra na medição (não foi gerado pela IA)');
+        return;
+      }
+
+      const quoteFinal = extractSlotText(fabricJson ?? post.carousel_fabric_json?.[0]) ?? '';
+      const review = await aiApi.recordReview({
+        post_id: post.id,
+        variation,
+        quote_final: quoteFinal,
+        caption_final: caption,
+      });
+
+      await update(post.id, { status: 'approved' });
+
+      if (review.changed) {
+        toast.success('Aprovado — a IA vai aprender com a sua correção');
+        // Fire-and-forget: destilar a licao nao pode segurar a aprovacao.
+        void edge.learnFromCorrection({ review_id: review.id }).catch((e) => {
+          console.warn('[learn-from-correction]', e);
+        });
+      } else {
+        toast.success('Aprovado sem alterações — a IA acertou 🎯');
+      }
+
+      void almaApi.emitEvento({
+        tipo: review.changed ? 'post_corrigido' : 'post_aprovado_intacto',
+        descricao: review.changed
+          ? `Correção em "${(post.title ?? '').slice(0, 50)}" — a IA aprende com ela`
+          : `A IA acertou de primeira: "${(post.title ?? '').slice(0, 50)}"`,
+        source: 'posts',
+      });
+    } catch (e) {
+      console.error(e);
+      toast.error(`Erro ao aprovar: ${(e as Error).message.slice(0, 140)}`);
+    } finally {
+      setApproving(false);
     }
   }
 
@@ -277,6 +337,19 @@ export function PostEditor() {
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             {isDirty ? 'Salvar' : 'Salvo'}
           </Button>
+          {post.status === 'pending_approval' && (
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => void handleApprove()}
+              disabled={approving}
+              className="bg-emerald-600 text-white hover:bg-emerald-700"
+              title="Aprovar e mover pra Aprovados no kanban"
+            >
+              {approving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              Aprovar
+            </Button>
+          )}
           {isAlreadyPublished ? (
             <Button
               variant="outline"

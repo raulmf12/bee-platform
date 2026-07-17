@@ -56,6 +56,36 @@ async function fetchPendingLines(): Promise<EditorialLine[]> {
   return await res.json();
 }
 
+// O PORTAO — a trava que importa de verdade.
+//
+// A UI mostrar cadeado nao impede nada: quem gera e publica sozinho e ESTE
+// cron, e ele roda sem sessao, a cada 15min. Sem esta checagem a campanha
+// continuaria produzindo com a UI travada.
+//
+// Consulta a MESMA funcao do banco que o frontend (ai_gate_status), por
+// usuario: a eficacia e da IA aprendendo a voz DAQUELE usuario.
+async function gateOpen(userId: string): Promise<{ open: boolean; why: string }> {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/ai_gate_status`, {
+      method: 'POST',
+      headers: svc(),
+      body: JSON.stringify({ p_user_id: userId }),
+    });
+    if (!res.ok) {
+      return { open: false, why: `portao indisponivel (HTTP ${res.status})` };
+    }
+    const g = await res.json();
+    return {
+      open: g?.destravada === true,
+      why: `acuracia ${g?.acuracia}% · amostra ${g?.amostra}/${g?.min_amostra} · geracoes ${g?.geracoes}/${g?.min_geracoes}`,
+    };
+  } catch (e) {
+    // Falhou ao perguntar? NAO gera. Uma campanha autonoma errando e cara;
+    // ficar parada 15min ate o proximo tick nao e.
+    return { open: false, why: `portao inacessivel: ${String(e).slice(0, 80)}` };
+  }
+}
+
 async function fetchProduct(productId: string) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/bee_products?id=eq.${productId}&limit=1`, {
     headers: svc(),
@@ -111,7 +141,10 @@ async function generateContentForLine(line: EditorialLine, editorialSlug: string
   // chama generate-content via REST (mesmo edge)
   const res = await fetch(`${SUPABASE_URL}/functions/v1/generate-content`, {
     method: 'POST',
-    headers: svc(),
+    // x-bee-user-id: o cron nao tem sessao, e o JWT do service_role nao tem
+    // `sub`. Sem dizer por quem age, o generate-content responde 401 — e era
+    // exatamente isso que travava a campanha.
+    headers: svc({ 'x-bee-user-id': line.user_id }),
     body: JSON.stringify({
       editorial_slug: editorialSlug,
       target_avatar: line.target_avatar ?? 'ambos',
@@ -352,15 +385,34 @@ Deno.serve(async (req: Request) => {
     if (!lines.length) return jsonResponse({ success: true, processed: 0, message: 'sem linhas pendentes' });
 
     const results = [];
+    let travadas = 0;
+    // Cache por usuario: varias linhas do mesmo dono nao precisam de N chamadas.
+    const portao = new Map<string, { open: boolean; why: string }>();
+
     for (const line of lines) {
       try {
+        if (!portao.has(line.user_id)) {
+          portao.set(line.user_id, await gateOpen(line.user_id));
+        }
+        const g = portao.get(line.user_id)!;
+        if (!g.open) {
+          travadas++;
+          console.log(`[tick] linha ${line.id} pulada — campanha travada (${g.why})`);
+          results.push({ line_id: line.id, skipped: 'campanha travada', gate: g.why });
+          continue;
+        }
         results.push(await processLine(line));
       } catch (e) {
         console.error('[tick] line failed', line.id, e);
         results.push({ line_id: line.id, error: String(e).slice(0, 200) });
       }
     }
-    return jsonResponse({ success: true, processed: lines.length, results });
+    return jsonResponse({
+      success: true,
+      processed: lines.length - travadas,
+      skipped_gated: travadas,
+      results,
+    });
   } catch (e) {
     return errorResponse('tick fatal', 500, String(e));
   }

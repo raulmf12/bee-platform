@@ -19,6 +19,7 @@ import {
   logUsage,
   preflight,
   userIdFromAuth,
+  internalUserId,
   checkRateLimit,
 } from '../_shared/security.ts';
 import { embedText } from '../_shared/embed.ts';
@@ -44,13 +45,25 @@ interface GenerateInput {
   // Adaptar de post existente — IA usa quote+caption do referenciado como base
   reference_post_id?: string;
   target_platform?: 'linkedin' | 'instagram';
+  // Quantas variacoes gerar (1..5). Default 1 pra nao quebrar quem ja chamava
+  // (o editorial-line-tick).
+  //
+  // As 5 saem numa UNICA chamada de proposito: este prompt e enorme (persona +
+  // arsenal + exemplos few-shot + RAG + Camada 0 da Alma) e a saida e curta.
+  // 5 variacoes no mesmo JSON custam ~8% a mais; 5 chamadas separadas
+  // custariam ~5x, porque cada uma reenviaria o prompt inteiro.
+  variations?: number;
 }
 
-interface GenerateOutput {
+interface GenerateVariation {
   quote: string;
   caption: string;
   headline_type_used?: string;
   analogy_used?: string;
+}
+
+interface GenerateOutput {
+  variations: GenerateVariation[];
 }
 
 function svcHeaders(): HeadersInit {
@@ -98,7 +111,7 @@ async function fetchReferencePost(id: string): Promise<ReferencePost | null> {
   return rows[0] ?? null;
 }
 
-async function loadBeeContext(input: GenerateInput) {
+async function loadBeeContext(input: GenerateInput, userId: string) {
   const avatarFilter = input.target_avatar && input.target_avatar !== 'ambos'
     ? `&slug=eq.${input.target_avatar}`
     : '';
@@ -145,6 +158,13 @@ async function loadBeeContext(input: GenerateInput) {
     fetchRest<{ texto: string }[]>(`/alma_crencas?direcao=eq.sistemico&select=texto&order=forca.desc&limit=4`),
   ]);
 
+  // APRENDIZADOS — as licoes destiladas das SUAS correcoes (learn-from-correction).
+  // Ordena por evidencia: uma regra que voce reforcou 5 vezes pesa mais que uma
+  // vista 1 vez. Corta em 10 pra o prompt nao virar uma lista de leis.
+  const learnings = await fetchRest<Array<{ texto: string; categoria: string; evidencias: number }>>(
+    `/ai_learnings?user_id=eq.${userId}&ativo=eq.true&order=evidencias.desc,last_reforcada_em.desc&limit=10&select=texto,categoria,evidencias`,
+  );
+
   return {
     editorial: editorial[0],
     arsenalItem: arsenalItem[0],
@@ -161,6 +181,7 @@ async function loadBeeContext(input: GenerateInput) {
       pulsoes: almaPulsoes,
       crencas: almaCrencas,
     },
+    learnings,
   };
 }
 
@@ -236,6 +257,7 @@ function buildSystemPrompt(
   ragContext: string,
   input: GenerateInput,
   referencePost: ReferencePost | null,
+  pastArsenalPosts: any[] = []
 ): string {
   const ed = ctx.editorial;
   const ai = ctx.arsenalItem;
@@ -332,6 +354,17 @@ function buildSystemPrompt(
     lines.push(`Titulo: ${ai.title}`);
     if (ai.summary) lines.push(`Resumo: ${ai.summary}`);
     if (ai.details) lines.push(`Detalhes:\n${ai.details}`);
+    
+    if (pastArsenalPosts && pastArsenalPosts.length > 0) {
+      lines.push('');
+      lines.push(`ATENCAO: POSTS ANTERIORES SOBRE ESTE MESMO ESTUDO DE CASO`);
+      lines.push(`Abaixo estao posts que ja criamos usando este mesmo case. OBRIGATORIO: Mude o angulo. Se ja falamos do aspecto X, fale do aspecto Y. Traga um insight diferente e ignorado nesses posts anteriores:`);
+      pastArsenalPosts.forEach((p, idx) => {
+        const q = p.carousel_text?.quote ?? '';
+        const c = p.caption ? p.caption.slice(0, 150).replace(/\n/g, ' ') + '...' : '';
+        lines.push(`[Post ${idx+1}] Quote: "${q}" | Caption: ${c}`);
+      });
+    }
     lines.push('');
   }
 
@@ -362,6 +395,19 @@ function buildSystemPrompt(
   if (ctx.generalRules.length) {
     lines.push('=== REGRAS GERAIS ===');
     ctx.generalRules.forEach((r) => lines.push(`• ${r.rule}`));
+    lines.push('');
+  }
+
+  // APRENDIZADOS — o que ele te corrigiu antes.
+  // Vem DEPOIS das regras de estilo de proposito: sao a camada mais recente e
+  // mais especifica da voz, destilada do que ele mudou com a propria mao.
+  if (ctx.learnings?.length) {
+    lines.push('=== APRENDIZADOS (destilados das correcoes DELE) ===');
+    lines.push('Ele ja te corrigiu nestes pontos. Nao repita o erro:');
+    ctx.learnings.forEach((l) => {
+      const peso = l.evidencias > 1 ? ` [reforcado ${l.evidencias}x]` : '';
+      lines.push(`• ${l.texto}${peso}`);
+    });
     lines.push('');
   }
 
@@ -426,16 +472,45 @@ function buildSystemPrompt(
 
   // REGRAS DE SAIDA
   lines.push('=== REGRAS DE SAIDA ===');
-  lines.push(`- "quote": frase da imagem. MAXIMO ${input.quote_max_chars ?? 200} chars. Use 1 dos 4 tipos de titulo. Sem emojis, sem hashtags.`);
-  lines.push('- "caption": MAXIMO 4 PARAGRAFOS CURTOS (2-4 frases cada). Densidade > extensao.');
+  lines.push(`- "quote": frase da imagem. MAXIMO ${input.quote_max_chars ?? 200} chars. Use 1 dos 4 tipos de titulo.`);
+  lines.push(`  CRÍTICO (Casing): Apenas a primeira letra da frase (e apos pontuacoes) deve ser maiuscula. NUNCA escreva a frase inteira em MAIUSCULAS (ALL CAPS).`);
+  lines.push(`  CRÍTICO (Sentido): A frase deve carregar um sentido completo e encapsulado. Nao divida o mesmo raciocinio. A frase precisa ser auto-explicativa.`);
+  lines.push(`  Sem emojis, sem hashtags nas frases.`);
+  
+  const parLimit = input.target_platform === 'instagram' ? 3 : 4;
+  lines.push(`- "caption": MAXIMO ${parLimit} PARAGRAFOS CURTOS (2-4 frases cada). Densidade > extensao.`);
+  lines.push(`  CRÍTICO (Anonimizacao): NUNCA cite nomes reais de pessoas ou de empresas. Anonimize tudo usando arquétipos (ex: "uma grande multinacional", "um diretor", "uma empresa de tecnologia").`);
+  lines.push(`  CRÍTICO (Formatacao): PROIBIDO o uso de travessões (-) na legenda.`);
   lines.push('  Estrutura: P1 gancho (primeiros 49 chars cabem na "ver mais") · P2 aprofundamento · P3 virada sistemica com analogia · P4 fechamento "Ve?" ou pergunta de implicacao.');
-  lines.push('  Hashtags obrigatorias DEPOIS dos 4 paragrafos, em linha unica separada por espaco.');
+  lines.push('  Hashtags obrigatorias DEPOIS dos paragrafos, em linha unica separada por espaco.');
   lines.push('- Frases curtas. Cada uma com peso. Sem rodeios.');
   lines.push('- "headline_type_used": slug (contradicao-direta, diagnostico-imperativo, pergunta-que-implica, metafora-que-nomeia).');
   lines.push('- "analogy_used": nome da analogia (ou null).');
+
+  const n = variationCount(input);
+  if (n > 1) {
+    lines.push('');
+    lines.push(`=== FORMATO: ${n} VARIACOES ===`);
+    lines.push(`- Devolva um JSON com a chave "variations": um array de EXATAMENTE ${n} objetos.`);
+    lines.push('- Cada objeto: { "quote", "caption", "headline_type_used", "analogy_used" }.');
+    // O ponto das variacoes e dar ESCOLHA. Cinco textos parecidos nao ensinam
+    // nada sobre a preferencia do usuario — cada uma tem que atacar por um lado.
+    lines.push(`- Cada variacao ataca por um ANGULO DIFERENTE. Varie o "headline_type_used" entre elas:`);
+    lines.push('  nao repita o mesmo tipo de titulo em duas variacoes enquanto houver tipo nao usado.');
+    lines.push('- Nao sao versoes da mesma frase com sinonimos trocados: sao entradas diferentes no mesmo tema.');
+    lines.push('- Todas obedecem as mesmas REGRAS DE SAIDA acima.');
+  } else {
+    lines.push('- Devolva um JSON com a chave "variations": um array de 1 objeto { "quote", "caption", "headline_type_used", "analogy_used" }.');
+  }
   lines.push('- Saida em JSON puro, SEM markdown.');
 
   return lines.join('\n');
+}
+
+// 1..5. Fora disso e erro de chamada, nao pedido valido.
+function variationCount(input: GenerateInput): number {
+  const n = Math.round(input.variations ?? 1);
+  return Math.max(1, Math.min(5, Number.isFinite(n) ? n : 1));
 }
 
 function buildUserPrompt(input: GenerateInput, arsenalItem?: { title: string; summary: string }): string {
@@ -453,7 +528,7 @@ function buildUserPrompt(input: GenerateInput, arsenalItem?: { title: string; su
   return parts.join('\n\n');
 }
 
-async function callGeminiOnce(apiKey: string, sys: string, usr: string, model: string) {
+async function callGeminiOnce(apiKey: string, sys: string, usr: string, model: string, maxOutputTokens: number) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   return await fetch(url, {
     method: 'POST',
@@ -463,24 +538,32 @@ async function callGeminiOnce(apiKey: string, sys: string, usr: string, model: s
       contents: [{ role: 'user', parts: [{ text: usr }] }],
       generationConfig: {
         temperature: 0.9,
-        maxOutputTokens: 4000,
+        maxOutputTokens,
         responseMimeType: 'application/json',
       },
     }),
   });
 }
 
+// O orcamento de saida cresce com o numero de variacoes: 4000 tokens davam
+// conta de 1 post, mas 5 captions de 4 paragrafos truncam no meio e o JSON
+// chega quebrado. ~1600 por variacao extra, com folga.
+function outputBudget(variations: number): number {
+  return Math.min(4000 + Math.max(0, variations - 1) * 1600, 16000);
+}
+
 async function callGemini(
   apiKey: string,
   sys: string,
   usr: string,
+  maxOutputTokens: number,
 ): Promise<{ text: string; usage: { input?: number; output?: number }; model_used: string }> {
   let lastErr = '';
   for (const model of MODEL_CHAIN) {
     console.log(`[generate-content] tentando modelo: ${model}`);
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
-        const res = await callGeminiOnce(apiKey, sys, usr, model);
+        const res = await callGeminiOnce(apiKey, sys, usr, model, maxOutputTokens);
         if (!res.ok) {
           const errText = (await res.text()).slice(0, 400);
           lastErr = `[${model}] HTTP ${res.status}: ${errText}`;
@@ -524,40 +607,97 @@ async function callGemini(
 
 // Recupera JSON cortado no meio (geralmente caption longa que estourou tokens).
 // Estrategia: fecha string aberta + objeto aberto.
+// Fecha um JSON truncado respeitando a ESTRUTURA que ficou aberta.
+//
+// A versao anterior so acrescentava '}' — nasceu quando a saida era um objeto
+// solto. Com { "variations": [ ... ] } isso produz JSON invalido: faltava
+// fechar o objeto corrente, o array E o envelope, nessa ordem.
+//
+// Percorre fora de string, empilha { e [, e fecha na ordem inversa. Se parou
+// dentro de uma string, fecha a string antes. O ultimo elemento pode sair
+// incompleto — quem chama descarta variacao sem quote+caption.
 function tryRecoverTruncatedJson(raw: string): string {
-  if (raw.trimEnd().endsWith('}')) return raw;
-  let escaped = false;
+  const stack: string[] = [];
   let inString = false;
+  let escaped = false;
+
   for (let i = 0; i < raw.length; i++) {
     const c = raw[i];
     if (escaped) { escaped = false; continue; }
     if (c === '\\') { escaped = true; continue; }
-    if (c === '"') inString = !inString;
+    if (c === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (c === '{' || c === '[') stack.push(c);
+    else if (c === '}' || c === ']') stack.pop();
   }
-  if (inString) return raw + '"}';
-  return raw + '}';
+
+  let out = raw;
+  if (inString) out += '"';
+  // Corta uma vírgula/dois-pontos pendurados: "a": <fim> nao fecha.
+  out = out.replace(/[,:]\s*$/, '');
+  while (stack.length) {
+    const open = stack.pop();
+    out += open === '{' ? '}' : ']';
+  }
+  return out;
 }
 
-function parseGeminiJson(raw: string): GenerateOutput {
+interface RawVariation {
+  quote?: string;
+  caption?: string;
+  headline_type_used?: string;
+  analogy_used?: string;
+}
+
+function normalizeVariation(v: RawVariation): GenerateVariation | null {
+  if (typeof v?.quote !== 'string' || typeof v?.caption !== 'string') return null;
+  const quote = v.quote.trim();
+  const caption = v.caption.trim();
+  if (!quote || !caption) return null;
+  return {
+    quote,
+    caption,
+    headline_type_used: v.headline_type_used,
+    analogy_used: v.analogy_used,
+  };
+}
+
+function parseGeminiJson(raw: string, expected: number): GenerateOutput {
   const cleaned = raw.trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim();
-  let parsed: { quote?: string; caption?: string; headline_type_used?: string; analogy_used?: string };
+  let parsed: { variations?: RawVariation[] } & RawVariation;
   try {
     parsed = JSON.parse(cleaned);
   } catch (e) {
     console.warn('[generate-content] JSON.parse falhou, tentando recovery:', (e as Error).message);
     const recovered = tryRecoverTruncatedJson(cleaned);
-    parsed = JSON.parse(recovered);
-    console.log('[generate-content] JSON recuperado (caption pode estar parcial)');
+    try {
+      parsed = JSON.parse(recovered);
+      console.log('[generate-content] JSON recuperado (ultima variacao pode estar parcial)');
+    } catch (e2) {
+      // Sem isto, um JSON quebrado vira so "SyntaxError na posicao N" e nao da
+      // pra saber se truncou, se veio markdown, ou se o modelo inventou formato.
+      console.error('[generate-content] recovery falhou. len=%d inicio=%s fim=%s',
+        cleaned.length, cleaned.slice(0, 160), cleaned.slice(-160));
+      throw e2;
+    }
   }
-  if (typeof parsed.quote !== 'string' || typeof parsed.caption !== 'string') {
-    throw new Error('JSON invalido (faltam quote/caption)');
+
+  // Aceita os dois formatos: { variations: [...] } e o objeto solto de antes.
+  // O modelo as vezes ignora o envelope, e uma variacao boa num formato
+  // inesperado vale mais que um erro.
+  const list: RawVariation[] = Array.isArray(parsed?.variations)
+    ? parsed.variations
+    : [parsed];
+
+  const out = list.map(normalizeVariation).filter((v): v is GenerateVariation => v !== null);
+  if (out.length === 0) throw new Error('JSON invalido (nenhuma variacao com quote+caption)');
+
+  // Pediu 5 e vieram 3? Devolve as 3. Falta de variacao nao justifica descartar
+  // o que veio bom — quem chamou decide o que fazer com menos.
+  if (out.length < expected) {
+    console.warn(`[generate-content] pedi ${expected} variacoes, vieram ${out.length}`);
   }
-  return {
-    quote: parsed.quote.trim(),
-    caption: parsed.caption.trim(),
-    headline_type_used: parsed.headline_type_used,
-    analogy_used: parsed.analogy_used,
-  };
+  return { variations: out.slice(0, expected) };
 }
 
 Deno.serve(async (req: Request) => {
@@ -566,7 +706,8 @@ Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') return errorResponse('Use POST', 405);
 
   try {
-    const userId = userIdFromAuth(req);
+    // Usuario logado, ou o cron agindo por ele (service_role + x-bee-user-id).
+    const userId = userIdFromAuth(req) ?? internalUserId(req);
     if (!userId) return errorResponse('Nao autenticado', 401);
 
     const rl = checkRateLimit(userId, 60_000, 20);
@@ -578,8 +719,16 @@ Deno.serve(async (req: Request) => {
     const apiKey = await getUserGeminiKey(userId);
     if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
 
-    const ctx = await loadBeeContext(input);
+    const ctx = await loadBeeContext(input, userId);
     if (!ctx.editorial) return errorResponse(`Editorial '${input.editorial_slug}' nao encontrado`, 400);
+
+    // Carrega posts passados que usaram este mesmo item de arsenal para nao repetir angulo
+    let pastArsenalPosts: any[] = [];
+    if (ctx.arsenalItem?.id) {
+      pastArsenalPosts = await fetchRest<any[]>(
+        `/user_posts?select=caption,carousel_text&metadata->>arsenal_item_id=eq.${ctx.arsenalItem.id}&order=created_at.desc&limit=3`
+      );
+    }
 
     // Carrega post de referencia se vier (adaptacao cross-platform)
     const referencePost = input.reference_post_id ? await fetchReferencePost(input.reference_post_id) : null;
@@ -594,11 +743,12 @@ Deno.serve(async (req: Request) => {
     ].filter(Boolean).join(' . ');
     const ragContext = await retrieveContext(apiKey, ragQuery, userId);
 
-    const sys = buildSystemPrompt(ctx, ragContext, input, referencePost);
+    const sys = buildSystemPrompt(ctx, ragContext, input, referencePost, pastArsenalPosts);
     const usr = buildUserPrompt(input, ctx.arsenalItem);
 
-    const { text, usage, model_used } = await callGemini(apiKey, sys, usr);
-    const parsed = parseGeminiJson(text);
+    const wanted = variationCount(input);
+    const { text, usage, model_used } = await callGemini(apiKey, sys, usr, outputBudget(wanted));
+    const parsed = parseGeminiJson(text, wanted);
 
     // Metodologia viva: marca o material usado (incrementa uso + last_used_at)
     // pra rotacionar nas proximas geracoes. Fire-and-forget — nao trava a resposta.
@@ -607,7 +757,9 @@ Deno.serve(async (req: Request) => {
     // Barramento da Alma: a geracao alimenta a psique (fire-and-forget).
     void emitAlmaEvent({
       tipo: 'post_gerado',
-      descricao: `A Alma gerou um "${ctx.editorial.name}"`,
+      descricao: parsed.variations.length > 1
+        ? `A Alma gerou ${parsed.variations.length} caminhos pra um "${ctx.editorial.name}"`
+        : `A Alma gerou um "${ctx.editorial.name}"`,
       source: 'generate-content',
     });
 
@@ -630,7 +782,10 @@ Deno.serve(async (req: Request) => {
       },
     });
 
-    return jsonResponse({ success: true, ...parsed });
+    // Campos de topo espelham a 1a variacao: quem ja chamava esperando
+    // { quote, caption } continua funcionando sem saber de variacoes.
+    const first = parsed.variations[0];
+    return jsonResponse({ success: true, ...first, variations: parsed.variations });
   } catch (e) {
     console.error('[generate-content]', e);
     return errorResponse('Erro ao gerar conteudo', 500, String(e));

@@ -19,6 +19,9 @@ import type {
   BeeEditorial, BeeProduct, CampaignPhase, EditorialLine,
   EditorialLineStatus, FrequencyType, Platform, TargetAvatar,
 } from '@/types';
+import { aiApi } from '@/lib/api';
+import { GateLock } from '@/components/ai/GateLock';
+import type { AiGate } from '@/types';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
@@ -52,7 +55,44 @@ const EMPTY: FormState = {
   start_date: '', end_date: '', briefing_base: '', theme: '', status: 'draft',
 };
 
+// A campanha e autonoma: o editorial-line-tick gera e cria posts sozinho, no
+// cron. Por isso ela so abre depois que a IA provar que escreve na sua voz —
+// o portao (ai_gate_status) e a mesma regra que o cron consulta.
 export function LinhasEditoriais() {
+  const [gate, setGate] = useState<AiGate | null>(null);
+  const [gateLoading, setGateLoading] = useState(true);
+
+  useEffect(() => {
+    void aiApi.gate()
+      .then(setGate)
+      .catch((e) => {
+        console.error('[linhas] portao', e);
+        // Sem resposta do portao, NAO liberamos: uma campanha que publica
+        // sozinha e cara de errar. Trava e o padrao seguro.
+        setGate(null);
+      })
+      .finally(() => setGateLoading(false));
+  }, []);
+
+  if (gateLoading) {
+    return (
+      <div className="py-20 text-center">
+        <Loader2 className="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+  if (!gate?.destravada) {
+    return <GateLock gate={gate ?? EMPTY_GATE} />;
+  }
+  return <CampanhaAtiva />;
+}
+
+const EMPTY_GATE: AiGate = {
+  amostra: 0, intactos: 0, alterados: 0, geracoes: 0, acuracia: 0,
+  meta: 90, min_amostra: 30, min_geracoes: 6, destravada: false, total_revisados: 0,
+};
+
+function CampanhaAtiva() {
   const [lines, setLines] = useState<EditorialLine[]>([]);
   const [products, setProducts] = useState<BeeProduct[]>([]);
   const [editorials, setEditorials] = useState<BeeEditorial[]>([]);

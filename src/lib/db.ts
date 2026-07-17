@@ -153,4 +153,16 @@ export const db = {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
   },
+
+  // Chama uma funcao do Postgres. Usado pelo portao da IA (ai_gate_status),
+  // que mora no banco pra o frontend e o cron enxergarem a MESMA regra.
+  async rpc<T>(fn: string, args: object = {}, opts: QueryOpts = {}): Promise<T> {
+    const res = await fetch(`${REST}/rpc/${fn}`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(args),
+      signal: opts.signal,
+    });
+    return handle<T>(res);
+  },
 };

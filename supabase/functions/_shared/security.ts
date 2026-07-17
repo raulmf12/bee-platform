@@ -54,6 +54,25 @@ export function userIdFromAuth(req: Request): string | null {
   }
 }
 
+// Identidade em chamadas SERVICO->SERVICO.
+//
+// O JWT do service_role nao tem `sub`, entao userIdFromAuth() devolve null e a
+// funcao responde 401. Era por isso que o editorial-line-tick (cron, sem
+// sessao) nunca conseguia chamar o generate-content: a campanha autonoma
+// jamais gerou um post.
+//
+// Aqui o chamador diz por quem esta agindo via header. So vale se o Bearer for
+// EXATAMENTE a service_role — uma chave que so existe no servidor. Um cliente
+// nunca consegue forjar isto: nao tem a chave.
+export function internalUserId(req: Request): string | null {
+  const auth = req.headers.get('Authorization');
+  if (!auth?.startsWith('Bearer ')) return null;
+  const token = auth.slice(7);
+  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (!serviceKey || token !== serviceKey) return null;
+  return req.headers.get('x-bee-user-id');
+}
+
 // Rate limit super simples por user_id, em memoria.
 // (Reseta quando a function reinicia; pra produciao trocar por KV/Redis.)
 const rateLimits = new Map<string, { count: number; resetAt: number }>();

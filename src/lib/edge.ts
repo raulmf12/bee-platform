@@ -21,18 +21,49 @@ export interface GenerateContentInput {
   quote_max_chars?: number;
   reference_post_id?: string;
   target_platform?: 'linkedin' | 'instagram';
+  // Quantas variacoes gerar numa unica chamada (1..5).
+  // As 5 saem no MESMO pedido de proposito: o prompt (persona + arsenal +
+  // exemplos + Camada 0 da Alma) e enorme e a saida e curta, entao 5 variacoes
+  // custam ~8% a mais. Cinco chamadas separadas custariam ~5x.
+  variations?: number;
 }
 
-export interface GenerateContentOutput {
-  success: boolean;
+export interface GeneratedVariation {
   quote: string;
   caption: string;
   headline_type_used?: string;
   analogy_used?: string;
+}
+
+export interface GenerateContentOutput extends GeneratedVariation {
+  success: boolean;
+  // Sempre presente. Com variations=1 tem 1 item, e os campos de topo
+  // (quote/caption) espelham o primeiro — compat com quem ja chamava assim.
+  variations: GeneratedVariation[];
+  error?: string;
+}
+
+export interface LearnFromCorrectionOutput {
+  success: boolean;
+  learnings: Array<{ texto: string; categoria: string; reforcou: boolean }>;
   error?: string;
 }
 
 export const edge = {
+  // Destila a licao de uma correcao (ai_reviews) e joga em ai_learnings.
+  // Fire-and-forget: nunca deve segurar a aprovacao do post.
+  async learnFromCorrection(input: { review_id: string }): Promise<LearnFromCorrectionOutput> {
+    const headers = await authHeader();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/learn-from-correction`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(input),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
+    return json;
+  },
+
   async generateContent(input: GenerateContentInput): Promise<GenerateContentOutput> {
     const headers = await authHeader();
     const res = await fetch(`${SUPABASE_URL}/functions/v1/generate-content`, {
