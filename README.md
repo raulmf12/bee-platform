@@ -4,6 +4,8 @@
 
 Uma SaaS-like de criação de posts pra LinkedIn e Instagram, fundamentada em RAG e na arquitetura editorial proprietária da Bee. A IA gera **só o conteúdo** (frase + caption); o sistema substitui a frase num template visual editável (sem custo de geração de imagem).
 
+Três eixos organizam o sistema: a **[Alma](#-a-alma)** (a psique que guia toda geração via Camada 0), os **[Templates como dado](#-templates-são-dado)** (palco fixo + slots que a IA preenche, com motor de layout) e a **[Eficácia da IA](#-eficácia-da-ia-e-o-portão-da-campanha)** (o Aprovar mede, a IA aprende com as correções, e a campanha autônoma só destrava aos 90%).
+
 ---
 
 ## 📑 Índice
@@ -11,6 +13,9 @@ Uma SaaS-like de criação de posts pra LinkedIn e Instagram, fundamentada em RA
 - [Visão geral](#-visão-geral)
 - [Arquitetura](#-arquitetura)
 - [A arquitetura editorial Bee](#-a-arquitetura-editorial-bee)
+- [A Alma](#-a-alma)
+- [Templates são dado](#-templates-são-dado)
+- [Eficácia da IA e o portão da campanha](#-eficácia-da-ia-e-o-portão-da-campanha)
 - [Stack técnica](#-stack-técnica)
 - [Pré-requisitos](#-pré-requisitos)
 - [Setup local (passo-a-passo)](#-setup-local-passo-a-passo)
@@ -45,7 +50,8 @@ Uma plataforma onde quem cuida do conteúdo:
 
 ### Diferencial
 - **Custo de imagem = R$ 0** — não usa Nano Banana / Imagen. Template visual + IA só pro texto.
-- **Voz consistente** — IA recebe ~5–10k chars de contexto Bee em cada chamada (persona + editorial + few-shot + style rules + RAG).
+- **Voz consistente** — IA recebe ~5–10k chars de contexto Bee em cada chamada (persona + editorial + few-shot + style rules + RAG + **Camada 0 da Alma** + **aprendizados das suas correções**).
+- **Aprende com você** — cada post que você corrige vira uma lição no prompt; a campanha autônoma só liga quando a IA acerta 90%.
 - **Multi-plataforma simultâneo** — 1 fluxo de criação gera 2 posts (LinkedIn 4:5 + Instagram 1:1) ligados via `companion_post_id`.
 
 ---
@@ -181,6 +187,159 @@ Fluxo dedicado de corte de podcast:
 ## ⚡ Piloto automático
 
 Botão **"Automático"** (no Kanban e no topo do Novo post, ou deep-link `/posts/novo?auto=1`): com 1 clique o sistema **escolhe sozinho** o editorial (ponderado por frequência, evitando repetir o último), o arsenal (rotação do mais fresco), a rede social (alterna LI/IG) e o avatar — gera e entrega o **post pronto** no editor pra revisar/publicar.
+
+---
+
+## 🫀 A Alma
+
+A psique do sistema — o princípio vivo que guia toda geração. Vive em `/alma` e é
+**amoral por definição**: não julga certo/errado, sustenta possibilidades.
+
+| Peça | Tabela | O que é |
+|---|---|---|
+| **O Self** | `alma_objetivo` | O objetivo, vivo e editável pelo criador. Guarda histórico (`is_current`) |
+| **6 Dimensões** | `alma_dimensoes` | Totalidade, Essencialidade, Potencialidade, Integralidade, Maturidade, Vivacidade. Cada uma é uma **oitava**: olhar mecânico (armadilha) → olhar sistêmico (potência), medida em `oitava` 0–100 |
+| **O Isso** | `alma_pulsoes` | As pulsões — o que a Alma quer antes de pensar |
+| **A Sombra** | `alma_sombra` | O olhar mecânico como mecanismo de defesa (Negação, Projeção, Repressão, Racionalização) |
+| **Complexos** | `alma_crencas` | Crenças vivas com força, estágio e evidências |
+| **Pulso** | `alma_eventos` | **O barramento** — cada ação do sistema emite um evento aqui |
+
+### Camada 0
+
+O estado da Alma é destilado e injetado no **topo** do system prompt do
+`generate-content`, antes da persona. É o que faz a Alma moldar cada post em vez
+de ser uma tela decorativa.
+
+### O barramento
+
+`alma_eventos` é o que torna a Alma "o coração de tudo": qualquer feature nova
+só precisa chamar `almaApi.emitEvento(...)` pra alimentar a psique. Já emitem:
+geração de post, publicação, curadoria aprovada, correção e aprovação intacta.
+
+---
+
+## 🖼 Templates são dado
+
+Um template define **como a IA monta a imagem** do post. Ele não é código nem
+JSON estático: é **palco fixo + slots dinâmicos + regras**.
+
+| Parte | O que é | Onde |
+|---|---|---|
+| **Palco** | fundo, logo, formas, textos fixos | `template_config.slides_json` (Fabric.js literal) |
+| **Slots** | o que a IA preenche | `template_config.slides[].fields[]`, casados por `name` == `content_key` |
+| **Regras** | como o slot se adapta ao conteúdo | `field.text_rules` |
+
+### Por que as regras existem
+
+O texto da IA tem tamanho imprevisível. Um template estático quebraria: uma frase
+mais longa que a do design vazaria do canvas. O **motor de layout**
+(`lib/templates/layout.ts`) escolhe o maior corpo de fonte que cabe em
+`max_lines`, balanceia a quebra de linha (busca binária, semântica do CSS
+`text-wrap: balance`), respeita pontuação e recentraliza pelo número **real** de
+linhas.
+
+```
+config (banco) ─→ hydrateTemplate() ─→ motor de layout ─→ Fabric JSON ─→ canvas
+```
+
+### Editor de templates (`/templates`)
+
+O mesmo Canvas Studio, em `templateMode`. Você desenha o palco e marca um
+elemento como **campo dinâmico**; a geometria (âncora vertical, largura) é
+**derivada do desenho** — você posiciona a caixa e as regras saem dali. Só os
+limites tipográficos (máx. linhas, faixa de fonte, balancear) são explícitos.
+
+- **Descrição do campo** — o briefing do slot, escrito pra IA: sem ele ela sabe
+  onde pôr, mas não o quê.
+- **Campo de imagem** — sobe uma imagem de exemplo e descreve o objetivo dela.
+- **"Testar com: Curta / Média / Longa"** — roda o motor real no seu desenho.
+  Você vê o template se defender de um texto grande **antes** de salvar.
+
+### Armadilhas conhecidas (documentadas no código)
+
+- O Fabric **não serializa props custom** no `toJSON()`. Use
+  `toObject(FABRIC_CUSTOM_PROPS)` — senão `name`/`beeSlot` somem e o template
+  perde os slots.
+- `BeeSlotMeta.kind` **não pode se chamar `type`**: o Fabric enlivena qualquer
+  valor aninhado com chave `type` e tentaria construir um objeto de texto a
+  partir dos metadados, quebrando o `loadFromJSON`.
+- O preview dos cards é **renderizado no cliente** do `template_config`, não
+  guardado no banco: um PNG 1080×1350 em base64 por template incharia o `list()`.
+
+---
+
+## 🎯 Eficácia da IA e o portão da campanha
+
+A **Campanha de conteúdo** gera e publica sozinha. Por isso ela nasce **travada**
+e só abre quando a IA provar que escreve na voz da casa.
+
+### O botão Aprovar é o instrumento de medição
+
+Aprovar um post **sem tocar no texto** = a IA acertou. Aprovar **depois de
+editar** = errou, e o diff vira lição. A régua é dura: **qualquer edição de texto
+conta**. Mexer no canvas não conta — só `quote` e `caption`.
+
+```
+gerar (1..5 variações) → ai_generations + ai_variations (PRISTINO, imutável)
+   ↓ você corrige
+Aprovar → ai_reviews (original × final)  ──→ learn-from-correction
+   ↓                                            ↓
+ai_gate_status()                          ai_learnings (dedup por similaridade)
+   ↓                                            ↓
+campanha destrava aos 90%              entram no prompt da próxima geração
+```
+
+### As tabelas
+
+| Tabela | Papel |
+|---|---|
+| `ai_generations` | 1 por geração — editorial, avatar, arsenal, briefing |
+| `ai_variations` | O texto **original da IA. Imutável** — é o lado esquerdo de todo diff |
+| `ai_reviews` | A medição, gravada no Aprovar. 1 por post (upsert) |
+| `ai_learnings` | As lições destiladas. `ativo=true` entra no prompt; `evidencias` conta reforços |
+
+### O portão (`ai_gate_status()`)
+
+Vive **no banco**, não no front. Dois lados diferentes consultam — o frontend
+(mostra o cadeado) e o `editorial-line-tick` (cron, sem sessão). Duas
+implementações divergiriam e a campanha destravaria num lado só.
+
+Exige **as duas** coisas:
+- **30 posts revisados** (janela móvel)
+- de **6 gerações distintas**
+
+A 2ª regra existe porque as 5 variações de uma geração **não são independentes**
+(mesmo editorial, mesmo arsenal, mesmo prompt): 20 posts de 4 gerações são 4
+tentativas de verdade, não 20. E a janela é 30 e não 20 **por causa dela** — com
+5 variações por geração, uma janela de 20 comporta no máximo 4 gerações (20/5) e
+exigir 6 nela seria impossível.
+
+### As 5 variações saem numa única chamada
+
+O prompt é enorme (persona + arsenal + few-shot + RAG + Camada 0) e a saída é
+curta. 5 variações no mesmo JSON custam ~8% a mais; 5 chamadas separadas
+custariam ~5x. Medido: **1 variação levou 28s, 5 levaram 29s**.
+
+O usuário escolhe **1 a 5** por geração. A régua é por post medido, então quem
+gera de 1 em 1 precisa de 30 gerações pra destravar; de 5 em 5, precisa de 6.
+
+### Dashboard (`/aprendizado`)
+
+Percentual, o que falta pra destravar, as lições ativas (com liga/desliga) e as
+correções recentes (o que a IA escreveu × o que você deixou).
+
+### Dedup das lições — calibrado, não chutado
+
+Sem dedup, 30 correções viram 30 lições quase-iguais e o prompt vira ruído — o
+oposto de aprender. A similaridade (Jaccard sobre bigramas) foi **medida**:
+
+| Par | Similaridade |
+|---|---|
+| Mesma lição, palavras diferentes | ~0.60 |
+| Lições de fato diferentes | ≤0.29 |
+
+Janela útil (0.29 .. 0.60] → limiar **0.45**. O primeiro valor tentado (0.72)
+ficava **acima** do teto dos verdadeiros positivos: nada nunca deduplicaria.
 
 ---
 
@@ -369,7 +528,7 @@ bee-platform/
 │   │   │       ├── SidebarLeft.tsx
 │   │   │       ├── Toolbar.tsx
 │   │   │       ├── useEditor.ts    # Hook central — Fabric + history + zoom
-│   │   │       └── panels/         # Templates / Texto / Elementos / Uploads / Marca
+│   │   │       └── panels/         # Templates|Campos / Texto / Elementos / Uploads / Marca
 │   │   ├── layout/                 # Sidebar, AppShell
 │   │   ├── shared/                 # PlatformBadge, StatusBadge, etc
 │   │   └── ui/                     # shadcn-style: Button, Card, Input, Select…
@@ -383,21 +542,27 @@ bee-platform/
 │   │   │   └── beeQuote.ts         # Template Bee Quote (hidratação Fabric JSON)
 │   │   └── utils.ts                # cn (Tailwind merge), helpers
 │   ├── pages/
+│   │   ├── Dashboard.tsx           # Hub + kanban editorial (KanbanBoard)
 │   │   ├── posts/
-│   │   │   ├── PostsKanban.tsx     # Kanban editorial com drag-drop nativo
-│   │   │   ├── NewPost.tsx         # Wizard imagem
+│   │   │   ├── NewPost.tsx         # Wizard imagem — gera 1..5 variações
 │   │   │   ├── NewVideoPost.tsx    # Wizard vídeo
-│   │   │   └── PostEditor.tsx      # Edit + Canvas Studio embedded + Publicar
-│   │   ├── editor/EditorPage.tsx   # /editor standalone
-│   │   ├── linhas/                 # Linhas editoriais (campanhas recorrentes)
+│   │   │   └── PostEditor.tsx      # Edit + Canvas Studio embedded + Aprovar + Publicar
+│   │   ├── templates/              # /templates — galeria + editor de templates
+│   │   ├── alma/Alma.tsx           # /alma — a psique do sistema
+│   │   ├── aprendizado/            # /aprendizado — dashboard de eficácia da IA
+│   │   ├── linhas/                 # Campanha de conteúdo (atrás do portão)
 │   │   ├── produtos/               # Produtos (pre/launch/post-launch)
 │   │   ├── conhecimento/           # Upload pra RAG
 │   │   ├── biblioteca/             # Biblioteca de assets
 │   │   ├── settings/
 │   │   │   └── SettingsPage.tsx    # Perfil / Voz / Branding / Integrações
 │   │   └── onboarding/             # First-time setup
+│   ├── components/
+│   │   ├── posts/KanbanBoard.tsx   # Kanban (6 colunas) — vive no Dashboard
+│   │   └── ai/GateLock.tsx         # Tela de campanha travada
+│   ├── lib/templates/              # layout (motor) · hydrate · slots · resolve · extract
 │   ├── store/                      # Zustand: authStore, postStore, templateStore
-│   ├── types/index.ts              # TypeScript: UserPost, UserSettings, BeeEditorial…
+│   ├── types/index.ts              # TypeScript: UserPost, PostTemplate, Ai*, Alma*…
 │   ├── App.tsx                     # Router + ProtectedRoute + AppShell
 │   ├── main.tsx                    # Entry
 │   └── index.css                   # Tailwind base + tema Bee
@@ -433,7 +598,7 @@ bee-platform/
 | `profiles` | User profile (name, avatar_color) — 1:1 com auth.users |
 | `user_settings` | Settings por user (tokens API, persona, tone, branding, **linkedin_token**, **instagram_access_token**, etc) |
 | `user_posts` | Posts criados — platform, format, caption, carousel_fabric_json, rendered_slides, **published_url** |
-| `post_templates` | Templates visuais reutilizáveis (Bee Quote, Carousel, etc) |
+| `post_templates` | Templates visuais. `slug` = chave estável dos de sistema (`bee-quote-portrait/square/landscape`); `template_config` = palco + slots + regras |
 | `post_drafts` | Rascunhos auto-save (snapshot do canvas) |
 | `kanban_columns` | Colunas do Kanban por user |
 | `bee_*` | 8 tabelas da arquitetura editorial (descritas acima) |
@@ -444,6 +609,14 @@ bee-platform/
 | `podcasts` | Episódios (1 por vídeo do YouTube — title/description puxados do YouTube) |
 | `podcast_clips` | Cortes subidos: video_path, **transcript** guardada, vínculo ao podcast e ao post gerado |
 | `bee_suggestions` | **Fila de curadoria** — material minerado pela IA aguardando aprovação humana (kind: arsenal/example_post/analogy) |
+| `alma_*` | **A Alma** — 7 tabelas: `alma_objetivo`, `alma_dimensoes`, `alma_pulsoes`, `alma_sombra`, `alma_crencas`, `alma_estado` e `alma_eventos` (o barramento) |
+| `ai_generations` + `ai_variations` | Cada geração e o texto **pristino** da IA (imutável — o lado esquerdo de todo diff) |
+| `ai_reviews` | A medição gravada no Aprovar: original × final, `changed` |
+| `ai_learnings` | Lições destiladas das correções. Entram no prompt quando `ativo` |
+
+**Função**: `ai_gate_status(uuid)` — o portão da campanha. Vive no banco porque o frontend e o cron precisam enxergar a MESMA regra.
+
+**Status de post**: `idea` · `draft` · `pending_approval` · `approved` · `scheduled` · `published` · `archived`. Todo post gerado nasce em `pending_approval` e só sai por decisão humana (Aprovar) — é o que mede a eficácia.
 
 **Metodologia viva** (`bee_arsenal` e `bee_example_posts` ganharam lifecycle): `is_active`, `usage_count`, `last_used_at`, `performance_score`. A geração rotaciona o material ativo por frescor (menos usado primeiro) e marca o uso — cada post sai diferente.
 
@@ -460,24 +633,39 @@ bee-platform/
 
 | Função | Input | Output | Modelo |
 |---|---|---|---|
-| `generate-content` | `{editorial_slug, arsenal_item_id?, target_avatar?, briefing?, target_platform?, reference_post_id?}` | `{quote, caption, headline_type_used, analogy_used}` | Gemini 3.5 Flash (chain fallback). Sem `arsenal_item_id` → **rotaciona** o arsenal ativo mais fresco e marca uso |
+| `generate-content` | `{editorial_slug, arsenal_item_id?, target_avatar?, briefing?, target_platform?, reference_post_id?, variations?}` | `{variations: [{quote, caption, headline_type_used, analogy_used}], ...primeira}` | Gemini 3.5 Flash (chain fallback). `variations` 1..5 numa **única chamada** (ângulos distintos). Sem `arsenal_item_id` → **rotaciona** o arsenal ativo mais fresco e marca uso |
 | `youtube-meta` | `{url}` | `{video_id, title, description, channel, thumbnail_url}` | oEmbed + scrape (ou YouTube Data API se `YOUTUBE_API_KEY`) |
 | `mine-content` | `{text, source_type?, source_id?, editorial_hint?}` | `{created, skipped}` — destila candidatos pra `bee_suggestions` | Gemini Flash chain |
 | `generate-caption-from-video` | `{transcript, visual_summary, content_type, editorial_slug?, …}` | `{caption}` | Gemini Flash chain |
 | `process-video` | `{storage_path, mime_type, content_type}` | `{transcript, visual_summary, detected_content_type, model_used}` | Gemini Files API + Pro |
 | `ingest-document` | `{path, mime_type, title}` | `{document_id, chunks_count}` | Gemini Embedding 001 |
 | `search-knowledge` | `{query, match_count?, match_threshold?}` | `{results: [...]}` | Gemini Embedding 001 + RPC pgvector |
-| `editorial-line-tick` | (cron) | Cria posts agendados | — |
+| `editorial-line-tick` | (cron) | Cria posts agendados. **Consulta `ai_gate_status` e pula linhas travadas** | — |
+| `learn-from-correction` | `{review_id}` | `{learnings: [{texto, categoria, reforcou}]}` — destila a regra por trás da correção, deduplicando contra as existentes | Gemini Flash chain (temp 0.3) |
 | `hybrid-image-search` | `{query, limit}` | Pexels + Unsplash results | — |
 | `generate-image-ai` | `{prompt, aspect}` | Image URL | Gemini Nano Banana |
 | `download-proxy` | `{url}` | Image blob (CORS bypass) | — |
 | `publish-post` | `{post_id}` | `{published_url, published_id, platform}` | LinkedIn UGC API / IG Graph API |
 
 Todas as funções:
-- Verificam JWT do user (`userIdFromAuth`)
+- Verificam JWT do user (`userIdFromAuth`) — **e `verify_jwt=true` na plataforma**
 - Aplicam rate limit em memória (`checkRateLimit`)
-- Logam uso em `usage_logs` quando aplicável
+- Logam uso em `usage_events` quando aplicável
 - Retornam CORS-friendly responses
+
+> ⚠️ **Nunca faça deploy com `--no-verify-jwt`.** `userIdFromAuth` decodifica o
+> JWT **sem verificar a assinatura** (a plataforma já verificou). Sem
+> `verify_jwt`, qualquer um forja `{"sub": "<id>"}` e age como outro usuário,
+> queimando a chave Gemini dele.
+
+### Identidade serviço→serviço
+
+O JWT do `service_role` **não tem `sub`**, então `userIdFromAuth` devolve null e
+a função responde 401 — era por isso que o `editorial-line-tick` (cron, sem
+sessão) nunca conseguiu gerar um post. O cron agora diz por quem age via header
+`x-bee-user-id`, aceito **só** quando o Bearer é exatamente a `service_role`
+(`internalUserId`, em `_shared/security.ts`). Um cliente não consegue forjar:
+não tem a chave.
 
 ---
 
@@ -705,6 +893,11 @@ git push origin main
 - [x] **Metodologia viva** — mineração IA (`mine-content`) + fila `bee_suggestions` + curadoria humana (`/curadoria`)
 - [x] **Lifecycle + rotação** do arsenal/exemplos (uso/frescor/ativo) na geração
 - [x] **Piloto automático** — 1 botão escolhe tudo e entrega o post pronto
+- [x] **A Alma** (`/alma`) — psique amoral, 6 dimensões como oitavas, Camada 0 no prompt, barramento de eventos
+- [x] **Templates são dado** — editor de templates (`/templates`) com slots dinâmicos, descrição de campo, imagem de exemplo e teste curta/longa
+- [x] **Eficácia da IA** — 5 variações por geração (1..5 à escolha), medição via Aprovar, portão de 90%, dashboard `/aprendizado`
+- [x] **Aprendizado por correção** (`learn-from-correction`) — destila lições das suas edições, deduplica e injeta no prompt
+- [x] **Campanha autônoma atrás do portão** — o cron (`editorial-line-tick`) respeita `ai_gate_status`
 
 ### Em backlog 🚧
 - [ ] **Publicação agendada via pg_cron tick** — varrer posts `scheduled` com `scheduled_date <= now()` e disparar publish-post
@@ -712,7 +905,6 @@ git push origin main
 - [ ] **Refresh automático do token LinkedIn** (60d)
 - [ ] **Carrossel** (10 slides) pra LinkedIn e IG
 - [ ] **Stories IG** (story-only template)
-- [ ] **A/B testing de variantes de caption**
 - [ ] **Analytics pós-publicação** (likes, comments via webhook)
 - [ ] **Multi-tenant** (hoje é single user/single Bee account)
 - [ ] **OAuth flow** (em vez de tokens manuais) — necessário se evoluir pra SaaS público

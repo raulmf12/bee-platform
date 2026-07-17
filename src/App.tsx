@@ -5,7 +5,6 @@ import { useAuthStore, needsOnboarding } from '@/store/authStore';
 import { AppShell } from '@/components/layout/AppShell';
 import { Login } from '@/pages/Login';
 import { Dashboard } from '@/pages/Dashboard';
-import { PostsKanban } from '@/pages/posts/PostsKanban';
 import { NewPost } from '@/pages/posts/NewPost';
 import { PostEditor } from '@/pages/posts/PostEditor';
 import { Biblioteca } from '@/pages/biblioteca/Biblioteca';
@@ -20,8 +19,10 @@ import { LinhasEditoriais } from '@/pages/linhas/LinhasEditoriais';
 import { NewVideoPost } from '@/pages/posts/NewVideoPost';
 import { Podcasts } from '@/pages/podcasts/Podcasts';
 import { NewPodcastClip } from '@/pages/podcasts/NewPodcastClip';
-import { EditorPage } from '@/pages/editor/EditorPage';
+import { Templates } from '@/pages/templates/Templates';
+import { TemplateEditor } from '@/pages/templates/TemplateEditor';
 import { Alma } from '@/pages/alma/Alma';
+import { Aprendizado } from '@/pages/aprendizado/Aprendizado';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { currentUser, settings, initialized } = useAuthStore();
@@ -57,14 +58,18 @@ export default function App() {
     <TooltipProvider delayDuration={200}>
       <Routes>
         <Route path="/login" element={<Login />} />
+        {/* Editor de templates: tela cheia, fora do AppShell (precisa da largura).
+            O editor de post continua embutido no PostEditor. */}
         <Route
-          path="/editor"
+          path="/templates/:id"
           element={
             <ProtectedRoute>
-              <EditorPage />
+              <TemplateEditor />
             </ProtectedRoute>
           }
         />
+        {/* O /editor solto virou o editor de templates. */}
+        <Route path="/editor" element={<Navigate to="/templates" replace />} />
         <Route
           path="/onboarding"
           element={
@@ -82,7 +87,10 @@ export default function App() {
         >
           <Route index element={<Dashboard />} />
           <Route path="alma" element={<Alma />} />
-          <Route path="posts" element={<PostsKanban />} />
+          <Route path="templates" element={<Templates />} />
+          <Route path="aprendizado" element={<Aprendizado />} />
+          {/* O kanban virou o Dashboard — links antigos pra /posts caem la. */}
+          <Route path="posts" element={<Navigate to="/" replace />} />
           <Route path="posts/novo" element={<NewPost />} />
           <Route path="posts/novo-video" element={<NewVideoPost />} />
           <Route path="podcasts" element={<Podcasts />} />

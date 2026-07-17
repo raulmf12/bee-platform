@@ -245,7 +245,7 @@ export function NewPodcastClip() {
             ? `Agendado pra ${new Date(scheduledDate).toLocaleString('pt-BR')}`
             : 'Post aprovado e no Kanban',
       );
-      navigate('/posts');
+      navigate('/');
     } catch (e) {
       console.error(e);
       toast.error('Erro ao criar post');

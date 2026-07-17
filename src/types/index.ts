@@ -11,6 +11,9 @@ export type Format = 'image' | 'carousel' | 'reel' | 'story';
 export type PostStatus =
   | 'idea'
   | 'draft'
+  // Todo post gerado pela IA nasce aqui e so sai por decisao humana (Aprovar).
+  // Aprovar e o instrumento de medicao da eficacia — vide ai_reviews.
+  | 'pending_approval'
   | 'approved'
   | 'scheduled'
   | 'published'
@@ -65,31 +68,77 @@ export interface UserSettings {
 // ---------------------------------------------------------------------------
 // TEMPLATES
 // ---------------------------------------------------------------------------
+// Um template = palco fixo (slides_json) + slots dinamicos (slides[].fields).
+//
+// O palco e Fabric.js literal: fundo, logo, formas, textos fixos.
+// Os slots sao os objetos que a IA preenche. Cada slot casa com o objeto do
+// palco cujo `name` == content_key, e carrega as REGRAS de como aquele objeto
+// se adapta ao conteudo (o texto da IA tem tamanho imprevisivel).
+//
+// Sem as regras o template seria estatico: uma frase mais longa que a do design
+// vazaria do canvas. hydrateTemplate() aplica as regras na hora da geracao.
+
+// Regras de um slot de TEXTO. Espelham o que o Bee Quote tinha hardcoded.
+export interface TemplateTextRules {
+  // ancora vertical do CENTRO do bloco de texto, em % da altura
+  anchor_y_ratio: number;
+  // largura da textbox em % da largura
+  width_ratio: number;
+  // o motor busca o MAIOR corpo entre max e min que caiba em max_lines
+  max_font_size: number;
+  min_font_size: number;
+  font_size_step?: number;
+  max_lines: number;
+  // quebra balanceada (linhas de larguras parecidas) vs ganancioso simples
+  balance: boolean;
+  line_height: number;
+  font_family: string;
+  font_weight: string;
+  fill: string;
+  text_align: string;
+  // texto exibido no editor e quando o slot vem vazio
+  placeholder?: string;
+}
+
+export interface TemplateField {
+  content_key: string;
+  type: 'text' | 'image';
+  display_name: string;
+  // O QUE este campo deve conter — escrito pra IA, nao pra tela.
+  // "A frase de impacto, no tom sistemico" / "Foto do avatar olhando pra camera".
+  // E o briefing do slot: sem isso a IA sabe onde por, mas nao o que por.
+  description?: string;
+  max_chars?: number;
+  // obrigatorio pra type: 'text' — sem isso o slot nao sabe se adaptar
+  text_rules?: TemplateTextRules;
+  // so pra type: 'image' — a imagem de exemplo que o slot mostra no desenho
+  // (data URL). A IA troca por uma de verdade; aqui serve de referencia visual.
+  sample_src?: string;
+}
+
+export interface TemplateSlide {
+  name: string;
+  fields: TemplateField[];
+}
+
 // Estrutura do template_config jsonb. Compatível com o esquema da doc §7-8.
 export interface TemplateConfig {
   // dimensoes do canvas (cada slide do array slides_json deve respeitar)
   width: number;
   height: number;
+  background?: string;
   // array de slides Fabric.js (pra imagem unica, 1 elemento)
   slides_json: object[];
   // metadata derivado: campos editaveis por slide
-  slides?: Record<
-    string,
-    {
-      name: string;
-      fields: Array<{
-        content_key: string;
-        type: 'text' | 'image';
-        display_name: string;
-        max_chars?: number;
-      }>;
-    }
-  >;
+  slides?: Record<string, TemplateSlide>;
 }
 
 export interface PostTemplate {
   id: string;
   user_id?: string | null;
+  // Chave estavel dos templates de sistema (ex: 'bee-quote-portrait').
+  // Null nos templates criados pelo usuario.
+  slug?: string | null;
   name: string;
   description?: string;
   category?: string;
@@ -534,6 +583,7 @@ export const FORMAT_LABELS: Record<Format, string> = {
 export const POST_STATUS_LABELS: Record<PostStatus, string> = {
   idea: 'Ideia',
   draft: 'Rascunho',
+  pending_approval: 'Pendente de aprovação',
   approved: 'Aprovado',
   scheduled: 'Agendado',
   published: 'Publicado',
@@ -648,4 +698,87 @@ export interface AlmaSnapshot {
   pulsoes: AlmaPulsao[];
   eventos: AlmaEvento[];
   lexico: AlmaLexico[];
+}
+
+// ---------------------------------------------------------------------------
+// EFICACIA DA IA
+// ---------------------------------------------------------------------------
+// O ciclo: gerar (ai_generations + 5 ai_variations) -> voce corrige -> Aprovar
+// (ai_reviews mede) -> a IA destila a licao (ai_learnings) -> entra no proximo
+// prompt. Quando a eficacia se sustenta em 90%, a campanha destrava sozinha.
+
+export interface AiGeneration {
+  id: string;
+  user_id: string;
+  editorial_slug?: string | null;
+  target_avatar?: string | null;
+  platform?: string | null;
+  briefing?: string | null;
+  arsenal_item_id?: string | null;
+  model?: string | null;
+  variations_count: number;
+  created_at: string;
+}
+
+// O texto ORIGINAL da IA. Imutavel: e o lado esquerdo de todo diff.
+export interface AiVariation {
+  id: string;
+  generation_id: string;
+  user_id: string;
+  idx: number;
+  quote: string;
+  caption: string;
+  headline_type?: string | null;
+  analogy?: string | null;
+  post_id?: string | null;
+  created_at: string;
+}
+
+// A medicao, gravada no Aprovar. 1 por post.
+export interface AiReview {
+  id: string;
+  user_id: string;
+  variation_id?: string | null;
+  generation_id?: string | null;
+  post_id: string;
+  quote_original: string;
+  quote_final: string;
+  caption_original: string;
+  caption_final: string;
+  quote_changed: boolean;
+  caption_changed: boolean;
+  // a regua: mudou o quote OU a caption (qualquer edicao conta)
+  changed: boolean;
+  // informativo, nao e a regua
+  drift_pct?: number | null;
+  created_at: string;
+}
+
+export interface AiLearning {
+  id: string;
+  user_id: string;
+  texto: string;
+  categoria: string;
+  // quantas correcoes distintas reforcaram esta mesma licao
+  evidencias: number;
+  ativo: boolean;
+  exemplo_antes?: string | null;
+  exemplo_depois?: string | null;
+  origem_review_id?: string | null;
+  last_reforcada_em: string;
+  created_at: string;
+}
+
+// Retorno de ai_gate_status() — a MESMA regra que o cron enxerga.
+export interface AiGate {
+  amostra: number;
+  intactos: number;
+  alterados: number;
+  geracoes: number;
+  acuracia: number;
+  meta: number;
+  min_amostra: number;
+  min_geracoes: number;
+  destravada: boolean;
+  total_revisados: number;
 }

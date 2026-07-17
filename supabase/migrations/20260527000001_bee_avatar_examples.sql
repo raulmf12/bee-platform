@@ -40,7 +40,8 @@ INSERT INTO public.bee_avatars (slug, name, state, dor, desafio_comunicacao, gat
        'As 6 Dimensoes: suas chaves para um novo caminho na lideranca.',
        'Quebre a espiral de subperformance e lidere sistematicamente.',
        'Junte-se a lideres ressonantes que estao transformando o caos em fluxo.'],
- 2);
+ 2)
+ON CONFLICT (slug) DO NOTHING;
 
 ALTER TABLE public.bee_avatars ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "bee_avatars_read" ON public.bee_avatars;
@@ -149,7 +150,8 @@ INSERT INTO public.bee_hashtags (tag, required, topic, position) VALUES
 ('#SistemasVivos', FALSE, 'paradigma', 16),
 ('#Autorresponsabilidade', FALSE, 'autorresponsabilidade', 17),
 ('#NovaConsciencia', FALSE, 'consciencia', 18),
-('#6Dimensoes', FALSE, 'framework', 19);
+('#6Dimensoes', FALSE, 'framework', 19)
+ON CONFLICT (tag) DO NOTHING;
 
 ALTER TABLE public.bee_hashtags ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "bee_hashtags_read" ON public.bee_hashtags;

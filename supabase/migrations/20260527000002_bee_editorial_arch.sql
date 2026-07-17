@@ -156,7 +156,8 @@ INSERT INTO public.bee_glossary (term, meaning, usage_note, must_appear) VALUES
 ('Ver', 'Ato transformador — com maiúscula quando usado assim', 'Núcleo do estilo. "Ver" com V maiúsculo em momentos-chave.', FALSE),
 ('Vê?', 'Assinatura de fechamento — convite à cumplicidade', 'Fechamento mais característico. Usar quando o post chegou a uma revelação genuína.', TRUE),
 ('PMPP', 'Próximo Movimento Potente Possível', 'Termo proprietário Bee.', FALSE),
-('Página em branco', 'Postura de escuta sem metodologia prévia', 'Princípio Bee.', FALSE);
+('Página em branco', 'Postura de escuta sem metodologia prévia', 'Princípio Bee.', FALSE)
+ON CONFLICT (term) DO NOTHING;
 
 -- ---------------------------------------------------------------------
 -- 4. ANALOGIAS (só natureza/biologia)
@@ -185,7 +186,8 @@ INSERT INTO public.bee_analogies (name, description, domain, used, best_for) VAL
 ('O peixe que não vê a água', 'Modelo mental invisível', 'biologia', FALSE, 'Crenças inconscientes, cegueira sistêmica'),
 ('A constelação', 'Padrões que só se revelam ao recuar', 'natureza', FALSE, 'Perspectiva, distância pra ver o todo'),
 ('O rio que encontra seu caminho', 'Fluxo vs. força bruta', 'natureza', FALSE, 'Flexibilidade, caminho natural'),
-('A semente em solo tóxico', 'Talento vs. cultura', 'biologia', FALSE, 'Ambiente como fator de potencial');
+('A semente em solo tóxico', 'Talento vs. cultura', 'biologia', FALSE, 'Ambiente como fator de potencial')
+ON CONFLICT (name) DO NOTHING;
 
 -- ---------------------------------------------------------------------
 -- 5. TIPOS DE TÍTULO (4 padrões)
@@ -218,7 +220,8 @@ INSERT INTO public.bee_headline_types (slug, name, description, examples, positi
 ('metafora-que-nomeia', 'Metáfora que nomeia',
  'Um fenômeno corporativo nomeado de forma inesperada.',
  ARRAY['Biologicamente, crescimento contínuo sem conexão tem nome: câncer.'],
- 4);
+ 4)
+ON CONFLICT (slug) DO NOTHING;
 
 -- ---------------------------------------------------------------------
 -- 6. TEMAS (Senso Comum vs Olhar Bee) — 8 temas
@@ -292,7 +295,8 @@ INSERT INTO public.bee_themes (slug, name, senso_comum, olhar_bee, analogies_key
  ARRAY['O rio que encontra seu caminho'],
  ARRAY['inteligência emergente', 'matéria-prima para cocriação', 'uma oitava acima', 'transformar a desordem em aliado'],
  ARRAY['controlar o caos', 'eliminar a incerteza', 'mais ordem'],
- 8);
+ 8)
+ON CONFLICT (slug) DO NOTHING;
 
 -- ---------------------------------------------------------------------
 -- 7. LÓGICAS DESCONSTRUTIVAS (7 lógicas)
@@ -334,7 +338,8 @@ INSERT INTO public.bee_logics (slug, name, common_belief, deconstructive_logic, 
 ('conhecimento-tradicional-vs-nova-inteligencia', 'Conhecimento Tradicional vs. Nova Inteligência',
  'Meus anos de experiência e os modelos de gestão que me trouxeram até aqui são suficientes para os desafios do futuro.',
  'O futuro da liderança exige inteligência além do que já foi ensinado. O que te trouxe até aqui pode não ser suficiente para o mundo que se apresenta.',
- 7);
+ 7)
+ON CONFLICT (slug) DO NOTHING;
 
 -- ---------------------------------------------------------------------
 -- 8. STYLE RULES (FAZ vs NÃO FAZ + regras imutáveis)
