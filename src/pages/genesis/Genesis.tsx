@@ -59,10 +59,18 @@ const CSS = `
 .gen-root .barhead{display:flex;align-items:center;gap:10px;margin-top:14px}
 .gen-root textarea,.gen-root input.tin{width:100%;font:inherit;font-size:14px;line-height:1.5;color:var(--g-fg);background:hsl(var(--accent)/0.05);border:1px solid var(--g-border);border-radius:8px;padding:8px 10px;resize:vertical}
 .gen-root textarea:focus,.gen-root input.tin:focus{outline:none;box-shadow:0 0 0 2px var(--g-accent)}
-.gen-root .pgroup{margin-bottom:18px}
-.gen-root .pgh{display:flex;align-items:baseline;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.gen-root .pgroup{border-bottom:1px solid var(--g-border)}
+.gen-root .pgroup:last-child{border-bottom:0}
+.gen-root button.pgh{display:flex;align-items:center;gap:9px;width:100%;background:none;border:0;color:inherit;text-align:left;cursor:pointer;padding:12px 2px}
+.gen-root button.pgh:hover .n{color:var(--g-accent)}
+.gen-root .pgh .chev{color:var(--g-accent);font-size:11px;width:12px;flex:none}
 .gen-root .pgh .n{font-family:'Plus Jakarta Sans';font-weight:700;font-size:14px}
-.gen-root .pgh .d{font-size:11.5px;color:var(--g-mfg)}
+.gen-root .pgh .cnt{font-size:10px;font-weight:700;color:var(--g-accent);background:hsl(var(--accent)/0.12);border-radius:999px;padding:1px 7px;flex:none}
+.gen-root .pgh .d{font-size:11.5px;color:var(--g-mfg);margin-left:auto;text-align:right;padding-left:10px}
+.gen-root .pbody{padding:0 2px 10px 21px}
+.gen-root .addlnk{margin-top:9px;font-size:11.5px;font-weight:600;color:var(--g-accent);background:none;border:1px dashed hsl(var(--accent)/0.45);border-radius:8px;padding:6px 12px;cursor:pointer}
+.gen-root .addlnk:hover{background:hsl(var(--accent)/0.07)}
+.gen-root .addform{margin-top:10px}
 .gen-root .pr{display:flex;gap:11px;padding:10px 0;border-bottom:1px solid var(--g-border)}
 .gen-root .pr:last-child{border-bottom:0}
 .gen-root .pr.off{opacity:.4}
@@ -128,6 +136,18 @@ export function Genesis() {
 
   const [editPr, setEditPr] = useState<string | null>(null);
   const [prDraft, setPrDraft] = useState<{ principio: string; aplicacao: string }>({ principio: '', aplicacao: '' });
+  const [openCamadas, setOpenCamadas] = useState<Set<string>>(new Set());
+  const [addingCamada, setAddingCamada] = useState<string | null>(null);
+  const [addDraft, setAddDraft] = useState('');
+  const [addBusy, setAddBusy] = useState(false);
+
+  function toggleCamada(c: string) {
+    setOpenCamadas((s) => {
+      const n = new Set(s);
+      if (n.has(c)) n.delete(c); else n.add(c);
+      return n;
+    });
+  }
 
   useEffect(() => {
     let alive = true;
@@ -183,6 +203,25 @@ export function Genesis() {
       toast.success('Princípio atualizado.');
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Erro ao salvar');
+    }
+  }
+
+  async function saveAdd(c: string) {
+    const txt = addDraft.trim();
+    if (!txt) return;
+    setAddBusy(true);
+    try {
+      const arr = grouped[c] ?? [];
+      const nextOrdem = (arr[arr.length - 1]?.ordem ?? 0) + 1;
+      const created = await genesisApi.createPrincipio({ camada: c, principio: txt, ordem: nextOrdem });
+      setSnap((s) => (s ? { ...s, principios: [...s.principios, created] } : s));
+      setAddDraft('');
+      setAddingCamada(null);
+      toast.success('Princípio adicionado.');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Erro ao adicionar');
+    } finally {
+      setAddBusy(false);
     }
   }
 
@@ -282,9 +321,17 @@ export function Genesis() {
         <div className="sec">
           <div className="sl"><span className="ic">§</span><h2>Os Princípios</h2><span className="d">a mente da Bee — curadoria humana</span></div>
           <div className="card pad">
-            {CAMADA_ORDER.filter((c) => grouped[c]?.length).map((c) => (
+            {CAMADA_ORDER.filter((c) => grouped[c]?.length).map((c) => {
+              const open = openCamadas.has(c);
+              return (
               <div className="pgroup" key={c}>
-                <div className="pgh"><span className="n">{CAMADA_LABEL[c] ?? c}</span><span className="d">{CAMADA_DESC[c]}</span></div>
+                <button className="pgh" aria-expanded={open} onClick={() => toggleCamada(c)}>
+                  <span className="chev">{open ? '▾' : '▸'}</span>
+                  <span className="n">{CAMADA_LABEL[c] ?? c}</span>
+                  <span className="cnt">{grouped[c].length}</span>
+                  <span className="d">{CAMADA_DESC[c]}</span>
+                </button>
+                {open && <div className="pbody">
                 {grouped[c].map((p) => (
                   <div className={`pr ${p.ativo ? '' : 'off'}`} key={p.id}>
                     <span className={`tag ${p.inviolavel ? 'inv' : 'mut'}`}>{p.inviolavel ? 'inviolável' : 'orienta'}</span>
@@ -313,8 +360,21 @@ export function Genesis() {
                     )}
                   </div>
                 ))}
+                {addingCamada === c ? (
+                  <div className="addform">
+                    <textarea rows={2} placeholder="novo princípio nesta categoria…" value={addDraft} onChange={(e) => setAddDraft(e.target.value)} />
+                    <div className="barhead">
+                      <button className="btn" disabled={addBusy} onClick={() => void saveAdd(c)}>{addBusy ? 'salvando…' : '✓ adicionar'}</button>
+                      <button className="btn ghost" disabled={addBusy} onClick={() => { setAddingCamada(null); setAddDraft(''); }}>cancelar</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button className="addlnk" onClick={() => { setAddingCamada(c); setAddDraft(''); }}>+ adicionar princípio</button>
+                )}
+                </div>}
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 

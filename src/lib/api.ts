@@ -885,6 +885,28 @@ export const genesisApi = {
     if (!rows[0]) throw new Error('principio nao encontrado');
     return rows[0];
   },
+
+  // Adiciona um novo princípio numa categoria (camada). codigo único gerado.
+  async createPrincipio(input: {
+    camada: string; principio: string; ordem?: number; inviolavel?: boolean; aplicacao?: string | null;
+  }): Promise<import('@/types').GenesisPrincipio> {
+    const codigo = `${input.camada}-c${Date.now().toString(36)}`;
+    const rows = await db.insert<import('@/types').GenesisPrincipio>('genesis_principios', {
+      camada: input.camada,
+      codigo,
+      principio: input.principio,
+      aplicacao: input.aplicacao ?? null,
+      ordem: input.ordem ?? 0,
+      inviolavel: input.inviolavel ?? false,
+      ativo: true,
+    });
+    if (!rows[0]) throw new Error('Falha ao criar princípio');
+    return rows[0];
+  },
+
+  async removePrincipio(id: string): Promise<void> {
+    return db.delete('genesis_principios', { id: `eq.${id}` });
+  },
 };
 
 // ----------------------------------------------------------------------------
