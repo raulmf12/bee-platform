@@ -61,8 +61,22 @@ export interface UserSettings {
   use_ai_images?: boolean;
   default_template_id?: string;
   content_analysis?: Record<string, unknown>;
+  // Preferências da distribuição automática da Agenda (editáveis pelo usuário).
+  distribution_prefs?: DistributionPrefs;
   created_at: string;
   updated_at: string;
+}
+
+// Regras que a Agenda usa no "IA distribui". Tudo opcional — o lib/schedule
+// aplica os defaults por cima. NADA é fixo no código de negócio: o usuário edita.
+export interface DistributionPrefs {
+  // horário 'HH:mm' por plataforma; cai no default_time quando ausente.
+  platform_times?: Partial<Record<Platform, string>>;
+  default_time?: string;
+  skip_weekends?: boolean;
+  per_day_limit?: number;
+  // começa a agendar a partir de hoje + N dias.
+  start_offset_days?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +197,15 @@ export interface UserPost {
   rendered_slides?: Record<string, string>;   // URLs finais do Storage
   caption?: string;
   status: PostStatus;
-  scheduled_date?: string;
+  // Nomenclatura unica: BEE-DDMMAA-G{global}-D{dia}-V{lote}
+  codigo?: string | null;
+  // Nota de viralizacao (0-100) estimada pela IA na geracao + razao curta
+  virality_score?: number | null;
+  virality_reason?: string | null;
+  // Metricas de inteligencia da IA
+  ai_edit_rounds?: number;   // correcoes que a IA precisou ate ser aprovado
+  manual_edits?: number;     // edicoes manuais do humano depois (no editor)
+  scheduled_date?: string | null;  // null limpa a data (volta pro stand-by)
   published_date?: string;
   is_favorite: boolean;
   kanban_column_id?: string | null;
@@ -288,14 +310,58 @@ export interface YoutubeMeta {
 // ---------------------------------------------------------------------------
 // BEE EDITORIAL ARCHITECTURE
 // ---------------------------------------------------------------------------
+// Uma PESSOA da biblioteca de personas — ficha completa pra simular o público.
+export interface BeePersona {
+  id: string;
+  user_id: string;
+  nome: string;
+  idade?: number | null;
+  cargo?: string;
+  empresa?: string;
+  historia?: string;
+  rotina?: string;
+  personalidade?: string;
+  memorias?: string[];
+  valores?: string[];
+  dor?: string;
+  desejo?: string;
+  objecoes?: string[];
+  gatilhos?: string[];
+  linguagem?: string;
+  base_tipo?: string | null;
+  base_ref?: string | null;
+  is_active: boolean;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// Público-alvo próprio de um editorial (perfil rico, aditivo ao avatar global).
+export interface BeeAudience {
+  quem?: string;
+  dor?: string;
+  desejo?: string;
+  objecoes?: string[];
+  gatilhos?: string[];
+  linguagem?: string;
+}
+
 export interface BeeEditorial {
   id: string;
   slug: string;
   name: string;
   description?: string;
+  objetivo?: string;
+  tom?: string;
+  fazer?: string[];
+  evitar?: string[];
+  temas?: string[];
+  audience?: BeeAudience;
   frequency_hint?: string;
   structure_template?: string;
   emotional_sequence?: string[];
+  // Cor (hex) usada nos cards da Agenda. Customizável na tela de Editoriais.
+  color?: string | null;
   position: number;
   is_active: boolean;
   is_system?: boolean;
@@ -730,6 +796,9 @@ export interface AiVariation {
   caption: string;
   headline_type?: string | null;
   analogy?: string | null;
+  // Nota de viralizacao gravada junto do texto pristino.
+  virality_score?: number | null;
+  virality_reason?: string | null;
   post_id?: string | null;
   created_at: string;
 }
@@ -747,9 +816,15 @@ export interface AiReview {
   caption_final: string;
   quote_changed: boolean;
   caption_changed: boolean;
-  // a regua: mudou o quote OU a caption (qualquer edicao conta)
+  // a regua: mudou o quote OU a caption OU a imagem
   changed: boolean;
-  // informativo, nao e a regua
+  // drift POR FACETA (a régua graduada roda em cada uma separada)
+  quote_drift_pct?: number | null;   // faceta texto
+  caption_drift_pct?: number | null; // faceta legenda
+  // faceta imagem — binária. has_image = havia imagem de IA pra medir.
+  has_image: boolean;
+  image_changed: boolean;
+  // drift combinado (max) — informativo, compat
   drift_pct?: number | null;
   created_at: string;
 }
@@ -759,6 +834,8 @@ export interface AiLearning {
   user_id: string;
   texto: string;
   categoria: string;
+  // faceta que esta lição afeta: texto / legenda / imagem
+  facet: AiFacet;
   // quantas correcoes distintas reforcaram esta mesma licao
   evidencias: number;
   ativo: boolean;
@@ -770,15 +847,65 @@ export interface AiLearning {
 }
 
 // Retorno de ai_gate_status() — a MESMA regra que o cron enxerga.
-export interface AiGate {
+// Severidade de uma correção — a régua graduada (item 2).
+//   intacto:  a IA acertou (peso 1.0)
+//   ajuste:   cosmético, drift <= ajuste_max_drift (peso 0.6)
+//   reescrita: a IA errou o conteúdo (peso 0.0)
+export type AiSeveridade = 'intacto' | 'ajuste' | 'reescrita';
+
+// A eficácia de UMA faceta num segmento. acuracia/passa = null quando a faceta
+// não tem dados (imagem antes de os templates gerarem imagem).
+export interface AiFacetStat {
   amostra: number;
-  intactos: number;
-  alterados: number;
-  geracoes: number;
-  acuracia: number;
+  acuracia: number | null;
+  passa: boolean | null;
+}
+
+export type AiFacet = 'texto' | 'legenda' | 'imagem';
+
+// Um SEGMENTO = (editoria × plataforma × alvo). O portão libera por segmento.
+export interface AiSegment {
+  editorial_slug: string;
+  platform: string;
+  target_avatar: string;
+  amostra: number;
+  texto: AiFacetStat;
+  legenda: AiFacetStat;
+  imagem: AiFacetStat;
+  destravada: boolean;
+  em_risco: boolean;
+}
+
+// Resumo global — a campanha deixou de ser toda-ou-nada. `destravada` = existe
+// pelo menos 1 segmento liberado. `segmentos` traz o detalhe por conjunto.
+// Mensagem do chat com o agente de voz. `proposals` guarda o que o agente
+// propôs (pra UI renderizar Salvar/Descartar mesmo após recarregar).
+export interface AiChatProposal {
+  texto: string;
+  categoria: string;
+  facet: AiFacet;
+  scope: { editorial_slug: string | null; platform: string | null; target_avatar: string | null };
+  saved?: boolean;
+}
+
+export interface AiChatMessage {
+  id: string;
+  user_id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  proposals: AiChatProposal[];
+  created_at: string;
+}
+
+export interface AiGate {
   meta: number;
   min_amostra: number;
-  min_geracoes: number;
+  relock_band: number;
+  ajuste_max_drift: number;
+  total_segmentos: number;
+  destravados: number;
+  em_risco: boolean;
   destravada: boolean;
-  total_revisados: number;
+  amostra_total: number;
+  segmentos: AiSegment[];
 }

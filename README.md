@@ -52,6 +52,9 @@ Uma plataforma onde quem cuida do conteúdo:
 - **Custo de imagem = R$ 0** — não usa Nano Banana / Imagen. Template visual + IA só pro texto.
 - **Voz consistente** — IA recebe ~5–10k chars de contexto Bee em cada chamada (persona + editorial + few-shot + style rules + RAG + **Camada 0 da Alma** + **aprendizados das suas correções**).
 - **Aprende com você** — cada post que você corrige vira uma lição no prompt; a campanha autônoma só liga quando a IA acerta 90%.
+- **Geração em lote** — cada geração entrega **3 a 5 posts independentes** de uma vez, cada um com **código único** (`BEE-DDMMAA-Gnn-Dn-Vn`) e **nota de viralização (0–100)**; título e legenda aprovados/rejeitados individualmente.
+- **Métricas de inteligência da IA** — o sistema conta quantas **correções da IA** e **edições manuais** cada post exigiu até ser aprovado (`ai_edit_rounds` / `manual_edits`) — dados pra medir e melhorar a IA.
+- **Agenda de conteúdo** — calendário estilo Google Agenda (não substitui o Kanban): arraste posts em stand-by pro dia ou deixe a IA distribuir; cor por editoria + ícone da rede + filtros.
 - **Multi-plataforma simultâneo** — 1 fluxo de criação gera 2 posts (LinkedIn 4:5 + Instagram 1:1) ligados via `companion_post_id`.
 
 ---
@@ -633,7 +636,14 @@ bee-platform/
 
 | Função | Input | Output | Modelo |
 |---|---|---|---|
-| `generate-content` | `{editorial_slug, arsenal_item_id?, target_avatar?, briefing?, target_platform?, reference_post_id?, variations?}` | `{variations: [{quote, caption, headline_type_used, analogy_used}], ...primeira}` | Gemini 3.5 Flash (chain fallback). `variations` 1..5 numa **única chamada** (ângulos distintos). Sem `arsenal_item_id` → **rotaciona** o arsenal ativo mais fresco e marca uso |
+| `generate-content` | `{editorial_slug, arsenal_item_id?, target_avatar?, briefing?, target_platform?, reference_post_id?, variations?}` | `{variations: [{quote, caption, headline_type_used, analogy_used, virality_score, virality_reason}], ...primeira}` | Gemini 3.5 Flash (chain fallback). `variations` 1..5 numa **única chamada** (ângulos distintos), cada uma com **nota de viralização 0–100**. Sem `arsenal_item_id` → **rotaciona** o arsenal ativo mais fresco e marca uso |
+| `generate-script` | `{editorial_slug?, target_avatar?, platform?, briefing?}` | `{titulo, roteiro, model_used}` — roteiro de vídeo (GANCHO/DESENVOLVIMENTO/VIRADA/CTA) | Gemini Flash chain |
+| `learn-from-feedback` | `{post_id?, feedback_text, quote_original, caption_original, facet_focus?, …}` | `{learnings: [...]}` — destila a lição de um feedback **explícito** (ex: "corte as intros") e comita na hora (dedup por faceta×alcance) | Gemini Flash chain |
+| `voice-coach` | `{messages, focus?}` | `{reply, proposals: [...]}` — agente conversacional que **propõe** lições (o usuário confirma) | Gemini Flash chain |
+| `commit-learning` | `{texto, categoria, facet, scope, chat_message_id?}` | `{reforcou, learning_id, texto}` — grava uma lição confirmada (dedup) | — |
+| `generate-persona` | `{base?, hints?}` | `{persona: {...}}` — cria uma pessoa inteira a partir de um público-base (não salva) | Gemini Flash chain |
+| `persona-chat` | `{persona, messages, post?}` | `{reply}` — simulação de público: a persona responde EM PERSONAGEM (opcional: vê o post via visão) | Gemini Flash chain |
+| `suggest-audience` | `{name, description, objetivo?, tom?}` | `{audience: {...}}` — a IA propõe o público-alvo de um editorial | Gemini Flash chain |
 | `youtube-meta` | `{url}` | `{video_id, title, description, channel, thumbnail_url}` | oEmbed + scrape (ou YouTube Data API se `YOUTUBE_API_KEY`) |
 | `mine-content` | `{text, source_type?, source_id?, editorial_hint?}` | `{created, skipped}` — destila candidatos pra `bee_suggestions` | Gemini Flash chain |
 | `generate-caption-from-video` | `{transcript, visual_summary, content_type, editorial_slug?, …}` | `{caption}` | Gemini Flash chain |
@@ -898,9 +908,16 @@ git push origin main
 - [x] **Eficácia da IA** — 5 variações por geração (1..5 à escolha), medição via Aprovar, portão de 90%, dashboard `/aprendizado`
 - [x] **Aprendizado por correção** (`learn-from-correction`) — destila lições das suas edições, deduplica e injeta no prompt
 - [x] **Campanha autônoma atrás do portão** — o cron (`editorial-line-tick`) respeita `ai_gate_status`
+- [x] **Aprendizado por feedback explícito** (`learn-from-feedback`) — você diz o que corrigir, a IA aprende na hora e regenera
+- [x] **Coach de voz** (`/coach`) — agente conversacional que propõe lições; confirmação humana (`commit-learning`)
+- [x] **Simulação de público** (`/personas`) — personas geradas por IA respondem ao seu post em personagem
+- [x] **Wizard de geração em lote** — 3–5 posts por vez, código único, **nota de viralização (0–100)**, título/legenda aprovados individualmente, Agendar ou Stand-by
+- [x] **Métricas de inteligência da IA** — `ai_edit_rounds` (correções da IA) + `manual_edits` (edições humanas) por post
+- [x] **Fluxo de vídeo** — upload + transcrição → legenda pronta; e geração de **roteiro** pra gravar
+- [x] **Agenda de conteúdo** (`/agenda`) — calendário estilo Google Agenda, stand-by arrastável, **distribuição automática** (horário por rede + ritmo da editoria + config editável), filtros por plataforma/editoria, cor por editoria (customizável)
 
 ### Em backlog 🚧
-- [ ] **Publicação agendada via pg_cron tick** — varrer posts `scheduled` com `scheduled_date <= now()` e disparar publish-post
+- [ ] **Publicação agendada via pg_cron tick** — varrer posts `scheduled` com `scheduled_date <= now()` e disparar publish-post (a Agenda hoje agenda; a publicação automática é o próximo passo)
 - [ ] **Dashboard de custos** — agregação de `usage_logs` por mês com gráfico
 - [ ] **Refresh automático do token LinkedIn** (60d)
 - [ ] **Carrossel** (10 slides) pra LinkedIn e IG

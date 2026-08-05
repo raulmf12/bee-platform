@@ -7,12 +7,16 @@ import type {
   AiGeneration,
   AiLearning,
   AiReview,
+  AiChatMessage,
+  AiSegment,
+  AiSeveridade,
   AiVariation,
   BeeAnalogy,
   BeeArsenalItem,
   BeeAvatar,
   BeeEditorial,
   BeeExamplePost,
+  BeePersona,
   BeeProduct,
   BeeStyleRule,
   BeeSuggestion,
@@ -252,6 +256,10 @@ export const postApi = {
     // Post gerado pela IA nasce em 'pending_approval' — o Aprovar e o que mede
     // a eficacia. Post feito a mao segue nascendo como rascunho.
     status?: PostStatus;
+    // Nomenclatura + nota de viralizacao (gravadas na criacao pelo wizard).
+    codigo?: string | null;
+    virality_score?: number | null;
+    virality_reason?: string | null;
   }): Promise<UserPost> {
     const userId = requireUserId();
     const rows = await db.insert<UserPost>('user_posts', {
@@ -266,6 +274,11 @@ export const postApi = {
       caption: input.caption,
       metadata: input.metadata ?? {},
       status: input.status ?? 'draft',
+      // Opcionais: so vao no insert quando presentes (undefined vira omitido
+      // pelo db.insert, mantendo o default da coluna).
+      ...(input.codigo !== undefined ? { codigo: input.codigo } : {}),
+      ...(input.virality_score !== undefined ? { virality_score: input.virality_score } : {}),
+      ...(input.virality_reason !== undefined ? { virality_reason: input.virality_reason } : {}),
     });
     if (!rows[0]) throw new Error('Falha ao criar post');
     return rows[0];
@@ -362,6 +375,41 @@ export const beeApi = {
 
   async deleteEditorial(id: string): Promise<void> {
     return db.delete('bee_editorials', { id: `eq.${id}` });
+  },
+
+  // ----- exemplos de um editorial (few-shot da geração) -----
+  async examplesForEditorial(editorial_slug: string): Promise<BeeExamplePost[]> {
+    return db.select<BeeExamplePost>('bee_example_posts', {
+      editorial_slug: `eq.${editorial_slug}`,
+      order: 'position.asc',
+    });
+  },
+
+  async createExample(input: {
+    editorial_slug: string;
+    image_quote: string;
+    caption: string;
+    why_good?: string;
+    headline_type?: string;
+    analogy?: string;
+    position?: number;
+  }): Promise<BeeExamplePost> {
+    const rows = await db.insert<BeeExamplePost>('bee_example_posts', {
+      ...input,
+      source: 'manual',
+      is_active: true,
+    });
+    if (!rows[0]) throw new Error('Falha ao criar exemplo');
+    return rows[0];
+  },
+
+  async updateExample(id: string, patch: Partial<BeeExamplePost>): Promise<void> {
+    const { id: _id, ...safe } = patch;
+    await db.update('bee_example_posts', { id: `eq.${id}` }, safe);
+  },
+
+  async deleteExample(id: string): Promise<void> {
+    return db.delete('bee_example_posts', { id: `eq.${id}` });
   },
 
   async arsenalForEditorial(editorial_slug: string): Promise<BeeArsenalItem[]> {
@@ -835,6 +883,29 @@ export const almaApi = {
 };
 
 // ----------------------------------------------------------------------------
+// PERSONAS (biblioteca de pessoas pra simular o público)
+// ----------------------------------------------------------------------------
+export const personaApi = {
+  async list(): Promise<BeePersona[]> {
+    return db.select<BeePersona>('bee_personas', { is_active: 'eq.true', order: 'position.asc,created_at.desc' });
+  },
+  async create(input: Partial<BeePersona>): Promise<BeePersona> {
+    const rows = await db.insert<BeePersona>('bee_personas', { ...input, user_id: requireUserId() });
+    if (!rows[0]) throw new Error('Falha ao criar persona');
+    return rows[0];
+  },
+  async update(id: string, patch: Partial<BeePersona>): Promise<BeePersona> {
+    const { id: _id, user_id: _u, ...safe } = patch;
+    const rows = await db.update<BeePersona>('bee_personas', { id: `eq.${id}` }, { ...safe, updated_at: new Date().toISOString() });
+    if (!rows[0]) throw new Error('Persona nao encontrada');
+    return rows[0];
+  },
+  async remove(id: string): Promise<void> {
+    return db.delete('bee_personas', { id: `eq.${id}` });
+  },
+};
+
+// ----------------------------------------------------------------------------
 // EFICACIA DA IA
 // ----------------------------------------------------------------------------
 // Aprovar e o instrumento de medicao: aprovar intacto = a IA acertou; aprovar
@@ -873,6 +944,38 @@ function driftPct(a: string, b: string): number {
   return Math.round((prev[y.length] / Math.max(x.length, y.length)) * 1000) / 10;
 }
 
+// Limiar que separa ajuste (cosmético) de reescrita, em % de drift. TEM que
+// bater com o `ajuste_max_drift` do ai_gate_status() no banco — a régua precisa
+// classificar igual dos dois lados. Medido (ponto/acento ~4%, 1 palavra ~14%,
+// reestruturar ~21%).
+export const AJUSTE_MAX_DRIFT = 15;
+
+// A severidade de uma review (overall), pela mesma régua do portão.
+export function severidadeOf(review: { changed: boolean; drift_pct?: number | null }): AiSeveridade {
+  if (!review.changed) return 'intacto';
+  if ((review.drift_pct ?? 100) <= AJUSTE_MAX_DRIFT) return 'ajuste';
+  return 'reescrita';
+}
+
+// Severidade de UMA faceta. Texto/legenda usam drift; imagem é binária.
+export function severidadeFaceta(
+  facet: 'texto' | 'legenda' | 'imagem',
+  review: {
+    quote_changed: boolean; quote_drift_pct?: number | null;
+    caption_changed: boolean; caption_drift_pct?: number | null;
+    has_image: boolean; image_changed: boolean;
+  },
+): AiSeveridade | null {
+  if (facet === 'imagem') {
+    if (!review.has_image) return null; // N/A
+    return review.image_changed ? 'reescrita' : 'intacto';
+  }
+  const changed = facet === 'texto' ? review.quote_changed : review.caption_changed;
+  const drift = facet === 'texto' ? review.quote_drift_pct : review.caption_drift_pct;
+  if (!changed) return 'intacto';
+  return (drift ?? 100) <= AJUSTE_MAX_DRIFT ? 'ajuste' : 'reescrita';
+}
+
 export const aiApi = {
   // O portao. Vem do banco (ai_gate_status) pra o frontend e o cron
   // enxergarem a MESMA regra — duas implementacoes divergiriam.
@@ -901,7 +1004,7 @@ export const aiApi = {
   // Grava o texto PRISTINO. Nunca atualize estas linhas depois.
   async createVariations(
     generationId: string,
-    variations: Array<{ idx: number; quote: string; caption: string; headline_type?: string; analogy?: string }>,
+    variations: Array<{ idx: number; quote: string; caption: string; headline_type?: string; analogy?: string; virality_score?: number | null; virality_reason?: string | null }>,
   ): Promise<AiVariation[]> {
     const uid = requireUserId();
     return db.insert<AiVariation>(
@@ -918,19 +1021,30 @@ export const aiApi = {
     return db.selectOne<AiVariation>('ai_variations', { post_id: `eq.${postId}` });
   },
 
-  // A MEDICAO. Compara o texto final com o original pristino.
+  // A MEDICAO. Compara o final com o original pristino, POR FACETA.
   // Idempotente por post (upsert): reaprovar corrige a medicao, nao duplica.
+  //
+  // image_original/final sao opcionais: so existem quando o template gera imagem
+  // por IA. Ausentes -> has_image=false -> a faceta imagem fica N/A.
   async recordReview(input: {
     post_id: string;
     variation: AiVariation;
     quote_final: string;
     caption_final: string;
+    image_original?: string | null;
+    image_final?: string | null;
   }): Promise<AiReview> {
     const { post_id, variation, quote_final, caption_final } = input;
     const quote_changed =
       normalizeForCompare(variation.quote) !== normalizeForCompare(quote_final);
     const caption_changed =
       normalizeForCompare(variation.caption) !== normalizeForCompare(caption_final);
+    const quote_drift = driftPct(variation.quote, quote_final);
+    const caption_drift = driftPct(variation.caption, caption_final);
+
+    // imagem: binária. Só conta se havia imagem de IA (image_original presente).
+    const has_image = !!input.image_original;
+    const image_changed = has_image && (input.image_original ?? '') !== (input.image_final ?? '');
 
     const rows = await db.upsert<AiReview>(
       'ai_reviews',
@@ -945,16 +1059,22 @@ export const aiApi = {
         caption_final,
         quote_changed,
         caption_changed,
-        changed: quote_changed || caption_changed,
-        drift_pct: Math.max(
-          driftPct(variation.quote, quote_final),
-          driftPct(variation.caption, caption_final),
-        ),
+        quote_drift_pct: quote_drift,
+        caption_drift_pct: caption_drift,
+        has_image,
+        image_changed,
+        changed: quote_changed || caption_changed || image_changed,
+        drift_pct: Math.max(quote_drift, caption_drift),
       },
       'post_id',
     );
     if (!rows[0]) throw new Error('Erro ao registrar a revisão');
     return rows[0];
+  },
+
+  // Detalhe por segmento (editoria × plataforma × alvo) com facetas.
+  async segments(): Promise<AiSegment[]> {
+    return db.rpc<AiSegment[]>('ai_segment_status', {});
   },
 
   async listReviews(limit = 30): Promise<AiReview[]> {
@@ -972,6 +1092,32 @@ export const aiApi = {
 
   async toggleLearning(id: string, ativo: boolean): Promise<void> {
     await db.update('ai_learnings', { id: `eq.${id}` }, { ativo });
+  },
+
+  // ----- chat com o agente de voz -----
+  async chatHistory(limit = 40): Promise<AiChatMessage[]> {
+    const rows = await db.select<AiChatMessage>('ai_chat_messages', {
+      order: 'created_at.asc', limit: String(limit),
+    });
+    return rows;
+  },
+
+  async saveChatMessage(input: {
+    role: 'user' | 'assistant'; content: string; proposals?: unknown[];
+  }): Promise<AiChatMessage> {
+    const rows = await db.insert<AiChatMessage>('ai_chat_messages', {
+      user_id: requireUserId(),
+      role: input.role,
+      content: input.content,
+      proposals: input.proposals ?? [],
+    });
+    if (!rows[0]) throw new Error('Erro ao salvar a mensagem');
+    return rows[0];
+  },
+
+  // Marca uma proposta como salva na mensagem (pra UI não reoferecer).
+  async markProposalSaved(messageId: string, proposals: unknown[]): Promise<void> {
+    await db.update('ai_chat_messages', { id: `eq.${messageId}` }, { proposals });
   },
 };
 

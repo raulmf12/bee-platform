@@ -16,13 +16,15 @@ import { Editoriais } from '@/pages/editoriais/Editoriais';
 import { Arsenal } from '@/pages/arsenal/Arsenal';
 import { Curadoria } from '@/pages/curadoria/Curadoria';
 import { LinhasEditoriais } from '@/pages/linhas/LinhasEditoriais';
-import { NewVideoPost } from '@/pages/posts/NewVideoPost';
 import { Podcasts } from '@/pages/podcasts/Podcasts';
 import { NewPodcastClip } from '@/pages/podcasts/NewPodcastClip';
 import { Templates } from '@/pages/templates/Templates';
 import { TemplateEditor } from '@/pages/templates/TemplateEditor';
 import { Alma } from '@/pages/alma/Alma';
 import { Aprendizado } from '@/pages/aprendizado/Aprendizado';
+import { Coach } from '@/pages/coach/Coach';
+import { Personas } from '@/pages/personas/Personas';
+import { Agenda } from '@/pages/agenda/Agenda';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { currentUser, settings, initialized } = useAuthStore();
@@ -89,10 +91,14 @@ export default function App() {
           <Route path="alma" element={<Alma />} />
           <Route path="templates" element={<Templates />} />
           <Route path="aprendizado" element={<Aprendizado />} />
+          <Route path="coach" element={<Coach />} />
+          <Route path="personas" element={<Personas />} />
           {/* O kanban virou o Dashboard — links antigos pra /posts caem la. */}
           <Route path="posts" element={<Navigate to="/" replace />} />
           <Route path="posts/novo" element={<NewPost />} />
-          <Route path="posts/novo-video" element={<NewVideoPost />} />
+          <Route path="agenda" element={<Agenda />} />
+          {/* Vídeo virou parte do wizard (NewPost). Rota antiga redireciona. */}
+          <Route path="posts/novo-video" element={<Navigate to="/posts/novo" replace />} />
           <Route path="podcasts" element={<Podcasts />} />
           <Route path="podcasts/novo" element={<NewPodcastClip />} />
           <Route path="posts/:id" element={<PostEditor />} />

@@ -9,12 +9,15 @@ import {
   BrainCircuit,
   Package,
   CalendarClock,
+  CalendarDays,
   BookOpen,
   Mic,
   Boxes,
   Paintbrush,
   Heart,
   Brain,
+  MessagesSquare,
+  Users,
   ChevronDown,
   ChevronRight,
   Lock,
@@ -55,6 +58,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/linhas', label: 'Campanha de conteúdo', icon: CalendarClock, gated: true },
       { to: '/posts/novo', label: 'Post individual', icon: PenLine },
+      { to: '/agenda', label: 'Agenda', icon: CalendarDays },
       { to: '/podcasts', label: 'Posts Vídeos', icon: Mic },
       { to: '/templates', label: 'Templates', icon: Paintbrush },
       { to: '/biblioteca', label: 'Biblioteca', icon: ImageIcon },
@@ -73,6 +77,8 @@ const NAV_GROUPS: NavGroup[] = [
     icon: BrainCircuit,
     items: [
       { to: '/aprendizado', label: 'Aprendizado', icon: Brain },
+      { to: '/coach', label: 'Coach de voz', icon: MessagesSquare },
+      { to: '/personas', label: 'Simular público', icon: Users },
       { to: '/conhecimento', label: 'Conhecimento', icon: Database },
       { to: '/curadoria', label: 'Curadoria', icon: Sparkles },
     ]
