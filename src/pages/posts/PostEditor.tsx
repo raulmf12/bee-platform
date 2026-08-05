@@ -65,6 +65,10 @@ export function PostEditor() {
   const [textDirty, setTextDirty] = useState(false);
   const [canvasDirty, setCanvasDirty] = useState(false);
   const lastUploadedHash = useRef<string | null>(null);
+  // Quando o post carregou. O CanvasStudio dispara onChange na hidratação
+  // inicial (não é edição do humano) — usamos isso pra IGNORAR essas mudanças
+  // e não inflar manual_edits só por abrir o editor.
+  const canvasLoadedAt = useRef(0);
 
   useEffect(() => {
     void load();
@@ -79,6 +83,7 @@ export function PostEditor() {
     setTextDirty(false);
     setCanvasDirty(false);
     lastUploadedHash.current = null;
+    canvasLoadedAt.current = Date.now();
     // carrega a variacao pristina (o que a IA gerou) pra alimentar o coach
     setVariation(null);
     if (post.id) void aiApi.variationForPost(post.id).then(setVariation).catch(() => {});
@@ -176,6 +181,12 @@ export function PostEditor() {
     if (!post) return;
     setApproving(true);
     try {
+      // Posts de EXEMPLO nunca entram na medição/aprendizado da IA.
+      if ((post.metadata as { is_sample?: boolean })?.is_sample) {
+        await update(post.id, { status: 'approved' });
+        toast.success('Post de exemplo aprovado (não entra na medição da IA)');
+        return;
+      }
       // Mede o que esta salvo, nao o que esta na tela: sem isso uma edicao
       // ainda no debounce do auto-save ficaria de fora do diff.
       if (textDirty) await saveText();
@@ -439,7 +450,10 @@ export function PostEditor() {
               onChange={({ fabricJson: fj, dataUrl }) => {
                 setFabricJson(fj);
                 setImageDataUrl(dataUrl);
-                setCanvasDirty(true);
+                // Ignora as mudanças da hidratação inicial (~primeiros 2s): não
+                // são edição manual do humano. Sem isso, só abrir o editor já
+                // contava como edição e o contador nascia > 0.
+                if (Date.now() - canvasLoadedAt.current > 2000) setCanvasDirty(true);
               }}
             />
           )}

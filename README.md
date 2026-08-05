@@ -53,7 +53,7 @@ Uma plataforma onde quem cuida do conteúdo:
 - **Voz consistente** — IA recebe ~5–10k chars de contexto Bee em cada chamada (persona + editorial + few-shot + style rules + RAG + **Camada 0 da Alma** + **aprendizados das suas correções**).
 - **Aprende com você** — cada post que você corrige vira uma lição no prompt; a campanha autônoma só liga quando a IA acerta 90%.
 - **Geração em lote** — cada geração entrega **3 a 5 posts independentes** de uma vez, cada um com **código único** (`BEE-DDMMAA-Gnn-Dn-Vn`) e **nota de viralização (0–100)**; título e legenda aprovados/rejeitados individualmente.
-- **Métricas de inteligência da IA** — o sistema conta quantas **correções da IA** e **edições manuais** cada post exigiu até ser aprovado (`ai_edit_rounds` / `manual_edits`) — dados pra medir e melhorar a IA.
+- **Métricas de inteligência da IA** — o sistema conta quantas **correções da IA** e **edições manuais** cada post exigiu até ser aprovado (`ai_edit_rounds` / `manual_edits`). Ambos **nascem em 0** e sobem só com edição real (o editor ignora a hidratação inicial do canvas pra não inflar o contador ao só abrir o post).
 - **Agenda de conteúdo** — calendário estilo Google Agenda (não substitui o Kanban): arraste posts em stand-by pro dia ou deixe a IA distribuir; cor por editoria + ícone da rede + filtros.
 - **Multi-plataforma simultâneo** — 1 fluxo de criação gera 2 posts (LinkedIn 4:5 + Instagram 1:1) ligados via `companion_post_id`.
 
@@ -629,6 +629,7 @@ bee-platform/
 - **RLS**: tudo com user_id é filtrado por `auth.uid()`
 - **Timestamps**: `created_at`, `updated_at` automáticas via trigger
 - **JSON columns**: `metadata` JSONB em quase todas as tabelas pra extensibilidade
+- **Posts de exemplo** (`metadata.is_sample = true`): fixtures pra popular a Agenda em testes (migration `2026080500003_sample_posts`). **Não interferem no aprendizado** — são `user_posts` puros, sem `ai_variations`/`ai_reviews`, e o Aprovar os ignora. Limpar com `delete from user_posts where metadata->>'is_sample' = 'true'`.
 
 ---
 
