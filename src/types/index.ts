@@ -816,7 +816,8 @@ export interface GenesisAvatar {
   erros_comuns: string | null;
   movimento_seguinte: string | null;
 }
-export interface GenesisParadigma {
+// Tensão: uma polaridade que o conteúdo navega (Bee: Ordem × Liberdade).
+export interface GenesisTensao {
   id: string;
   slug: string;
   nome: string;
@@ -833,7 +834,8 @@ export interface GenesisFluxoPergunta {
   pergunta: string;
   nota: string | null;
 }
-export interface GenesisDimensao {
+// Lente: uma forma de enxergar o tema (Bee: as 6 Dimensões Sistêmicas).
+export interface GenesisLente {
   id: string;
   slug: string;
   nome: string;
@@ -851,9 +853,9 @@ export interface GenesisSnapshot {
   core: GenesisCore | null;
   principios: GenesisPrincipio[];
   avatares: GenesisAvatar[];
-  paradigmas: GenesisParadigma[];
+  tensoes: GenesisTensao[];
   fluxo: GenesisFluxoPergunta[];
-  dimensoes: GenesisDimensao[];
+  lentes: GenesisLente[];
 }
 
 // ---------------------------------------------------------------------------

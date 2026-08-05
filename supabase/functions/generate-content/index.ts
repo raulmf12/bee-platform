@@ -130,8 +130,8 @@ interface GenesisAvatar {
   linguagem: string | null; frase_silenciosa: string | null; o_que_teme: string | null; o_que_busca: string | null;
   frases_tipicas: string[] | null; como_conversar: string | null; erros_comuns: string | null; movimento_seguinte: string | null;
 }
-interface GenesisParadigma { nome: string; arquetipo: string; logica: string; sofrimento_tipico: string }
-interface GenesisDimensao { nome: string; oitava: number; frase_sistemica: string; natureza: string }
+interface GenesisTensao { nome: string; arquetipo: string; logica: string; sofrimento_tipico: string }
+interface GenesisLente { nome: string; oitava: number; frase_sistemica: string; natureza: string }
 interface GenesisFluxo { ordem: number; pergunta: string; nota: string | null }
 
 interface ReferencePost {
@@ -172,8 +172,8 @@ async function loadBeeContext(input: GenerateInput, userId: string) {
     hashtags,
     genesisCore,
     genesisPrincipios,
-    genesisDimensoes,
-    genesisParadigmas,
+    genesisLentes,
+    genesisTensoes,
     genesisFluxo,
   ] = await Promise.all([
     fetchRest<BeeEditorial[]>(`/bee_editorials?slug=eq.${input.editorial_slug}&limit=1`),
@@ -197,8 +197,8 @@ async function loadBeeContext(input: GenerateInput, userId: string) {
     // CAMADA 0 — GENESIS (a Constituicao Cognitiva que governa tudo abaixo)
     fetchRest<GenesisCore[]>(`/genesis_core?limit=1`),
     fetchRest<GenesisPrincipio[]>(`/genesis_principios?ativo=eq.true&select=camada,codigo,titulo,principio,aplicacao,inviolavel&order=camada.asc,ordem.asc`),
-    fetchRest<GenesisDimensao[]>(`/genesis_dimensoes?select=nome,oitava,frase_sistemica,natureza&order=ordem.asc`),
-    fetchRest<GenesisParadigma[]>(`/genesis_paradigmas?select=nome,arquetipo,logica,sofrimento_tipico&order=ordem.asc`),
+    fetchRest<GenesisLente[]>(`/genesis_lentes?select=nome,oitava,frase_sistemica,natureza&order=ordem.asc`),
+    fetchRest<GenesisTensao[]>(`/genesis_tensoes?select=nome,arquetipo,logica,sofrimento_tipico&order=ordem.asc`),
     fetchRest<GenesisFluxo[]>(`/genesis_fluxo?select=ordem,pergunta,nota&order=ordem.asc`),
   ]);
 
@@ -230,8 +230,8 @@ async function loadBeeContext(input: GenerateInput, userId: string) {
     genesis: {
       core: genesisCore[0],
       principios: genesisPrincipios,
-      dimensoes: genesisDimensoes,
-      paradigmas: genesisParadigmas,
+      lentes: genesisLentes,
+      tensoes: genesisTensoes,
       fluxo: genesisFluxo,
     },
     learnings,
@@ -335,30 +335,30 @@ function buildSystemPrompt(
     const para = byCamada('paradigma');
 
     if (art.length) {
-      lines.push('CONSTITUICAO DO AGENTE (invioláveis):');
+      lines.push('REGRAS INVIOLÁVEIS (o que o agente sempre/nunca faz):');
       art.forEach((p) => lines.push(`  • ${p.principio}${p.aplicacao ? ` — ${p.aplicacao}` : ''}`));
     }
     if (epi.length) {
-      lines.push('EPISTEMOLOGIA (como sabemos o que sabemos):');
+      lines.push('COMO PENSA (postura diante do que sabe):');
       epi.forEach((p) => lines.push(`  • ${p.principio}`));
     }
     if (diag.length) {
-      lines.push('DIAGNOSTICO (como observamos antes de escrever):');
+      lines.push('COMO OBSERVA (antes de escrever):');
       diag.forEach((p) => lines.push(`  • ${p.principio}`));
     }
     if (ling.length) {
-      lines.push('ETICA DA LINGUAGEM:');
+      lines.push('COMO FALA:');
       ling.filter((p) => p.codigo !== 'ling-regua').forEach((p) => lines.push(`  • ${p.principio}`));
     }
-    para.forEach((p) => lines.push(`Pergunta operacional dos paradigmas: ${p.principio}${p.aplicacao ? ` (${p.aplicacao})` : ''}`));
+    para.forEach((p) => lines.push(`Ao navegar tensoes: ${p.principio}${p.aplicacao ? ` (${p.aplicacao})` : ''}`));
     lines.push('');
   }
 
-  // OS DOIS PARADIGMAS — localizar de onde o leitor percebe (arquétipos, nao religiao)
-  if (g?.paradigmas?.length) {
-    lines.push('OS DOIS PARADIGMAS (arquétipos, nunca religiao) — localize de onde o leitor percebe a realidade:');
-    g.paradigmas.forEach((pp) => lines.push(`  • ${pp.nome} (${pp.arquetipo}): ${pp.logica} Sofrimento tipico: ${pp.sofrimento_tipico}`));
-    lines.push('A maturidade INTEGRA ordem e liberdade — nunca escolhe um lado nem humilha quem esta no outro.');
+  // TENSOES — as grandes polaridades que o conteúdo navega (localizar de onde o leitor percebe)
+  if (g?.tensoes?.length) {
+    lines.push('AS TENSOES (polaridades que o conteudo navega) — localize de que polo o leitor percebe a realidade:');
+    g.tensoes.forEach((pp) => lines.push(`  • ${pp.nome}${pp.arquetipo ? ` (${pp.arquetipo})` : ''}: ${pp.logica} Sofrimento tipico: ${pp.sofrimento_tipico}`));
+    lines.push('A maturidade INTEGRA os polos — nunca escolhe um lado nem humilha quem esta no outro.');
     lines.push('');
   }
 
@@ -378,11 +378,11 @@ function buildSystemPrompt(
   if (core?.voz_nunca?.length) lines.push(`Nunca: ${core.voz_nunca.join(', ')}.`);
   lines.push('');
 
-  // UMA LENTE — as 6 Dimensoes Sistemicas (nao o centro; uma forma de perceber)
-  if (g?.dimensoes?.length) {
-    lines.push('=== UMA LENTE: AS 6 DIMENSOES SISTEMICAS (0=mecanico, 100=sistemico) ===');
-    lines.push('Sao UMA lente de percepcao, nao o centro. Escreva do olhar sistemico, com atencao redobrada onde a oitava esta mais baixa:');
-    g.dimensoes.forEach((d) => lines.push(`  • ${d.nome} (${d.oitava}): "${d.frase_sistemica}"`));
+  // LENTES — formas de enxergar o tema (nao o centro; instrumentos de percepcao)
+  if (g?.lentes?.length) {
+    lines.push('=== LENTES (formas de enxergar o tema · 0=mecanico, 100=sistemico) ===');
+    lines.push('Sao instrumentos de percepcao, nao o centro. Escreva do olhar sistemico, com atencao redobrada onde a oitava esta mais baixa:');
+    g.lentes.forEach((d) => lines.push(`  • ${d.nome} (${d.oitava}): "${d.frase_sistemica}"`));
     lines.push('');
   }
 

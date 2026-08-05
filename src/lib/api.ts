@@ -796,7 +796,7 @@ export const suggestionApi = {
 // ----------------------------------------------------------------------------
 // BARRAMENTO DE EVENTOS (legado alma_eventos) — o Genesis substituiu a psique,
 // mas o barramento continua sendo a memória viva do sistema. emitEvento move a
-// oitava das dimensões (agora genesis_dimensoes) quando vem dimensão+delta.
+// oitava das lentes (genesis_lentes) quando vem dimensão+delta.
 // ----------------------------------------------------------------------------
 export const almaApi = {
   // Barramento: qualquer ação do sistema alimenta o Genesis. Se vier dimensão+delta,
@@ -823,14 +823,14 @@ export const almaApi = {
         { returning: false },
       );
       if (evt.dimensao_slug && evt.delta) {
-        const dim = await db.selectOne<import('@/types').GenesisDimensao>('genesis_dimensoes', {
+        const dim = await db.selectOne<import('@/types').GenesisLente>('genesis_lentes', {
           slug: `eq.${evt.dimensao_slug}`,
           select: 'slug,oitava',
         });
         if (dim) {
           const nova = Math.max(0, Math.min(100, dim.oitava + evt.delta));
           await db.update(
-            'genesis_dimensoes',
+            'genesis_lentes',
             { slug: `eq.${evt.dimensao_slug}` },
             { oitava: nova, updated_at: new Date().toISOString() },
           );
@@ -848,15 +848,15 @@ export const almaApi = {
 // ----------------------------------------------------------------------------
 export const genesisApi = {
   async snapshot(): Promise<import('@/types').GenesisSnapshot> {
-    const [core, principios, avatares, paradigmas, fluxo, dimensoes] = await Promise.all([
+    const [core, principios, avatares, tensoes, fluxo, lentes] = await Promise.all([
       db.selectOne<import('@/types').GenesisCore>('genesis_core', {}),
       db.select<import('@/types').GenesisPrincipio>('genesis_principios', { order: 'camada.asc,ordem.asc' }),
       db.select<import('@/types').GenesisAvatar>('genesis_avatares', { order: 'ordem.asc' }),
-      db.select<import('@/types').GenesisParadigma>('genesis_paradigmas', { order: 'ordem.asc' }),
+      db.select<import('@/types').GenesisTensao>('genesis_tensoes', { order: 'ordem.asc' }),
       db.select<import('@/types').GenesisFluxoPergunta>('genesis_fluxo', { order: 'ordem.asc' }),
-      db.select<import('@/types').GenesisDimensao>('genesis_dimensoes', { order: 'ordem.asc' }),
+      db.select<import('@/types').GenesisLente>('genesis_lentes', { order: 'ordem.asc' }),
     ]);
-    return { core, principios, avatares, paradigmas, fluxo, dimensoes };
+    return { core, principios, avatares, tensoes, fluxo, lentes };
   },
 
   // Núcleo é singleton (id=true). Edita persona, voz, missão, frases.

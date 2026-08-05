@@ -12,18 +12,18 @@ import { toast } from 'sonner';
 
 const CAMADA_ORDER = ['constituicao_agente', 'epistemologia', 'diagnostico', 'linguagem', 'paradigma'];
 const CAMADA_LABEL: Record<string, string> = {
-  constituicao_agente: 'Constituição do Agente',
-  epistemologia: 'Epistemologia',
-  diagnostico: 'Diagnóstico',
-  linguagem: 'Ética da Linguagem',
-  paradigma: 'Paradigmas',
+  constituicao_agente: 'Regras invioláveis',
+  epistemologia: 'Como pensa',
+  diagnostico: 'Como observa',
+  linguagem: 'Como fala',
+  paradigma: 'Navegar tensões',
 };
 const CAMADA_DESC: Record<string, string> = {
-  constituicao_agente: 'como pensar antes de responder — invioláveis',
-  epistemologia: 'como sabemos o que sabemos',
-  diagnostico: 'como observar antes de escrever',
-  linguagem: 'produzir reconhecimento antes de convencimento',
-  paradigma: 'a pergunta que organiza tudo',
+  constituicao_agente: 'o que o agente sempre/nunca faz',
+  epistemologia: 'a postura diante do que sabe',
+  diagnostico: 'como lê a situação antes de escrever',
+  linguagem: 'como constrói a fala',
+  paradigma: 'como navega as grandes oposições',
 };
 
 const CSS = `
@@ -220,7 +220,7 @@ export function Genesis() {
             </h1>
             <p className="sub">
               A Constituição Cognitiva da Bee — como o agente pensa <b>antes</b> de produzir qualquer resposta.
-              Governa a geração de conteúdo: princípios invioláveis, os estados de consciência, os paradigmas e o
+              Governa a geração de conteúdo: princípios invioláveis, os estados de consciência, as tensões e o
               Fluxo Cognitivo. Editar aqui muda a voz do sistema.
             </p>
           </div>
@@ -337,11 +337,11 @@ export function Genesis() {
           </div>
         </div>
 
-        {/* PARADIGMAS */}
+        {/* TENSÕES */}
         <div className="sec">
-          <div className="sl"><span className="ic">☯</span><h2>Os Dois Paradigmas</h2><span className="d">arquétipos organizadores — nunca religião</span></div>
+          <div className="sl"><span className="ic">☯</span><h2>Tensões</h2><span className="d">as grandes polaridades que o conteúdo navega</span></div>
           <div className="paras">
-            {snap.paradigmas.map((p) => (
+            {snap.tensoes.map((p) => (
               <div className="para" key={p.id}>
                 <div><span className="pn">{p.nome}</span> <span className="arc">· {p.arquetipo}</span></div>
                 {p.logica && <div className="lg">{p.logica}</div>}
@@ -364,11 +364,11 @@ export function Genesis() {
           </div>
         </div>
 
-        {/* DIMENSÕES */}
+        {/* LENTES */}
         <div className="sec">
-          <div className="sl"><span className="ic">◧</span><h2>Uma lente · as 6 Dimensões</h2><span className="d">a oitava é o quanto já são sistêmicas (0=mecânico, 100=sistêmico)</span></div>
+          <div className="sl"><span className="ic">◧</span><h2>Lentes</h2><span className="d">formas de enxergar o tema — a oitava é o quanto já é sistêmica (0→100)</span></div>
           <div className="dims">
-            {snap.dimensoes.map((d) => {
+            {snap.lentes.map((d) => {
               const sis = d.oitava >= 50;
               return (
                 <div className="dc" key={d.id}>
