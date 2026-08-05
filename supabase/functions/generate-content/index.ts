@@ -60,6 +60,9 @@ interface GenerateVariation {
   caption: string;
   headline_type_used?: string;
   analogy_used?: string;
+  // Nota de potencial de viralizacao (0-100) + 1 linha de razao.
+  virality_score?: number;
+  virality_reason?: string;
 }
 
 interface GenerateOutput {
@@ -85,7 +88,23 @@ async function fetchRest<T>(path: string): Promise<T> {
   return await res.json();
 }
 
-interface BeeEditorial { slug: string; name: string; description: string; frequency_hint: string; structure_template: string; emotional_sequence: string[] }
+// POST /rest/v1/rpc/<fn> — pra funcoes do banco (ai_prompt_learnings).
+async function rpcRest<T>(fn: string, args: object): Promise<T> {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  const res = await fetch(`${supabaseUrl}/rest/v1/rpc/${fn}`, {
+    method: 'POST',
+    headers: { ...svcHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(args),
+  });
+  if (!res.ok) {
+    console.warn('[rpcRest fail]', fn, res.status);
+    return [] as unknown as T;
+  }
+  return await res.json();
+}
+
+interface BeeAudience { quem?: string; dor?: string; desejo?: string; objecoes?: string[]; gatilhos?: string[]; linguagem?: string }
+interface BeeEditorial { slug: string; name: string; description: string; frequency_hint: string; structure_template: string; emotional_sequence: string[]; objetivo?: string; tom?: string; fazer?: string[]; evitar?: string[]; temas?: string[]; audience?: BeeAudience }
 interface BeeArsenal { id?: string; title: string; summary: string; details: string | null; type: string }
 interface BeeAvatar { slug: string; name: string; state: string; dor: string; gatilhos: string[]; example_phrases: string[] }
 interface BeeExamplePost { id?: string; editorial_slug: string; image_quote: string; caption: string; why_good: string; headline_type: string; analogy: string }
@@ -158,11 +177,19 @@ async function loadBeeContext(input: GenerateInput, userId: string) {
     fetchRest<{ texto: string }[]>(`/alma_crencas?direcao=eq.sistemico&select=texto&order=forca.desc&limit=4`),
   ]);
 
-  // APRENDIZADOS — as licoes destiladas das SUAS correcoes (learn-from-correction).
-  // Ordena por evidencia: uma regra que voce reforcou 5 vezes pesa mais que uma
-  // vista 1 vez. Corta em 10 pra o prompt nao virar uma lista de leis.
-  const learnings = await fetchRest<Array<{ texto: string; categoria: string; evidencias: number }>>(
-    `/ai_learnings?user_id=eq.${userId}&ativo=eq.true&order=evidencias.desc,last_reforcada_em.desc&limit=10&select=texto,categoria,evidencias`,
+  // APRENDIZADOS do SEGMENTO desta geracao (correcoes + conversa com o agente).
+  // ai_prompt_learnings casa por alcance: lições globais + as que miram este
+  // conjunto (editoria×plataforma×alvo), as mais específicas primeiro. So
+  // texto+legenda: este prompt gera FRASE e CAPTION; imagem fica pro futuro.
+  const learnings = await rpcRest<Array<{ texto: string; categoria: string; facet: string; evidencias: number }>>(
+    'ai_prompt_learnings',
+    {
+      p_user: userId,
+      p_editorial: input.editorial_slug,
+      p_platform: input.target_platform ?? 'linkedin',
+      p_avatar: input.target_avatar ?? 'ambos',
+      p_facets: ['texto', 'legenda'],
+    },
   );
 
   return {
@@ -318,8 +345,25 @@ function buildSystemPrompt(
   if (ed) {
     lines.push(`=== EDITORIAL ESCOLHIDO: ${ed.name} ===`);
     lines.push(ed.description);
+    if (ed.objetivo) lines.push(`Objetivo deste pilar: ${ed.objetivo}`);
+    if (ed.tom) lines.push(`Tom deste editorial: ${ed.tom}`);
     lines.push(`Estrutura obrigatoria: ${ed.structure_template}`);
     if (ed.emotional_sequence?.length) lines.push(`Sequencia emocional: ${ed.emotional_sequence.join(' → ')}`);
+    if (ed.temas?.length) lines.push(`Temas recorrentes: ${ed.temas.join('; ')}`);
+    if (ed.fazer?.length) lines.push(`SEMPRE faz: ${ed.fazer.map((x) => `• ${x}`).join(' ')}`);
+    if (ed.evitar?.length) lines.push(`NUNCA faz: ${ed.evitar.map((x) => `• ${x}`).join(' ')}`);
+
+    // Publico-alvo PROPRIO deste editorial (aditivo ao avatar identificado/incomodado)
+    const a = ed.audience;
+    if (a && (a.quem || a.dor || a.desejo)) {
+      lines.push('--- PUBLICO-ALVO DESTE EDITORIAL ---');
+      if (a.quem) lines.push(`Quem: ${a.quem}`);
+      if (a.dor) lines.push(`Dor: ${a.dor}`);
+      if (a.desejo) lines.push(`Desejo: ${a.desejo}`);
+      if (a.objecoes?.length) lines.push(`Objecoes a vencer: ${a.objecoes.join('; ')}`);
+      if (a.gatilhos?.length) lines.push(`Gatilhos que param o scroll: ${a.gatilhos.join('; ')}`);
+      if (a.linguagem) lines.push(`Linguagem dela: ${a.linguagem}`);
+    }
     lines.push('');
   }
 
@@ -486,21 +530,27 @@ function buildSystemPrompt(
   lines.push('- Frases curtas. Cada uma com peso. Sem rodeios.');
   lines.push('- "headline_type_used": slug (contradicao-direta, diagnostico-imperativo, pergunta-que-implica, metafora-que-nomeia).');
   lines.push('- "analogy_used": nome da analogia (ou null).');
+  // NOTA DE VIRALIZACAO — a IA se auto-avalia. Nao ha dado real de engajamento
+  // ainda; e uma estimativa honesta baseada na forca do gancho e da tensao.
+  lines.push('- "virality_score": inteiro de 0 a 100 estimando o potencial de viralizacao DESTE post.');
+  lines.push('  Avalie: forca do gancho (primeiros 49 chars), tensao/contra-intuicao da virada, clareza do CTA, ressonancia com a dor do avatar. Seja honesto e calibrado — reserve 85+ so pra ganchos realmente fortes.');
+  lines.push('- "virality_reason": UMA frase curta (max 90 chars) justificando a nota.');
 
   const n = variationCount(input);
   if (n > 1) {
     lines.push('');
     lines.push(`=== FORMATO: ${n} VARIACOES ===`);
     lines.push(`- Devolva um JSON com a chave "variations": um array de EXATAMENTE ${n} objetos.`);
-    lines.push('- Cada objeto: { "quote", "caption", "headline_type_used", "analogy_used" }.');
+    lines.push('- Cada objeto: { "quote", "caption", "headline_type_used", "analogy_used", "virality_score", "virality_reason" }.');
     // O ponto das variacoes e dar ESCOLHA. Cinco textos parecidos nao ensinam
     // nada sobre a preferencia do usuario — cada uma tem que atacar por um lado.
     lines.push(`- Cada variacao ataca por um ANGULO DIFERENTE. Varie o "headline_type_used" entre elas:`);
     lines.push('  nao repita o mesmo tipo de titulo em duas variacoes enquanto houver tipo nao usado.');
     lines.push('- Nao sao versoes da mesma frase com sinonimos trocados: sao entradas diferentes no mesmo tema.');
+    lines.push('- Cada variacao recebe sua PROPRIA virality_score (elas devem diferir — reflita a forca real de cada uma).');
     lines.push('- Todas obedecem as mesmas REGRAS DE SAIDA acima.');
   } else {
-    lines.push('- Devolva um JSON com a chave "variations": um array de 1 objeto { "quote", "caption", "headline_type_used", "analogy_used" }.');
+    lines.push('- Devolva um JSON com a chave "variations": um array de 1 objeto { "quote", "caption", "headline_type_used", "analogy_used", "virality_score", "virality_reason" }.');
   }
   lines.push('- Saida em JSON puro, SEM markdown.');
 
@@ -647,6 +697,16 @@ interface RawVariation {
   caption?: string;
   headline_type_used?: string;
   analogy_used?: string;
+  virality_score?: number | string;
+  virality_reason?: string;
+}
+
+// Aceita number ou string ("87"), clampa em 0..100. undefined se ausente/invalido.
+function normalizeScore(raw: number | string | undefined): number | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n)) return undefined;
+  return Math.max(0, Math.min(100, n));
 }
 
 function normalizeVariation(v: RawVariation): GenerateVariation | null {
@@ -659,6 +719,8 @@ function normalizeVariation(v: RawVariation): GenerateVariation | null {
     caption,
     headline_type_used: v.headline_type_used,
     analogy_used: v.analogy_used,
+    virality_score: normalizeScore(v.virality_score),
+    virality_reason: typeof v.virality_reason === 'string' ? v.virality_reason.trim() : undefined,
   };
 }
 

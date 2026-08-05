@@ -3,7 +3,7 @@
 
 import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Image as ImageIcon, Plus, Sparkles, Video, Zap } from 'lucide-react';
+import { FileText, Image as ImageIcon, Plus, Sparkles, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { useAuthStore } from '@/store/authStore';
@@ -33,16 +33,10 @@ export function Dashboard() {
           </h1>
         </div>
         <div className="flex gap-2">
-          <Button asChild variant="outline" size="lg">
-            <Link to="/posts/novo-video">
-              <Video className="h-4 w-4" />
-              Vídeo
-            </Link>
-          </Button>
           <Button asChild variant="accent" size="lg">
             <Link to="/posts/novo">
               <Plus className="h-4 w-4" />
-              Post individual
+              Criar conteúdo
             </Link>
           </Button>
         </div>

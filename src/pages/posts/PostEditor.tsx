@@ -19,17 +19,24 @@ import { CanvasStudio } from '@/components/editor/canvas-studio/CanvasStudio';
 import { usePostStore } from '@/store/postStore';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import { PlatformBadge } from '@/components/shared/PlatformBadge';
-import { POST_STATUS_LABELS, type PostStatus } from '@/types';
+import { POST_STATUS_LABELS, type AiVariation, type PostStatus } from '@/types';
 import { useAuthStore } from '@/store/authStore';
 import { uploadAssetImage, hashDataUrl } from '@/lib/storage';
 import { edge } from '@/lib/edge';
-import { aiApi, almaApi } from '@/lib/api';
+import { aiApi, almaApi, severidadeOf } from '@/lib/api';
 import { extractSlotText } from '@/lib/templates/extract';
+import { PostCoach } from '@/components/ai/PostCoach';
 import { toast } from 'sonner';
 
 // Mapeia plataforma+formato pro preset inicial mais adequado.
 // User pode trocar via Select da mini-toolbar do CanvasStudio.
-function derivePreset(platform: string, format: string): string {
+function derivePreset(platform: string, format: string, canvasSize?: string): string {
+  // Se o post ja foi gerado num tamanho especifico (ex: wizard grava
+  // metadata.canvas_size), honra-o — senao o canvas abriria num preset com
+  // dimensoes diferentes das do fabric JSON ja hidratado.
+  if (canvasSize === 'square') return 'linkedin-square';         // 1200x1200 (bate com o JSON do Bee Quote)
+  if (canvasSize === 'portrait') return platform === 'instagram' ? 'instagram-portrait' : 'linkedin-portrait'; // 1080x1350
+  if (canvasSize === 'landscape') return 'linkedin-landscape';
   if (platform === 'instagram') {
     return format === 'carousel' ? 'instagram-square' : 'instagram-portrait';
   }
@@ -54,6 +61,7 @@ export function PostEditor() {
   const [publishing, setPublishing] = useState(false);
   const [postingLive, setPostingLive] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [variation, setVariation] = useState<AiVariation | null>(null);
   const [textDirty, setTextDirty] = useState(false);
   const [canvasDirty, setCanvasDirty] = useState(false);
   const lastUploadedHash = useRef<string | null>(null);
@@ -71,6 +79,9 @@ export function PostEditor() {
     setTextDirty(false);
     setCanvasDirty(false);
     lastUploadedHash.current = null;
+    // carrega a variacao pristina (o que a IA gerou) pra alimentar o coach
+    setVariation(null);
+    if (post.id) void aiApi.variationForPost(post.id).then(setVariation).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [post?.id]);
 
@@ -110,7 +121,9 @@ export function PostEditor() {
   async function saveText() {
     if (!post) return;
     try {
-      await update(post.id, { title, briefing, caption });
+      // Cada save manual conta pra métrica de inteligência da IA (quanto o
+      // humano precisou mexer depois de gerado).
+      await update(post.id, { title, briefing, caption, manual_edits: (post.manual_edits ?? 0) + 1 });
       setTextDirty(false);
     } catch (e) {
       console.error(e);
@@ -122,6 +135,7 @@ export function PostEditor() {
     try {
       await update(post.id, {
         carousel_fabric_json: [fabricJson],
+        manual_edits: (post.manual_edits ?? 0) + 1,
       });
       setCanvasDirty(false);
     } catch (e) {
@@ -182,24 +196,34 @@ export function PostEditor() {
         variation,
         quote_final: quoteFinal,
         caption_final: caption,
+        // Faceta imagem: dormente. Quando os templates gerarem imagem por IA,
+        // passe image_original (a que a IA gerou) e image_final (a do canvas) —
+        // aí has_image liga e a imagem entra na medição do segmento.
       });
 
       await update(post.id, { status: 'approved' });
 
-      if (review.changed) {
+      // Régua graduada (item 2): ajuste cosmético não é erro cheio e não vira
+      // lição — destilar de uma vírgula gasta uma chamada Gemini à toa.
+      const sev = severidadeOf(review);
+      if (sev === 'reescrita') {
         toast.success('Aprovado — a IA vai aprender com a sua correção');
         // Fire-and-forget: destilar a licao nao pode segurar a aprovacao.
         void edge.learnFromCorrection({ review_id: review.id }).catch((e) => {
           console.warn('[learn-from-correction]', e);
         });
+      } else if (sev === 'ajuste') {
+        toast.success('Aprovado — só um ajuste fino, a IA quase acertou');
       } else {
         toast.success('Aprovado sem alterações — a IA acertou 🎯');
       }
 
       void almaApi.emitEvento({
-        tipo: review.changed ? 'post_corrigido' : 'post_aprovado_intacto',
-        descricao: review.changed
-          ? `Correção em "${(post.title ?? '').slice(0, 50)}" — a IA aprende com ela`
+        tipo: sev === 'reescrita' ? 'post_corrigido'
+          : sev === 'ajuste' ? 'post_ajustado' : 'post_aprovado_intacto',
+        descricao:
+          sev === 'reescrita' ? `Reescrita em "${(post.title ?? '').slice(0, 50)}" — a IA aprende com ela`
+          : sev === 'ajuste' ? `Ajuste fino em "${(post.title ?? '').slice(0, 50)}"`
           : `A IA acertou de primeira: "${(post.title ?? '').slice(0, 50)}"`,
         source: 'posts',
       });
@@ -381,6 +405,18 @@ export function PostEditor() {
         </div>
       )}
 
+      {/* Métricas de inteligência da IA (só posts gerados têm código). */}
+      {post.codigo && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border bg-card/40 px-6 py-2 text-[11px] text-muted-foreground">
+          <span className="font-mono font-semibold text-foreground">{post.codigo}</span>
+          {post.virality_score != null && (
+            <span title={post.virality_reason ?? undefined}>🚀 Potencial: <b className="text-foreground">{post.virality_score}/100</b></span>
+          )}
+          <span>🤖 Correções da IA: <b className="text-foreground">{post.ai_edit_rounds ?? 0}</b></span>
+          <span>✍️ Edições manuais: <b className="text-foreground">{post.manual_edits ?? 0}</b></span>
+        </div>
+      )}
+
       <div className="grid flex-1 grid-cols-[1fr_400px] gap-4 overflow-hidden p-4">
         <div className="min-h-0 overflow-hidden">
           {post.format === ('video' as typeof post.format) && (post.metadata as { video_url?: string })?.video_url ? (
@@ -398,7 +434,7 @@ export function PostEditor() {
             <CanvasStudio
               key={post.id}
               embedded
-              initialPreset={derivePreset(post.platform, post.format)}
+              initialPreset={derivePreset(post.platform, post.format, post.metadata?.canvas_size as string | undefined)}
               initialFabricJson={fabricJson}
               onChange={({ fabricJson: fj, dataUrl }) => {
                 setFabricJson(fj);
@@ -410,6 +446,19 @@ export function PostEditor() {
         </div>
 
         <aside className="flex flex-col gap-3 overflow-y-auto">
+          {/* Coach focado neste post: só aparece quando o post veio da IA
+              (tem variação pristina pra ancorar o feedback). */}
+          {variation && (
+            <PostCoach
+              focus={{
+                quote: variation.quote,
+                caption: variation.caption,
+                editorial_slug: (post.metadata as { editorial_slug?: string })?.editorial_slug ?? null,
+                platform: post.platform,
+                target_avatar: (post.metadata as { target_avatar?: string })?.target_avatar ?? null,
+              }}
+            />
+          )}
           <Card>
             <CardContent className="space-y-3 p-4">
               <div className="space-y-2">

@@ -1,96 +1,193 @@
-// Fluxo de criacao de post Bee — 4 passos.
-//   1. Editorial: escolhe 1 dos 8 (Diagnostico Sistemico, Historia Pessoal, etc)
-//   2. Arsenal: lista de items pre-mapeados do editorial (ou pula)
-//   3. Briefing: contexto adicional opcional
-//   4. Preview: IA gera quote + caption no estilo Bee, voce edita, cria.
+// Fluxo de criação de conteúdo (Wizard).
+// FORMAT: Imagem ou Vídeo.
+//   Imagem → escolhe QUANTIDADE (3–5) → gera N posts INDEPENDENTES de uma vez
+//            (cada um com código único + nota de viralização) → fila de revisão →
+//            revisa cada post aprovando/rejeitando TÍTULO e LEGENDA separados →
+//            preview da imagem → Agendar ou Stand-by.
+//   Vídeo → sub-seletor: Vídeo pronto | Cortes (em breve) | Roteiro.
+//     Vídeo pronto → upload+transcrição → gera SÓ a legenda → preview travado → agendar.
+//     Roteiro → gera um roteiro → preview travado → salva rascunho no Kanban.
+// Todos os fluxos compartilham o mesmo motor de Aprovar/Corrigir/Rejeitar +
+// learn-from-feedback + regeneração.
 
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Copy, Linkedin, Instagram, Loader2, Sparkles, Wand2, Zap } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import {
+  ArrowLeft, ArrowRight, Check, Edit3, FileText, Film, Image as ImageIcon,
+  Layers, Loader2, PauseCircle, RefreshCw, Scissors, Sparkles, TrendingUp,
+  UploadCloud, Video, X, Zap,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 import { usePostStore } from '@/store/postStore';
-import { beeApi } from '@/lib/api';
+import { useAuthStore } from '@/store/authStore';
+import { beeApi, aiApi, postApi } from '@/lib/api';
 import { edge } from '@/lib/edge';
 import { renderBeeQuote } from '@/lib/templates/resolve';
-import { aiApi } from '@/lib/api';
-import { cn } from '@/lib/utils';
+import { renderFabricToDataUrl } from '@/lib/templates/renderPost';
+import { getLayoutDimensions, type BeeQuoteSize } from '@/lib/templates/beeQuote';
+import { uploadAssetImage, uploadVideo } from '@/lib/storage';
 import { toast } from 'sonner';
-import type { AiVariation, BeeArsenalItem, BeeAvatar, BeeEditorial, Platform, TargetAvatar, UserPost } from '@/types';
+import { v4 as uuid } from 'uuid';
+import { StaticCanvasPreview } from '@/components/posts/wizard/StaticCanvasPreview';
+import { ScheduleModal } from '@/components/posts/wizard/ScheduleModal';
+import { FeedbackDialog, FeedbackActionType } from '@/components/posts/wizard/FeedbackDialog';
+import type { AiVariation, BeeEditorial, BeeAvatar, Platform, TargetAvatar, UserPost } from '@/types';
 
-type Step = 1 | 2 | 3 | 4 | 5;
+type WizardState =
+  | 'FORMAT' | 'BATCH_CONFIG'
+  | 'VIDEO_FORMAT' | 'VIDEO_UPLOAD'
+  | 'GENERATING'
+  | 'REVIEW_QUEUE' | 'REVIEW_ONE'   // fluxo imagem em lote
+  | 'TEXT_PREVIEW'                   // fluxo vídeo pronto / roteiro (item único)
+  | 'IMAGE_PREVIEW';                // design de um post de imagem aprovado
 
-// Quantos caminhos diferentes a IA abre pro mesmo tema. Cada um vira um post,
-// e cada post aprovado e uma medicao da eficacia da IA.
-//
-// Sai tudo numa UNICA chamada, entao 5 nao custa 5x: o prompt (persona +
-// arsenal + exemplos + Camada 0 da Alma) e enorme e a saida e curta. A escolha
-// aqui e sobre quanto VOCE quer revisar, nao sobre custo.
-const VARIATION_OPTIONS = [1, 2, 3, 4, 5] as const;
-const DEFAULT_VARIATIONS = 5;
+type WizardFlow = 'image' | 'video_ready' | 'roteiro';
+type FieldStatus = 'pending' | 'approved' | 'rejected';
+
+const MAX_VIDEO_MB = 200;
+const BATCH_MIN = 3;
+const BATCH_MAX = 5;
+
+// Um post de imagem dentro do lote gerado. Cada um é independente e revisado
+// individualmente (título e legenda separados).
+interface BatchItem {
+  post: UserPost;
+  variation: AiVariation;        // texto PRISTINO (baseline da medição)
+  fabricJson: object;
+  templateId?: string;
+  quote: string;                 // título atual (pode mudar ao rejeitar)
+  caption: string;               // legenda atual
+  score: number | null;
+  reason: string | null;
+  codigo: string;
+  sizeId: BeeQuoteSize;
+  pick: { editorialSlug: string; platform: Platform; targetAvatar: TargetAvatar };
+  tituloStatus: FieldStatus;
+  legendaStatus: FieldStatus;
+  editRounds: number;            // quantas correções a IA precisou
+}
+
+function isSameDay(iso: string, ref: Date): boolean {
+  const d = new Date(iso);
+  return d.getFullYear() === ref.getFullYear()
+    && d.getMonth() === ref.getMonth()
+    && d.getDate() === ref.getDate();
+}
+
+// BEE-DDMMAA-G{global}-D{dia}-V{lote}
+function buildCodigo(date: Date, global: number, day: number, v: number): string {
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const yy = String(date.getFullYear()).slice(-2);
+  return `BEE-${dd}${mm}${yy}-G${global}-D${day}-V${v}`;
+}
+
+// Barra de potencial de viralização (verde ≥70 / amarelo ≥40 / vermelho).
+function ViralityBar({ score, reason }: { score?: number | null; reason?: string | null }) {
+  if (score == null) return null;
+  const color = score >= 70 ? 'bg-emerald-500' : score >= 40 ? 'bg-amber-500' : 'bg-rose-500';
+  const label = score >= 70 ? 'Alto' : score >= 40 ? 'Médio' : 'Baixo';
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs">
+        <span className="flex items-center gap-1 text-muted-foreground">
+          <TrendingUp className="h-3.5 w-3.5" /> Potencial de viralização
+        </span>
+        <span className="font-semibold">{score}/100 · {label}</span>
+      </div>
+      <div className="h-2 rounded-full bg-secondary overflow-hidden">
+        <div className={cn('h-full transition-all', color)} style={{ width: `${score}%` }} />
+      </div>
+      {reason && <p className="text-[11px] text-muted-foreground italic">"{reason}"</p>}
+    </div>
+  );
+}
+
+function StatusPill({ status }: { status: FieldStatus }) {
+  if (status === 'approved') {
+    return <Badge className="bg-emerald-600 text-white hover:bg-emerald-600"><Check className="h-3 w-3 mr-1" />Aprovado</Badge>;
+  }
+  if (status === 'rejected') {
+    return <Badge variant="destructive"><X className="h-3 w-3 mr-1" />Rejeitado</Badge>;
+  }
+  return <Badge variant="outline">Pendente</Badge>;
+}
 
 export function NewPost() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
   const { create, posts, load: loadPosts } = usePostStore();
+  const currentUser = useAuthStore((s) => s.currentUser);
 
-  const [step, setStep] = useState<Step>(1);
-  const [autoRunning, setAutoRunning] = useState(false);
-  const autoFired = useRef(false);
+  const [state, setState] = useState<WizardState>('FORMAT');
+  const [flow, setFlow] = useState<WizardFlow>('image');
+  const [genLabel, setGenLabel] = useState('Deixe a mágica acontecer...');
+
+  // Dados Mestre (para Auto-seleção)
   const [editorials, setEditorials] = useState<BeeEditorial[]>([]);
-  const [arsenal, setArsenal] = useState<BeeArsenalItem[]>([]);
   const [avatars, setAvatars] = useState<BeeAvatar[]>([]);
-  const [editorialSlug, setEditorialSlug] = useState<string | undefined>();
-  const [arsenalItemId, setArsenalItemId] = useState<string | undefined>();
-  const [targetAvatar, setTargetAvatar] = useState<TargetAvatar>('ambos');
-  // Plataformas-destino: pode marcar 1 ou as 2 ao mesmo tempo.
-  // Se marcar as 2: gera conteudo 1x e cria 2 posts ligados via companion_post_id.
-  const [targetPlatforms, setTargetPlatforms] = useState<Platform[]>(['linkedin']);
-  const [referencePostId, setReferencePostId] = useState<string | undefined>();
-  const [briefing, setBriefing] = useState('');
-  const [generating, setGenerating] = useState(false);
-  const [variations, setVariations] = useState<number>(DEFAULT_VARIATIONS);
-  // As 5 variacoes PRISTINAS gravadas no banco (ai_variations) — o lado
-  // esquerdo do diff. Nunca sao alteradas aqui.
-  const [pristine, setPristine] = useState<AiVariation[]>([]);
-  // O que voce edita na tela. Mesma ordem de `pristine`.
-  const [edits, setEdits] = useState<Array<{ quote: string; caption: string }>>([]);
-  const [creating, setCreating] = useState(false);
+
+  // --- Fluxo IMAGEM (lote) ---
+  const [batchQuantity, setBatchQuantity] = useState(BATCH_MIN);
+  const [batch, setBatch] = useState<BatchItem[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [correctingField, setCorrectingField] = useState<'titulo' | 'legenda' | null>(null);
+  const [imageScheduleId, setImageScheduleId] = useState<string | null>(null);
+
+  // --- Fluxo VÍDEO PRONTO / ROTEIRO (item único) ---
+  const [draftPost, setDraftPost] = useState<UserPost | null>(null);
+  const [videoCaption, setVideoCaption] = useState('');
+  const [scriptTitulo, setScriptTitulo] = useState('');
+  const [scriptRoteiro, setScriptRoteiro] = useState('');
+
+  // Estado do vídeo enviado (persistido entre regenerações — não reenvia)
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoPath, setVideoPath] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState('');
+  const [visualSummary, setVisualSummary] = useState('');
+  const [videoContentType, setVideoContentType] = useState('');
+  const [uploadPct, setUploadPct] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Modais
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackAction, setFeedbackAction] = useState<FeedbackActionType>('correct');
+  const [scheduleOpen, setScheduleOpen] = useState(false);
 
   useEffect(() => {
     void loadPosts();
-    void beeApi.editorials().then(setEditorials).catch((e) => {
-      console.error(e);
-      toast.error('Falha ao carregar editoriais Bee');
-    });
-    void beeApi.avatars().then(setAvatars).catch((e) => console.error(e));
+    void beeApi.editorials().then(setEditorials).catch(console.error);
+    void beeApi.avatars().then(setAvatars).catch(console.error);
   }, [loadPosts]);
 
-  useEffect(() => {
-    if (!editorialSlug) {
-      setArsenal([]);
-      setArsenalItemId(undefined);
-      return;
-    }
-    void beeApi.arsenalForEditorial(editorialSlug).then(setArsenal).catch((e) => {
-      console.error(e);
-    });
-  }, [editorialSlug]);
+  const activeItem = batch.find((it) => it.post.id === activeId) ?? null;
 
-  // -------------------------------------------------------------------------
-  // PILOTO AUTOMATICO — 1 botao: o sistema escolhe editorial, arsenal,
-  // plataforma e avatar, gera e cria o post pronto.
-  // -------------------------------------------------------------------------
-  // Peso por frequencia sugerida (editoriais "1-2x/semana" saem mais).
+  function patchItem(id: string, patch: Partial<BatchItem>) {
+    setBatch((prev) => prev.map((it) => (it.post.id === id ? { ...it, ...patch } : it)));
+  }
+
+  // Monta o carousel_text a partir dos valores ATUAIS do item (não do post
+  // original em memória, que pode estar defasado após uma regeneração).
+  function itemCarouselText(item: BatchItem, overrides: Record<string, unknown>) {
+    return {
+      quote: item.quote,
+      caption: item.caption,
+      headline_type: item.variation.headline_type,
+      analogy: item.variation.analogy,
+      virality_score: item.score,
+      virality_reason: item.reason,
+      ...overrides,
+    };
+  }
+
+  // --- LÓGICA DE AUTO-SELEÇÃO (compartilhada por todos os fluxos) ---
   function editorialWeight(e: BeeEditorial): number {
     const h = (e.frequency_hint ?? '').toLowerCase();
     if (h.includes('semana')) return 4;
     if (h.includes('pelo menos') || h.includes('1-2')) return 3;
-    return 1; // 1x/mes
+    return 1;
   }
 
   function weightedPick<T>(items: T[], weight: (x: T) => number): T {
@@ -104,129 +201,63 @@ export function NewPost() {
   }
 
   function autoChoose() {
-    // Olha os posts recentes pra ROTACIONAR (nao repetir o ultimo editorial/rede).
     const recent = [...posts].sort(
-      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
     const lastEditorial = recent.map((p) => p.metadata?.editorial_slug as string | undefined).find(Boolean);
     const lastPlatform = recent.map((p) => p.platform).find(Boolean);
 
-    // Editorial: evita o ultimo usado, escolhe ponderado por frequencia.
     let pool = editorials.filter((e) => e.slug !== lastEditorial);
     if (pool.length === 0) pool = editorials;
     const editorial = weightedPick(pool, editorialWeight);
 
-    // Plataforma: alterna em relacao ao ultimo post.
     const platform: Platform = lastPlatform === 'linkedin' ? 'instagram' : 'linkedin';
 
-    // Avatar: viesado pra "ambos", mas as vezes mira um especifico.
     const avatarPool: TargetAvatar[] = ['ambos', 'ambos', 'ambos', ...(avatars.map((a) => a.slug as TargetAvatar))];
     const targetAvatar = avatarPool[Math.floor(Math.random() * avatarPool.length)];
 
     return { editorial, platform, targetAvatar };
   }
 
-  async function handleAutoGenerate() {
+  function resetDraft() {
+    setDraftPost(null);
+    setVideoCaption('');
+    setScriptTitulo('');
+    setScriptRoteiro('');
+  }
+
+  // ==========================================================================
+  // FLUXO IMAGEM — geração em LOTE (3–5 posts independentes)
+  // ==========================================================================
+  async function handleStartImageBatch(quantity: number) {
     if (editorials.length === 0) {
-      toast.error('Editoriais ainda carregando — tenta de novo em 1s.');
+      toast.error('Carregando conhecimentos... aguarde 1 segundo.');
       return;
     }
-    setAutoRunning(true);
+    setFlow('image');
+    setState('GENERATING');
+    setGenLabel(`Gerando ${quantity} posts — cada um com nota de viralização...`);
     try {
       const pick = autoChoose();
-      // Sem arsenal_item_id: a geracao auto-seleciona o item de arsenal mais fresco.
+
       const result = await edge.generateContent({
         editorial_slug: pick.editorial.slug,
         target_avatar: pick.targetAvatar,
-        quote_max_chars: 200,
         target_platform: pick.platform,
-      });
-
-      const sizeId = pick.platform === 'instagram' ? 'square' : 'portrait';
-      const { fabricJson, templateId } = await renderBeeQuote(sizeId, result.quote);
-
-      const post = await create({
-        template_id: templateId,
-        title: pick.editorial.name,
-        platform: pick.platform,
-        format: 'image',
-        carousel_text: {
-          quote: result.quote,
-          caption: result.caption,
-          headline_type: result.headline_type_used,
-          analogy: result.analogy_used,
-        },
-        carousel_fabric_json: [fabricJson],
-        caption: result.caption,
-        metadata: {
-          canvas_size: sizeId,
-          editorial_slug: pick.editorial.slug,
-          target_avatar: pick.targetAvatar,
-          headline_type_used: result.headline_type_used,
-          source: 'auto-pilot',
-          auto_generated: true,
-        },
-      });
-
-      toast.success(
-        `Post pronto · ${pick.editorial.name} · ${pick.platform === 'instagram' ? 'Instagram' : 'LinkedIn'}`,
-      );
-      navigate(`/posts/${post.id}`);
-    } catch (e) {
-      console.error(e);
-      toast.error(`Falha no automático: ${(e as Error).message.slice(0, 200)}`);
-      setAutoRunning(false);
-    }
-  }
-
-  // Deep-link: /posts/novo?auto=1 dispara o piloto automatico assim que carrega.
-  useEffect(() => {
-    if (autoFired.current) return;
-    if (searchParams.get('auto') !== '1') return;
-    if (editorials.length === 0 || avatars.length === 0) return; // espera dados
-    autoFired.current = true;
-    void handleAutoGenerate();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, editorials, avatars]);
-
-  async function handleGenerate() {
-    if (!editorialSlug) {
-      toast.error('Escolhe um editorial primeiro.');
-      return;
-    }
-    if (targetPlatforms.length === 0) {
-      toast.error('Escolhe pelo menos uma plataforma.');
-      return;
-    }
-    setGenerating(true);
-    try {
-      // Pra prompt, manda a primeira plataforma como hint principal.
-      // Se forem as 2, geramos 1x com tom "geral" e duplicamos depois.
-      const result = await edge.generateContent({
-        editorial_slug: editorialSlug,
-        arsenal_item_id: arsenalItemId,
-        target_avatar: targetAvatar,
-        briefing: briefing || undefined,
         quote_max_chars: 200,
-        reference_post_id: referencePostId,
-        target_platform: targetPlatforms[0] as 'linkedin' | 'instagram',
-        // As 5 saem numa unica chamada — vide edge.ts.
-        variations,
+        variations: quantity,
       });
 
       const list = result.variations?.length ? result.variations : [result];
 
-      // Grava o ORIGINAL antes de voce encostar nele. Sem isto nao ha o que
-      // comparar depois, e a eficacia da IA vira achismo.
       const generation = await aiApi.createGeneration({
-        editorial_slug: editorialSlug,
-        target_avatar: targetAvatar,
-        platform: targetPlatforms[0],
-        briefing: briefing || undefined,
-        arsenal_item_id: arsenalItemId,
+        editorial_slug: pick.editorial.slug,
+        target_avatar: pick.targetAvatar,
+        platform: pick.platform,
         variations_count: list.length,
       });
-      const rows = await aiApi.createVariations(
+
+      const pristineRows = await aiApi.createVariations(
         generation.id,
         list.map((v, i) => ({
           idx: i + 1,
@@ -234,679 +265,933 @@ export function NewPost() {
           caption: v.caption,
           headline_type: v.headline_type_used,
           analogy: v.analogy_used,
+          virality_score: v.virality_score ?? null,
+          virality_reason: v.virality_reason ?? null,
         })),
       );
 
-      setPristine(rows.sort((a, b) => a.idx - b.idx));
-      setEdits(rows.sort((a, b) => a.idx - b.idx).map((v) => ({ quote: v.quote, caption: v.caption })));
-      setStep(5);
+      // Bases da nomenclatura, calculadas UMA vez (o create() abaixo cresce o
+      // store — usar posts.length dentro do loop contaria duplicado).
+      const now = new Date();
+      const baseGlobal = posts.length;
+      const baseDay = posts.filter((p) => isSameDay(p.created_at, now)).length;
+      const sizeId: BeeQuoteSize = pick.platform === 'instagram' ? 'square' : 'portrait';
+
+      const items: BatchItem[] = [];
+      for (let i = 0; i < pristineRows.length; i++) {
+        const row = pristineRows[i];
+        const v = list[i];
+        const score = v.virality_score ?? null;
+        const reason = v.virality_reason ?? null;
+        const codigo = buildCodigo(now, baseGlobal + i + 1, baseDay + i + 1, i + 1);
+
+        const { fabricJson, templateId } = await renderBeeQuote(sizeId, row.quote);
+
+        const post = await create({
+          template_id: templateId,
+          title: pick.editorial.name,
+          platform: pick.platform,
+          format: 'image',
+          status: 'pending_approval',
+          codigo,
+          virality_score: score,
+          virality_reason: reason,
+          caption: row.caption,
+          carousel_text: {
+            quote: row.quote,
+            caption: row.caption,
+            headline_type: row.headline_type,
+            analogy: row.analogy,
+            virality_score: score,
+            virality_reason: reason,
+          },
+          carousel_fabric_json: [fabricJson],
+          metadata: {
+            canvas_size: sizeId,
+            editorial_slug: pick.editorial.slug,
+            target_avatar: pick.targetAvatar,
+            variation_idx: row.idx,
+            batch_id: generation.id,
+            auto_generated: true,
+          },
+        });
+
+        await aiApi.linkVariationToPost(row.id, post.id);
+
+        items.push({
+          post, variation: row, fabricJson, templateId,
+          quote: row.quote, caption: row.caption, score, reason, codigo, sizeId,
+          pick: { editorialSlug: pick.editorial.slug, platform: pick.platform, targetAvatar: pick.targetAvatar },
+          tituloStatus: 'pending', legendaStatus: 'pending', editRounds: 0,
+        });
+      }
+
+      setBatch(items);
+      setActiveId(null);
+      setState('REVIEW_QUEUE');
     } catch (e) {
       console.error(e);
-      toast.error(`Falha na IA: ${(e as Error).message.slice(0, 200)}`);
-    } finally {
-      setGenerating(false);
+      toast.error('Erro ao gerar os posts. Tente novamente.');
+      setState('FORMAT');
     }
   }
 
-  function togglePlatform(p: Platform) {
-    setTargetPlatforms((cur) => {
-      const has = cur.includes(p);
-      if (has) {
-        // Nao deixa ficar vazio
-        if (cur.length === 1) return cur;
-        return cur.filter((x) => x !== p);
-      }
-      const next = [...cur, p];
-      // Se ficou com 2 plataformas, limpa a referencia (faz sentido so com 1)
-      if (next.length === 2) setReferencePostId(undefined);
-      return next;
-    });
+  // Aprova/Rejeita um campo (título=quote ou legenda=caption) do post ativo.
+  function approveField(field: 'titulo' | 'legenda') {
+    if (!activeItem) return;
+    patchItem(activeItem.post.id, field === 'titulo' ? { tituloStatus: 'approved' } : { legendaStatus: 'approved' });
   }
 
-  async function handleCreate() {
-    setCreating(true);
+  // "Rejeitar" um campo abre o feedback → a IA aprende e regenera SÓ aquele campo.
+  function openFieldReject(field: 'titulo' | 'legenda') {
+    if (!activeItem) return;
+    patchItem(activeItem.post.id, field === 'titulo' ? { tituloStatus: 'rejected' } : { legendaStatus: 'rejected' });
+    setCorrectingField(field);
+    setFeedbackAction('correct');
+    setFeedbackOpen(true);
+  }
+
+  // Regenera SÓ o campo rejeitado, mantendo o outro (que você já pode ter
+  // aprovado). Usa uma geração fresca e troca apenas o texto daquele campo.
+  async function regenerateField(item: BatchItem, field: 'titulo' | 'legenda', briefing: string) {
+    setState('GENERATING');
+    setGenLabel(field === 'titulo' ? 'Reescrevendo o título...' : 'Reescrevendo a legenda...');
     try {
-      const editorial = editorials.find((e) => e.slug === editorialSlug);
-      const arsenalItem = arsenal.find((a) => a.id === arsenalItemId);
-      const baseTitle = arsenalItem?.title ?? editorial?.name ?? 'Novo post';
+      const res = await edge.generateContent({
+        editorial_slug: item.pick.editorialSlug,
+        target_avatar: item.pick.targetAvatar,
+        target_platform: item.pick.platform === 'instagram' ? 'instagram' : 'linkedin',
+        quote_max_chars: 200,
+        variations: 1,
+        briefing: briefing || undefined,
+      });
+      const fresh = res.variations?.[0] ?? res;
 
-      const createdIds: string[] = [];
-      let firstPost: { id: string } | null = null;
+      let patch: Partial<BatchItem> = {
+        editRounds: item.editRounds + 1,
+        score: fresh.virality_score ?? item.score,
+        reason: fresh.virality_reason ?? item.reason,
+      };
 
-      // Cada variacao vira um post. Com 2 plataformas, vira um post por
-      // plataforma — mas a variacao fica ligada a UM so (vide abaixo).
-      for (let i = 0; i < pristine.length; i++) {
-        const v = pristine[i];
-        const edited = edits[i] ?? { quote: v.quote, caption: v.caption };
-        let primeiroDaVariacao: string | null = null;
-
-        for (const platform of targetPlatforms) {
-          const sizeId = platform === 'instagram' ? 'square' : 'portrait';
-          const { fabricJson, templateId } = await renderBeeQuote(sizeId, edited.quote);
-
-          const sufixo = [
-            pristine.length > 1 ? `#${i + 1}` : '',
-            targetPlatforms.length > 1 ? (platform === 'linkedin' ? 'LI' : 'IG') : '',
-          ].filter(Boolean).join(' ');
-
-          const post = await create({
-            template_id: templateId,
-            title: sufixo ? `${baseTitle} [${sufixo}]` : baseTitle,
-            briefing,
-            platform,
-            format: 'image',
-            // Todo post gerado nasce esperando o seu Aprovar — que e o que mede
-            // a eficacia da IA.
-            status: 'pending_approval',
-            carousel_text: {
-              quote: edited.quote,
-              caption: edited.caption,
-              headline_type: v.headline_type ?? undefined,
-              analogy: v.analogy ?? undefined,
-            },
-            carousel_fabric_json: [fabricJson],
-            caption: edited.caption,
-            metadata: {
-              canvas_size: sizeId,
-              editorial_slug: editorialSlug,
-              arsenal_item_id: arsenalItemId,
-              target_avatar: targetAvatar,
-              adapted_from: referencePostId ?? null,
-              variation_idx: v.idx,
-              multi_platform_group: targetPlatforms.length > 1 ? targetPlatforms.join('+') : null,
-            },
-          });
-          createdIds.push(post.id);
-          if (!primeiroDaVariacao) primeiroDaVariacao = post.id;
-          if (!firstPost) firstPost = post;
-        }
-
-        // A variacao aponta pra UM post so. O post irmao (outra plataforma) tem
-        // o mesmo texto: medir os dois contaria a mesma tentativa duas vezes e
-        // inflaria a amostra do portao.
-        if (primeiroDaVariacao) {
-          await aiApi.linkVariationToPost(v.id, primeiroDaVariacao);
-        }
+      if (field === 'titulo') {
+        const { fabricJson, templateId } = await renderBeeQuote(item.sizeId, fresh.quote);
+        patch = { ...patch, quote: fresh.quote, fabricJson, templateId, tituloStatus: 'pending' };
+        await postApi.update(item.post.id, {
+          carousel_text: itemCarouselText(item, { quote: fresh.quote, virality_score: patch.score, virality_reason: patch.reason }),
+          carousel_fabric_json: [fabricJson],
+          virality_score: patch.score ?? null,
+          virality_reason: patch.reason ?? null,
+        });
+      } else {
+        patch = { ...patch, caption: fresh.caption, legendaStatus: 'pending' };
+        await postApi.update(item.post.id, {
+          caption: fresh.caption,
+          carousel_text: itemCarouselText(item, { caption: fresh.caption, virality_score: patch.score, virality_reason: patch.reason }),
+          virality_score: patch.score ?? null,
+          virality_reason: patch.reason ?? null,
+        });
       }
 
-      // Cross-link LI<->IG so quando foi 1 variacao em 2 plataformas. Com 5
-      // variacoes os pares sao (2i, 2i+1) e o vinculo perderia o sentido de
-      // "o mesmo post nas duas redes" — deixa sem.
-      if (createdIds.length === 2 && pristine.length === 1) {
-        try {
-          const { postApi } = await import('@/lib/api');
-          await postApi.update(createdIds[0], { companion_post_id: createdIds[1] });
-          await postApi.update(createdIds[1], { companion_post_id: createdIds[0] });
-        } catch (e) {
-          console.warn('[NewPost] companion cross-link falhou', e);
-        }
-      } else if (referencePostId && firstPost) {
-        // Single platform + adaptacao de post existente
-        try {
-          const { postApi } = await import('@/lib/api');
-          await postApi.update(firstPost.id, { companion_post_id: referencePostId });
-        } catch (e) {
-          console.warn('[NewPost] companion link falhou', e);
-        }
-      }
-
-      toast.success(
-        createdIds.length === 1
-          ? 'Post em "Pendente de aprovação" — aprove pra a IA aprender.'
-          : `${createdIds.length} posts em "Pendente de aprovação" — aprove cada um pra a IA aprender.`,
-      );
-      // Com varios posts, o kanban e o destino que faz sentido (nao um deles).
-      navigate(createdIds.length > 1 ? '/' : `/posts/${firstPost?.id}`);
+      patchItem(item.post.id, patch);
+      toast.success(field === 'titulo' ? 'Título regenerado.' : 'Legenda regenerada.');
     } catch (e) {
       console.error(e);
-      toast.error('Falha ao criar post.');
+      toast.error('Erro ao regenerar. Tente de novo.');
+      // Volta o campo pra pendente pra não travar preso em "rejeitado".
+      patchItem(item.post.id, field === 'titulo' ? { tituloStatus: 'pending' } : { legendaStatus: 'pending' });
     } finally {
-      setCreating(false);
+      setState('REVIEW_ONE');
     }
   }
 
-  const editorial = editorials.find((e) => e.slug === editorialSlug);
-  const arsenalItem = arsenal.find((a) => a.id === arsenalItemId);
+  // Descarta um post do lote (apaga do banco e tira da fila).
+  async function discardBatchPost(item: BatchItem) {
+    try {
+      await postApi.delete(item.post.id);
+    } catch (e) {
+      console.error(e);
+    }
+    const remaining = batch.filter((it) => it.post.id !== item.post.id);
+    setBatch(remaining);
+    toast.info('Post descartado.');
+    if (remaining.length === 0) {
+      navigate('/');
+    } else {
+      setActiveId(null);
+      setState('REVIEW_QUEUE');
+    }
+  }
 
+  // Finaliza um post de imagem aprovado: renderiza a imagem no Storage, grava a
+  // medição (ai_reviews) + as métricas, define status (agendado ou stand-by) e
+  // volta pra fila (ou encerra se era o último).
+  async function finalizeImageItem(item: BatchItem, date: Date | null) {
+    if (!currentUser) {
+      toast.error('Sessão expirada. Faça login novamente.');
+      return;
+    }
+    setScheduleOpen(false);
+    setImageScheduleId(null);
+    try {
+      const { width, height } = getLayoutDimensions(item.sizeId);
+      const dataUrl = await renderFabricToDataUrl(item.fabricJson, { width, height });
+      let renderedSlides: Record<string, string> | undefined;
+      if (dataUrl) {
+        const { publicUrl } = await uploadAssetImage({
+          userId: currentUser.id,
+          assetId: item.post.id,
+          dataUrl,
+          filename: 'render.png',
+        });
+        renderedSlides = { slide1: publicUrl };
+      }
+
+      // Medição da eficácia. No wizard NÃO há edição manual de texto (só aprovar
+      // ou regenerar), então o baseline é o texto FINAL da IA — assim um post
+      // regenerado registra "intacto" (o humano não reescreveu à mão). As
+      // regenerações da IA já são contadas em ai_edit_rounds; as edições manuais,
+      // no PostEditor. Mantém os FKs (variation_id/generation_id) da linha real.
+      void aiApi
+        .recordReview({
+          post_id: item.post.id,
+          variation: { ...item.variation, quote: item.quote, caption: item.caption },
+          quote_final: item.quote,
+          caption_final: item.caption,
+        })
+        .catch(console.error);
+
+      await postApi.update(item.post.id, {
+        status: date ? 'scheduled' : 'approved',
+        ai_edit_rounds: item.editRounds,
+        ...(date ? { scheduled_date: date.toISOString() } : {}),
+        ...(renderedSlides ? { rendered_slides: renderedSlides } : {}),
+      });
+
+      toast.success(date ? `Post agendado! (${item.codigo})` : `Post em stand-by (${item.codigo})`);
+
+      const remaining = batch.filter((it) => it.post.id !== item.post.id);
+      setBatch(remaining);
+      if (remaining.length === 0) {
+        navigate('/');
+      } else {
+        setActiveId(null);
+        setState('REVIEW_QUEUE');
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error(`Erro ao finalizar: ${(err as Error).message.slice(0, 120)}`);
+    }
+  }
+
+  // Edição manual: persiste as métricas atuais e abre o editor completo.
+  async function handleManualEditItem(item: BatchItem) {
+    try {
+      await postApi.update(item.post.id, { ai_edit_rounds: item.editRounds });
+    } catch (e) {
+      console.error(e);
+    }
+    navigate(`/posts/${item.post.id}`);
+  }
+
+  // ==========================================================================
+  // FLUXO VÍDEO PRONTO
+  // ==========================================================================
+  async function handleVideoFile(f: File) {
+    if (!currentUser) { toast.error('Sessão expirada. Faça login.'); return; }
+    if (!f.type.startsWith('video/')) { toast.error('Selecione um arquivo de vídeo.'); return; }
+    const sizeMB = f.size / 1024 / 1024;
+    if (sizeMB > MAX_VIDEO_MB) { toast.error(`Limite ${MAX_VIDEO_MB}MB (atual: ${sizeMB.toFixed(0)}MB)`); return; }
+
+    const assetId = uuid();
+    setState('GENERATING');
+    setUploadPct(0);
+    setGenLabel('Enviando seu vídeo...');
+    try {
+      const { path, publicUrl } = await uploadVideo(currentUser.id, assetId, f, (pct) => setUploadPct(pct));
+      setVideoPath(path);
+      setVideoUrl(publicUrl);
+
+      setGenLabel('Transcrevendo o vídeo (pode levar um minuto)...');
+      const proc = await edge.processVideo({ storage_path: path, mime_type: f.type });
+      if (!proc.transcript || proc.transcript.trim().length < 20) {
+        toast.error('Não consegui transcrever este vídeo (áudio ausente ou muito curto).');
+        setState('VIDEO_UPLOAD');
+        return;
+      }
+      const ct = proc.detected_content_type || proc.content_type || '';
+      setTranscript(proc.transcript);
+      setVisualSummary(proc.visual_summary);
+      setVideoContentType(ct);
+
+      await runVideoCaption({
+        transcript: proc.transcript,
+        visualSummary: proc.visual_summary,
+        contentType: ct,
+        videoPath: path,
+        videoUrl: publicUrl,
+        fileName: f.name,
+      });
+    } catch (e) {
+      console.error(e);
+      toast.error(`Falha no vídeo: ${(e as Error).message.slice(0, 160)}`);
+      setState('VIDEO_UPLOAD');
+    }
+  }
+
+  // Gera a legenda do vídeo (1ª vez ou regeneração). Recebe o transcript por
+  // parâmetro pra não depender de setState assíncrono.
+  async function runVideoCaption(params: {
+    transcript: string; visualSummary: string; contentType: string;
+    videoPath: string; videoUrl: string; fileName?: string; briefing?: string;
+  }) {
+    if (params.transcript.trim().length < 20) {
+      toast.error('Transcrição muito curta pra gerar legenda.');
+      setState('VIDEO_UPLOAD');
+      return;
+    }
+    const pick = autoChoose();
+    setState('GENERATING');
+    setGenLabel('Escrevendo a legenda do vídeo...');
+
+    try {
+      const res = await edge.generateCaptionFromVideo({
+        transcript: params.transcript,
+        visual_summary: params.visualSummary,
+        content_type: params.contentType,
+        editorial_slug: pick.editorial.slug,
+        target_avatar: pick.targetAvatar,
+        briefing: params.briefing || undefined,
+      });
+      setVideoCaption(res.caption);
+
+      const post = await create({
+        title: params.fileName?.replace(/\.[^.]+$/, '') || pick.editorial.name,
+        platform: pick.platform,
+        format: 'video' as 'image',
+        status: 'pending_approval',
+        caption: res.caption,
+        carousel_text: {
+          transcript: params.transcript,
+          visual_summary: params.visualSummary,
+          caption: res.caption,
+        },
+        metadata: {
+          video_path: params.videoPath,
+          video_url: params.videoUrl,
+          editorial_slug: pick.editorial.slug,
+          target_avatar: pick.targetAvatar,
+          content_type: params.contentType,
+          source: 'video-upload',
+          auto_generated: true,
+        },
+      });
+      setDraftPost(post);
+      setState('TEXT_PREVIEW');
+    } catch (e) {
+      console.error(e);
+      toast.error(`Erro ao gerar legenda: ${(e as Error).message.slice(0, 140)}`);
+      setState('VIDEO_UPLOAD');
+    }
+  }
+
+  // ==========================================================================
+  // FLUXO ROTEIRO
+  // ==========================================================================
+  async function handleStartScriptGeneration(extraBriefing?: string) {
+    if (editorials.length === 0) {
+      toast.error('Carregando conhecimentos... aguarde 1 segundo.');
+      return;
+    }
+    setFlow('roteiro');
+    setState('GENERATING');
+    setGenLabel('Escrevendo seu roteiro...');
+    try {
+      const pick = autoChoose();
+      const res = await edge.generateScript({
+        editorial_slug: pick.editorial.slug,
+        target_avatar: pick.targetAvatar,
+        platform: pick.platform,
+        briefing: extraBriefing || undefined,
+      });
+      setScriptTitulo(res.titulo);
+      setScriptRoteiro(res.roteiro);
+
+      const post = await create({
+        title: res.titulo || pick.editorial.name,
+        platform: pick.platform,
+        format: 'video' as 'image',
+        status: 'pending_approval',
+        caption: res.roteiro,
+        carousel_text: { titulo: res.titulo, roteiro: res.roteiro },
+        metadata: {
+          editorial_slug: pick.editorial.slug,
+          target_avatar: pick.targetAvatar,
+          content_kind: 'roteiro',
+          source: 'script',
+          auto_generated: true,
+        },
+      });
+      setDraftPost(post);
+      setState('TEXT_PREVIEW');
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro ao gerar roteiro. Tente novamente.');
+      setState('VIDEO_FORMAT');
+    }
+  }
+
+  // ==========================================================================
+  // AÇÕES DE TEXTO (vídeo pronto / roteiro)
+  // ==========================================================================
+  const handleApproveText = () => {
+    if (flow === 'video_ready') { setScheduleOpen(true); return; }
+    void approveRoteiro(); // roteiro
+  };
+
+  async function approveRoteiro() {
+    if (!draftPost) return;
+    try {
+      await postApi.update(draftPost.id, { status: 'draft' });
+      toast.success('Roteiro salvo como rascunho no Kanban!');
+      navigate('/');
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro ao salvar o roteiro.');
+    }
+  }
+
+  const openFeedback = (action: FeedbackActionType) => {
+    setCorrectingField(null);
+    setFeedbackAction(action);
+    setFeedbackOpen(true);
+  };
+
+  // Feedback do vídeo/roteiro (post inteiro): aprende e regenera.
+  async function submitVideoRoteiroFeedback(feedbackText: string, facet: 'texto' | 'legenda' | 'ambos') {
+    if (!draftPost) return;
+    const meta = draftPost.metadata as { editorial_slug?: string; target_avatar?: string } | undefined;
+
+    let quoteOrig = '';
+    let capOrig = '';
+    if (flow === 'video_ready') {
+      capOrig = videoCaption;
+    } else {
+      quoteOrig = scriptTitulo;
+      capOrig = scriptRoteiro;
+    }
+
+    try {
+      const res = await edge.learnFromFeedback({
+        post_id: draftPost.id,
+        feedback_text: feedbackText,
+        quote_original: quoteOrig,
+        caption_original: capOrig,
+        editorial_slug: meta?.editorial_slug ?? null,
+        platform: draftPost.platform,
+        target_avatar: meta?.target_avatar ?? null,
+        facet_focus: facet,
+      });
+
+      const learnings = res.learnings ?? [];
+      toast[learnings.length > 0 ? 'success' : 'info'](
+        learnings.length > 0
+          ? `A I.A aprendeu ${learnings.length} lição(ões) com seu feedback!`
+          : 'Feedback processado (sem regras novas geradas).',
+      );
+
+      const wasCorrect = feedbackAction === 'correct';
+      const briefing = wasCorrect ? feedbackText : undefined;
+      const vid = { transcript, visualSummary, contentType: videoContentType, videoPath: videoPath ?? '', videoUrl: videoUrl ?? '' };
+
+      await postApi.delete(draftPost.id);
+      resetDraft();
+      toast.info(wasCorrect ? 'Regenerando com base no aprendizado...' : 'Descartado. Gerando uma proposta nova...');
+
+      if (flow === 'roteiro') {
+        await handleStartScriptGeneration(briefing);
+      } else {
+        await runVideoCaption({ ...vid, briefing });
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error('Ocorreu um erro ao processar seu feedback.');
+    }
+  }
+
+  // Roteador do FeedbackDialog: imagem (campo) vs vídeo/roteiro (post inteiro).
+  async function handleFeedbackSubmit(feedbackText: string, facet: 'texto' | 'legenda' | 'ambos') {
+    if (flow === 'image' && correctingField && activeItem) {
+      const item = activeItem;
+      const field = correctingField;
+      setCorrectingField(null);
+      // Aprende com o feedback explícito, depois regenera só aquele campo.
+      try {
+        await edge.learnFromFeedback({
+          post_id: item.post.id,
+          feedback_text: feedbackText,
+          quote_original: item.quote,
+          caption_original: item.caption,
+          editorial_slug: item.pick.editorialSlug,
+          platform: item.pick.platform,
+          target_avatar: item.pick.targetAvatar,
+          facet_focus: facet,
+        });
+      } catch (e) {
+        console.error(e);
+      }
+      await regenerateField(item, field, feedbackText);
+      return;
+    }
+    await submitVideoRoteiroFeedback(feedbackText, facet);
+  }
+
+  // Vídeo pronto: agendamento (o "visual" é o próprio vídeo no Storage).
+  const handleVideoScheduleConfirm = async (date: Date | null) => {
+    if (!draftPost) return;
+    setScheduleOpen(false);
+    try {
+      if (date) {
+        await postApi.update(draftPost.id, { status: 'scheduled', scheduled_date: date.toISOString() });
+        toast.success('Vídeo agendado com sucesso!');
+      } else {
+        await postApi.update(draftPost.id, { status: 'approved' });
+        toast.success('Vídeo em stand-by — publique quando quiser.');
+      }
+      navigate('/');
+    } catch (err) {
+      console.error(err);
+      toast.error('Erro ao agendar o vídeo.');
+    }
+  };
+
+  // ==========================================================================
+  // DERIVADOS DE RENDER
+  // ==========================================================================
+  const headerSubtitle =
+    state === 'FORMAT' ? 'Escolha o que você quer criar.' :
+    state === 'BATCH_CONFIG' ? 'Quantos posts a IA deve gerar de uma vez?' :
+    state === 'VIDEO_FORMAT' ? 'Que tipo de conteúdo de vídeo?' :
+    state === 'VIDEO_UPLOAD' ? 'Envie o vídeo já gravado.' :
+    state === 'GENERATING' ? 'Deixe a mágica acontecer...' :
+    state === 'REVIEW_QUEUE' ? 'Revise cada post do lote.' :
+    state === 'REVIEW_ONE' ? 'Aprove ou rejeite o título e a legenda.' :
+    state === 'TEXT_PREVIEW'
+      ? (flow === 'roteiro' ? 'Avalie o roteiro (texto fixo).' : 'Avalie a legenda (texto fixo).')
+      : 'Avalie o design visual (imagem fechada).';
+
+  const previewDims = activeItem ? getLayoutDimensions(activeItem.sizeId) : getLayoutDimensions('portrait');
+  const bothApproved = !!activeItem && activeItem.tituloStatus === 'approved' && activeItem.legendaStatus === 'approved';
+
+  function handleBack() {
+    if (state === 'FORMAT') { navigate(-1); return; }
+    if (state === 'REVIEW_ONE') { setActiveId(null); setState('REVIEW_QUEUE'); return; }
+    if (state === 'IMAGE_PREVIEW') { setState('REVIEW_ONE'); return; }
+    setState('FORMAT');
+  }
+
+  // --- RENDERIZAÇÃO ---
   return (
-    <div className="mx-auto max-w-4xl space-y-6 p-6 lg:p-8">
+    <div className="mx-auto max-w-4xl space-y-6 p-6 lg:p-8 min-h-screen">
       <header className="flex items-center gap-3">
-        <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
+        <Button variant="ghost" size="icon" onClick={handleBack}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div>
-          <h1 className="font-display text-2xl font-bold">Novo post</h1>
-          <p className="text-sm text-muted-foreground">
-            Editorial → Arsenal → Briefing → IA gera no estilo Bee.
-          </p>
+          <h1 className="font-display text-2xl font-bold">Criação de Conteúdo</h1>
+          <p className="text-sm text-muted-foreground">{headerSubtitle}</p>
         </div>
       </header>
 
-      {/* Estado: piloto automatico rodando */}
-      {autoRunning && (
-        <Card className="border-accent/40">
-          <CardContent className="flex flex-col items-center gap-3 py-16 text-center">
-            <Zap className="h-10 w-10 animate-pulse text-accent" />
-            <p className="font-display text-lg font-semibold">Montando seu post no automático…</p>
-            <p className="max-w-sm text-sm text-muted-foreground">
-              A IA está escolhendo o editorial, o arsenal, a rede e escrevendo a frase + caption no estilo Bee. Leva ~10-20s.
-            </p>
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-          </CardContent>
-        </Card>
-      )}
+      {/* MODAIS */}
+      <FeedbackDialog
+        open={feedbackOpen}
+        onOpenChange={setFeedbackOpen}
+        actionType={feedbackAction}
+        onSubmit={handleFeedbackSubmit}
+        lockedFacet={correctingField ? (correctingField === 'titulo' ? 'texto' : 'legenda') : undefined}
+      />
 
-      {!autoRunning && (
-      <>
-      {/* Piloto automatico — 1 botao entrega tudo pronto */}
-      <Card className="border-accent/40 bg-accent/5">
-        <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
-          <div>
-            <p className="flex items-center gap-1.5 font-display font-semibold">
-              <Zap className="h-4 w-4 text-accent" /> Piloto automático
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Deixa o sistema escolher tudo — editorial, arsenal, rede e avatar — e te entregar um post pronto.
-            </p>
-          </div>
-          <Button variant="accent" onClick={() => void handleAutoGenerate()} disabled={editorials.length === 0}>
-            <Zap className="h-4 w-4" /> Gerar post pronto
-          </Button>
-        </CardContent>
-      </Card>
+      <ScheduleModal
+        open={scheduleOpen}
+        onOpenChange={setScheduleOpen}
+        onConfirm={flow === 'image'
+          ? (date) => {
+              const item = batch.find((it) => it.post.id === imageScheduleId);
+              return item ? finalizeImageItem(item, date) : Promise.resolve();
+            }
+          : handleVideoScheduleConfirm}
+        platform={(flow === 'image' ? activeItem?.pick.platform : draftPost?.platform) || 'linkedin'}
+        allowPublishNow={flow !== 'image'}
+      />
 
-      {/* Stepper */}
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        {[
-          { n: 1, label: 'Editorial' },
-          { n: 2, label: 'Arsenal' },
-          { n: 3, label: 'Avatar' },
-          { n: 4, label: 'Briefing' },
-          { n: 5, label: 'Preview' },
-        ].map((s, i, arr) => (
-          <div key={s.n} className="flex items-center gap-2">
-            <span
-              className={cn(
-                'rounded-full px-3 py-1',
-                step === s.n
-                  ? 'bg-primary text-primary-foreground font-semibold'
-                  : step > s.n
-                    ? 'bg-accent/30 text-accent-foreground'
-                    : 'bg-secondary text-muted-foreground',
-              )}
-            >
-              {s.n}. {s.label}
-            </span>
-            {i < arr.length - 1 && <span className="text-muted-foreground">→</span>}
-          </div>
-        ))}
-      </div>
-
-      {/* STEP 1 — Editorial + Plataforma + Adaptar */}
-      {step === 1 && (
-        <Card>
-          <CardContent className="space-y-4 p-6">
-            {/* PLATAFORMA + REFERENCIA */}
-            <div className="rounded-md border border-accent/30 bg-accent/5 p-3 space-y-3">
-              <div className="space-y-1">
-                <Label className="text-xs font-semibold">Plataforma destino (1 ou as 2)</Label>
-                <div className="flex gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={targetPlatforms.includes('linkedin') ? 'accent' : 'outline'}
-                    onClick={() => togglePlatform('linkedin')}
-                  >
-                    <Linkedin className="h-3.5 w-3.5" /> LinkedIn (4:5)
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={targetPlatforms.includes('instagram') ? 'accent' : 'outline'}
-                    onClick={() => togglePlatform('instagram')}
-                  >
-                    <Instagram className="h-3.5 w-3.5" /> Instagram (1:1)
-                  </Button>
-                </div>
-                {targetPlatforms.length > 1 && (
-                  <p className="text-[10px] text-accent">
-                    ✨ Vamos criar 2 posts ligados (um por rede), cada um com seu canvas. Editáveis independentemente.
-                  </p>
-                )}
+      {/* FORMAT: imagem vs vídeo */}
+      {state === 'FORMAT' && (
+        <div className="grid gap-4 sm:grid-cols-2 mt-8">
+          <Card className="hover:border-accent hover:bg-accent/5 transition-colors cursor-pointer" onClick={() => { setFlow('image'); setState('BATCH_CONFIG'); }}>
+            <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
+              <div className="rounded-full bg-accent/20 p-4">
+                <ImageIcon className="h-8 w-8 text-accent" />
               </div>
-
-              {/* Adaptar de post existente — só quando 1 plataforma selecionada */}
-              {targetPlatforms.length === 1 && (
-                <div className="space-y-1">
-                  <Label className="text-xs font-semibold flex items-center gap-1">
-                    <Copy className="h-3 w-3" /> Adaptar de post existente (opcional)
-                  </Label>
-                  <ReferencePostSelector
-                    posts={posts}
-                    value={referencePostId}
-                    onChange={setReferencePostId}
-                    excludePlatform={targetPlatforms[0]}
-                  />
-                  {referencePostId && (
-                    <p className="text-[10px] text-muted-foreground">
-                      💡 IA vai adaptar o post escolhido pra <strong>{targetPlatforms[0] === 'instagram' ? 'Instagram' : 'LinkedIn'}</strong> mantendo a essência.
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <h2 className="font-display text-lg font-semibold">Escolhe o editorial</h2>
-              <p className="text-sm text-muted-foreground">
-                Cada editorial tem uma estrutura, frequência e arsenal próprios.
-              </p>
-            </div>
-
-            {editorials.length === 0 ? (
-              <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-                <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />
-                Carregando editoriais Bee...
-              </div>
-            ) : (
-              <div className="grid gap-2 sm:grid-cols-2">
-                {editorials.map((e) => (
-                  <button
-                    key={e.id}
-                    onClick={() => setEditorialSlug(e.slug)}
-                    className={cn(
-                      'rounded-lg border p-3 text-left transition-all hover:border-accent',
-                      editorialSlug === e.slug
-                        ? 'border-accent bg-accent/5 ring-2 ring-accent/30'
-                        : 'border-border',
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="font-semibold text-sm">{e.name}</div>
-                      {e.frequency_hint && (
-                        <Badge variant="secondary" className="shrink-0 text-[10px]">
-                          {e.frequency_hint}
-                        </Badge>
-                      )}
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
-                      {e.description}
-                    </p>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <div className="flex justify-end">
-              <Button variant="accent" onClick={() => setStep(2)} disabled={!editorialSlug}>
-                Próximo <ArrowRight className="h-4 w-4" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* STEP 2 — Arsenal */}
-      {step === 2 && (
-        <Card>
-          <CardContent className="space-y-4 p-6">
-            <div>
-              <h2 className="font-display text-lg font-semibold">Arsenal do editorial</h2>
-              <p className="text-sm text-muted-foreground">
-                {editorial?.name} — {editorial?.structure_template}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Escolhe um material do arsenal pra IA usar como ponto de partida. Ou pula e usa só o briefing.
-              </p>
-            </div>
-
-            {arsenal.length === 0 ? (
-              <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-                Sem arsenal mapeado pra este editorial — siga só com o briefing.
-              </div>
-            ) : (
-              <div className="space-y-2 max-h-96 overflow-y-auto">
-                <button
-                  onClick={() => setArsenalItemId(undefined)}
-                  className={cn(
-                    'w-full rounded-lg border p-3 text-left transition-all hover:border-accent',
-                    !arsenalItemId
-                      ? 'border-accent bg-accent/5 ring-2 ring-accent/30'
-                      : 'border-border',
-                  )}
-                >
-                  <p className="text-sm font-medium italic text-muted-foreground">
-                    Pular — só usar o briefing
-                  </p>
-                </button>
-                {arsenal.map((a) => (
-                  <button
-                    key={a.id}
-                    onClick={() => setArsenalItemId(a.id)}
-                    className={cn(
-                      'w-full rounded-lg border p-3 text-left transition-all hover:border-accent',
-                      arsenalItemId === a.id
-                        ? 'border-accent bg-accent/5 ring-2 ring-accent/30'
-                        : 'border-border',
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-sm font-semibold">{a.title}</p>
-                      <Badge variant="outline" className="shrink-0 text-[10px]">{a.type}</Badge>
-                    </div>
-                    {a.summary && (
-                      <p className="mt-1 text-xs text-muted-foreground">{a.summary}</p>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <div className="flex justify-between">
-              <Button variant="ghost" onClick={() => setStep(1)}>Voltar</Button>
-              <Button variant="accent" onClick={() => setStep(3)}>
-                Próximo <ArrowRight className="h-4 w-4" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* STEP 3 — Avatar */}
-      {step === 3 && (
-        <Card>
-          <CardContent className="space-y-4 p-6">
-            <div>
-              <h2 className="font-display text-lg font-semibold">Avatar-alvo (opcional)</h2>
-              <p className="text-sm text-muted-foreground">
-                Pra quem o post fala? Cada avatar pede um gatilho mental diferente.
-              </p>
-            </div>
-
-            <div className="grid gap-2 sm:grid-cols-3">
-              <button
-                onClick={() => setTargetAvatar('ambos')}
-                className={cn(
-                  'rounded-lg border p-3 text-left transition-all hover:border-accent',
-                  targetAvatar === 'ambos' ? 'border-accent bg-accent/5 ring-2 ring-accent/30' : 'border-border',
-                )}
-              >
-                <div className="font-semibold text-sm">Ambos</div>
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  Padrão. Post genérico que ressoa nos dois perfis.
-                </p>
-              </button>
-              {avatars.map((av) => (
-                <button
-                  key={av.slug}
-                  onClick={() => setTargetAvatar(av.slug as TargetAvatar)}
-                  className={cn(
-                    'rounded-lg border p-3 text-left transition-all hover:border-accent',
-                    targetAvatar === av.slug ? 'border-accent bg-accent/5 ring-2 ring-accent/30' : 'border-border',
-                  )}
-                >
-                  <div className="font-semibold text-sm">{av.name}</div>
-                  <p className="mt-1 text-[11px] text-muted-foreground line-clamp-3">
-                    {av.state}
-                  </p>
-                  {av.gatilhos && (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {av.gatilhos.slice(0, 2).map((g) => (
-                        <Badge key={g} variant="secondary" className="text-[9px]">{g}</Badge>
-                      ))}
-                    </div>
-                  )}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex justify-between">
-              <Button variant="ghost" onClick={() => setStep(2)}>Voltar</Button>
-              <Button variant="accent" onClick={() => setStep(4)}>
-                Próximo <ArrowRight className="h-4 w-4" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* STEP 4 — Briefing */}
-      {step === 4 && (
-        <Card>
-          <CardContent className="space-y-4 p-6">
-            <div>
-              <h2 className="font-display text-lg font-semibold">Briefing (opcional)</h2>
-              <p className="text-sm text-muted-foreground">
-                Contexto adicional. Se já escolheu arsenal, a IA usa como ponto de partida — aqui só refina.
-              </p>
-            </div>
-
-            {arsenalItem && (
-              <div className="rounded-md border border-accent/30 bg-accent/5 p-3 text-xs">
-                <p className="font-semibold">Material selecionado: {arsenalItem.title}</p>
-                {arsenalItem.summary && (
-                  <p className="mt-1 text-muted-foreground">{arsenalItem.summary}</p>
-                )}
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <Label htmlFor="briefing">Briefing adicional</Label>
-              <Textarea
-                id="briefing"
-                rows={6}
-                placeholder="Ex: Foca no aspecto da exaustao silenciosa. Quero falar especificamente com diretores que estao na fase de questionar o proprio sucesso."
-                value={briefing}
-                onChange={(e) => setBriefing(e.target.value)}
-              />
-              <p className="text-[10px] text-muted-foreground">
-                {briefing.length} chars · vazio também funciona.
-              </p>
-            </div>
-
-            {/* Quantos caminhos a IA abre. Sai tudo numa chamada so — escolher
-                5 nao custa 5x; custa 5 revisoes suas. */}
-            <div className="space-y-2 rounded-md border border-border bg-secondary/30 p-3">
-              <Label className="text-xs">Quantas variações gerar</Label>
-              <div className="flex gap-1.5">
-                {VARIATION_OPTIONS.map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => setVariations(n)}
-                    className={cn(
-                      'h-9 flex-1 rounded-md border text-sm font-semibold transition-colors',
-                      variations === n
-                        ? 'border-accent bg-accent text-accent-foreground'
-                        : 'border-border bg-card hover:border-accent/50',
-                    )}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
-              <p className="text-[10px] leading-snug text-muted-foreground">
-                {variations === 1
-                  ? 'Um caminho só. Vira 1 post pra você revisar.'
-                  : `${variations} entradas diferentes no mesmo tema — cada uma com um ângulo próprio. Viram ${variations} posts pra revisar.`}
-                {' '}Tudo numa única chamada: escolher {variations} não custa {variations}x.
-              </p>
-              {/* A regra do portao e por POST medido: quem gera de 1 em 1 precisa
-                  de 30 gerações; de 5 em 5, precisa de 6. Vale saber antes. */}
-              <p className="text-[10px] leading-snug text-muted-foreground">
-                Cada post aprovado mede a IA · a campanha destrava com 30 posts de 6 gerações
-                {variations < 5 && ` — no ritmo de ${variations}, são ${Math.ceil(30 / variations)} gerações`}
-                {variations === 5 && ' — no ritmo de 5, são 6 gerações'}
-                .
-              </p>
-            </div>
-
-            <div className="flex justify-between">
-              <Button variant="ghost" onClick={() => setStep(3)}>Voltar</Button>
-              <Button
-                variant="accent"
-                onClick={handleGenerate}
-                disabled={generating}
-              >
-                {generating ? (
-                  <><Loader2 className="h-4 w-4 animate-spin" /> Gerando {variations > 1 ? `${variations} variações` : ''}...</>
-                ) : (
-                  <><Wand2 className="h-4 w-4" /> Gerar {variations > 1 ? `${variations} variações` : 'post'}</>
-                )}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* STEP 5 — As 5 variacoes */}
-      {step === 5 && pristine.length > 0 && (
-        <div className="space-y-4">
-          <Card>
-            <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
               <div>
-                <h2 className="font-display text-lg font-semibold">
-                  {pristine.length === 1
-                    ? 'Revise o post'
-                    : `${pristine.length} caminhos pro mesmo tema`}
-                </h2>
-                <p className="text-xs text-muted-foreground">
-                  {pristine.length === 1 ? 'Vai' : 'Cada um vira um post e vai'} pra “Pendente de
-                  aprovação”. Corrija o que precisar — a IA aprende com cada correção, e aprovar sem
-                  mexer é o que prova que ela acertou.
-                </p>
+                <h3 className="font-display font-bold text-lg">Post de Imagem</h3>
+                <p className="text-sm text-muted-foreground max-w-[220px] mt-1">A IA gera de 3 a 5 opções pra você escolher e aprovar.</p>
               </div>
-              <Badge variant="outline">{editorial?.name}</Badge>
             </CardContent>
           </Card>
 
-          {pristine.map((v, i) => {
-            const e = edits[i] ?? { quote: v.quote, caption: v.caption };
-            const quoteTocada = e.quote.trim() !== v.quote.trim();
-            const captionTocada = e.caption.trim() !== v.caption.trim();
-            const tocada = quoteTocada || captionTocada;
-            return (
-              <Card key={v.id} className={cn(tocada && 'border-amber-500/50')}>
-                <CardContent className="space-y-3 p-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    {pristine.length > 1 && (
-                      <Badge variant="accent" className="font-mono text-[10px]">#{v.idx}</Badge>
-                    )}
-                    {v.headline_type && (
-                      <Badge variant="secondary" className="text-[10px]">{v.headline_type}</Badge>
-                    )}
-                    {v.analogy && (
-                      <Badge variant="secondary" className="text-[10px]">analogia: {v.analogy}</Badge>
-                    )}
-                    <span className="ml-auto text-[10px] text-muted-foreground">
-                      {tocada ? '✏️ corrigida — a IA vai aprender' : '✓ como a IA escreveu'}
-                    </span>
-                  </div>
+          <Card className="hover:border-accent hover:bg-accent/5 transition-colors cursor-pointer" onClick={() => setState('VIDEO_FORMAT')}>
+            <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
+              <div className="rounded-full bg-accent/20 p-4">
+                <Video className="h-8 w-8 text-accent" />
+              </div>
+              <div>
+                <h3 className="font-display font-bold text-lg">Post de Vídeo</h3>
+                <p className="text-sm text-muted-foreground max-w-[220px] mt-1">Legenda de um vídeo pronto ou um roteiro pra gravar.</p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
-                  <div className="space-y-1">
-                    <Label className="text-xs">Frase (aparece na imagem)</Label>
-                    <Textarea
-                      rows={2}
-                      value={e.quote}
-                      onChange={(ev) =>
-                        setEdits((cur) =>
-                          cur.map((x, j) => (j === i ? { ...x, quote: ev.target.value } : x)),
-                        )
-                      }
-                      className="text-sm"
-                    />
-                    <p className="text-[10px] text-muted-foreground">{e.quote.length} chars</p>
-                  </div>
-
-                  <details className="group">
-                    <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
-                      Caption ({e.caption.length} chars){captionTocada ? ' · corrigida' : ''}
-                    </summary>
-                    <Textarea
-                      rows={12}
-                      value={e.caption}
-                      onChange={(ev) =>
-                        setEdits((cur) =>
-                          cur.map((x, j) => (j === i ? { ...x, caption: ev.target.value } : x)),
-                        )
-                      }
-                      className="mt-2 text-xs"
-                    />
-                  </details>
-                </CardContent>
-              </Card>
-            );
-          })}
-
+      {/* BATCH_CONFIG: quantos posts gerar */}
+      {state === 'BATCH_CONFIG' && (
+        <div className="mt-8 space-y-6">
           <Card>
-            <CardContent className="flex items-center justify-between gap-3 p-4">
-              <Button variant="ghost" onClick={() => setStep(4)}>Voltar (regenerar)</Button>
-              <div className="flex items-center gap-3">
-                <span className="text-xs text-muted-foreground">
-                  {edits.filter((e, i) =>
-                    e.quote.trim() !== pristine[i]?.quote.trim() ||
-                    e.caption.trim() !== pristine[i]?.caption.trim()).length} de {pristine.length} corrigida(s)
-                </span>
-                <Button variant="accent" onClick={handleCreate} disabled={creating}>
-                  {creating ? (
-                    <><Loader2 className="h-4 w-4 animate-spin" /> Criando...</>
-                  ) : (
-                    <>
-                      <Sparkles className="h-4 w-4" />
-                      Criar {pristine.length * targetPlatforms.length}{' '}
-                      {pristine.length * targetPlatforms.length === 1 ? 'post' : 'posts'}
-                    </>
-                  )}
+            <CardContent className="py-10 flex flex-col items-center gap-6 text-center">
+              <div className="rounded-full bg-accent/20 p-4"><Layers className="h-8 w-8 text-accent" /></div>
+              <div>
+                <h3 className="font-display font-bold text-lg">Quantos posts?</h3>
+                <p className="text-sm text-muted-foreground max-w-sm mt-1">
+                  A IA gera vários de uma vez (cada um com nota de viralização) pra você aprovar em sequência e acelerar o fluxo.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                {Array.from({ length: BATCH_MAX - BATCH_MIN + 1 }, (_, i) => BATCH_MIN + i).map((n) => (
+                  <Button
+                    key={n}
+                    variant={batchQuantity === n ? 'accent' : 'outline'}
+                    className="h-14 w-14 text-lg font-bold"
+                    onClick={() => setBatchQuantity(n)}
+                  >
+                    {n}
+                  </Button>
+                ))}
+              </div>
+              <Button variant="accent" size="lg" onClick={() => void handleStartImageBatch(batchQuantity)}>
+                <Sparkles className="h-4 w-4 mr-2" /> Gerar {batchQuantity} posts
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* VIDEO_FORMAT: vídeo pronto / cortes / roteiro */}
+      {state === 'VIDEO_FORMAT' && (
+        <div className="grid gap-4 sm:grid-cols-3 mt-8">
+          <Card className="hover:border-accent hover:bg-accent/5 transition-colors cursor-pointer" onClick={() => { setFlow('video_ready'); setState('VIDEO_UPLOAD'); }}>
+            <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
+              <div className="rounded-full bg-accent/20 p-4"><Film className="h-7 w-7 text-accent" /></div>
+              <div>
+                <h3 className="font-display font-bold">Vídeo pronto</h3>
+                <p className="text-xs text-muted-foreground mt-1">Já gravou. Gera só a legenda pra postar.</p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="opacity-50 cursor-not-allowed">
+            <CardContent className="flex flex-col items-center gap-3 py-10 text-center relative">
+              <Badge variant="secondary" className="absolute top-3 right-3">Em breve</Badge>
+              <div className="rounded-full bg-secondary p-4"><Scissors className="h-7 w-7 text-muted-foreground" /></div>
+              <div>
+                <h3 className="font-display font-bold">Cortes</h3>
+                <p className="text-xs text-muted-foreground mt-1">Fatiar um vídeo longo em cortes.</p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="hover:border-accent hover:bg-accent/5 transition-colors cursor-pointer" onClick={() => handleStartScriptGeneration()}>
+            <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
+              <div className="rounded-full bg-accent/20 p-4"><FileText className="h-7 w-7 text-accent" /></div>
+              <div>
+                <h3 className="font-display font-bold">Roteiro</h3>
+                <p className="text-xs text-muted-foreground mt-1">Gera um roteiro pra você gravar.</p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* VIDEO_UPLOAD: envio do vídeo pronto */}
+      {state === 'VIDEO_UPLOAD' && (
+        <Card className="border-dashed border-2 hover:border-accent transition-colors">
+          <CardContent className="py-16">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="video/*"
+              className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleVideoFile(f); }}
+            />
+            <div
+              className="flex flex-col items-center gap-4 text-center cursor-pointer"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <div className="rounded-full bg-accent/20 p-5"><UploadCloud className="h-9 w-9 text-accent" /></div>
+              <div>
+                <h3 className="font-display font-bold text-lg">Envie seu vídeo</h3>
+                <p className="text-sm text-muted-foreground mt-1 max-w-sm">Clique pra selecionar. MP4/MOV até {MAX_VIDEO_MB}MB. A IA transcreve e escreve a legenda.</p>
+              </div>
+              <Button variant="accent" className="mt-2">Selecionar vídeo</Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* GENERATING */}
+      {state === 'GENERATING' && (
+        <Card className="border-accent/40 shadow-lg">
+          <CardContent className="flex flex-col items-center gap-4 py-20 text-center">
+            <Zap className="h-12 w-12 animate-pulse text-accent" />
+            <div className="space-y-2">
+              <h2 className="font-display text-xl font-bold">Sua I.A está trabalhando...</h2>
+              <p className="text-muted-foreground max-w-sm mx-auto">{genLabel}</p>
+            </div>
+            {uploadPct > 0 && uploadPct < 100 && (
+              <div className="w-full max-w-xs">
+                <div className="h-2 rounded-full bg-secondary overflow-hidden">
+                  <div className="h-full bg-accent transition-all" style={{ width: `${uploadPct}%` }} />
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">{uploadPct}% enviado</p>
+              </div>
+            )}
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground mt-2" />
+          </CardContent>
+        </Card>
+      )}
+
+      {/* REVIEW_QUEUE: fila dos posts do lote */}
+      {state === 'REVIEW_QUEUE' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">
+              {batch.length} post(s) na fila. Clique pra revisar cada um.
+            </p>
+            <Button variant="ghost" size="sm" onClick={() => navigate('/')}>Concluir depois</Button>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {batch.map((it) => {
+              const done = it.tituloStatus === 'approved' && it.legendaStatus === 'approved';
+              return (
+                <Card
+                  key={it.post.id}
+                  className="cursor-pointer hover:border-accent transition-colors"
+                  onClick={() => { setActiveId(it.post.id); setState('REVIEW_ONE'); }}
+                >
+                  <CardContent className="p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <Badge variant="outline" className="font-mono text-[10px]">{it.codigo}</Badge>
+                      <Badge variant="outline">{it.pick.platform}</Badge>
+                    </div>
+                    <p className="font-display text-sm font-medium leading-snug line-clamp-3">"{it.quote}"</p>
+                    <ViralityBar score={it.score} />
+                    <div className="flex items-center gap-2 pt-1">
+                      {done
+                        ? <Badge className="bg-emerald-600 text-white hover:bg-emerald-600"><Check className="h-3 w-3 mr-1" />Pronto pro design</Badge>
+                        : <span className="text-xs text-muted-foreground flex items-center gap-1"><ArrowRight className="h-3 w-3" /> Revisar</span>}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* REVIEW_ONE: revisão de título + legenda de um post */}
+      {state === 'REVIEW_ONE' && activeItem && (
+        <div className="space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Badge variant="outline" className="font-mono text-xs">{activeItem.codigo}</Badge>
+            <Badge variant="outline">{activeItem.pick.platform} · {activeItem.pick.editorialSlug}</Badge>
+          </div>
+
+          <Card><CardContent className="p-4"><ViralityBar score={activeItem.score} reason={activeItem.reason} /></CardContent></Card>
+
+          {/* TÍTULO (frase da imagem) */}
+          <Card className="shadow-sm">
+            <CardContent className="p-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <Badge variant="outline">Título (frase da imagem)</Badge>
+                <StatusPill status={activeItem.tituloStatus} />
+              </div>
+              <p className="font-display text-lg font-medium leading-relaxed">"{activeItem.quote}"</p>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant={activeItem.tituloStatus === 'approved' ? 'accent' : 'outline'}
+                  onClick={() => approveField('titulo')}
+                >
+                  <Check className="h-4 w-4 mr-1" /> Aprovar título
+                </Button>
+                <Button size="sm" variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => openFieldReject('titulo')}>
+                  <RefreshCw className="h-4 w-4 mr-1" /> Rejeitar / regenerar
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* LEGENDA */}
+          <Card className="shadow-sm">
+            <CardContent className="p-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <Badge variant="outline">Legenda do post</Badge>
+                <StatusPill status={activeItem.legendaStatus} />
+              </div>
+              <p className="text-sm whitespace-pre-wrap leading-relaxed text-muted-foreground">{activeItem.caption}</p>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant={activeItem.legendaStatus === 'approved' ? 'accent' : 'outline'}
+                  onClick={() => approveField('legenda')}
+                >
+                  <Check className="h-4 w-4 mr-1" /> Aprovar legenda
+                </Button>
+                <Button size="sm" variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => openFieldReject('legenda')}>
+                  <RefreshCw className="h-4 w-4 mr-1" /> Rejeitar / regenerar
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Ações do post */}
+          <Card className="border-t-4 border-t-accent bg-accent/5">
+            <CardContent className="flex flex-wrap items-center justify-between gap-4 p-4">
+              <div>
+                <p className="font-semibold flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-accent" /> Título e legenda aprovados?
+                </p>
+                <p className="text-xs text-muted-foreground max-w-[340px] mt-1">
+                  Aprove os dois pra avançar pro design. A IA já regenerou {activeItem.editRounds}x este post.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => void discardBatchPost(activeItem)}>
+                  <X className="h-4 w-4 mr-1" /> Descartar post
+                </Button>
+                <Button variant="accent" disabled={!bothApproved} onClick={() => setState('IMAGE_PREVIEW')}>
+                  <ArrowRight className="h-4 w-4 mr-1" /> Ir pro design
                 </Button>
               </div>
             </CardContent>
           </Card>
         </div>
       )}
-      </>
+
+      {/* TEXT_PREVIEW: vídeo pronto / roteiro (item único) */}
+      {state === 'TEXT_PREVIEW' && (
+        <div className="space-y-6">
+          {flow === 'video_ready' && (
+            <div className="grid gap-6 md:grid-cols-2">
+              <Card className="shadow-md overflow-hidden">
+                <CardContent className="p-0">
+                  {videoUrl ? (
+                    <video src={videoUrl} controls className="w-full max-h-[420px] bg-black" />
+                  ) : (
+                    <div className="p-6 text-sm text-muted-foreground">Vídeo indisponível.</div>
+                  )}
+                </CardContent>
+              </Card>
+              <Card className="shadow-md">
+                <CardContent className="p-6">
+                  <Badge variant="outline" className="mb-2">Legenda do Vídeo</Badge>
+                  <p className="text-sm whitespace-pre-wrap leading-relaxed text-muted-foreground">{videoCaption}</p>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
+          {flow === 'roteiro' && (
+            <Card className="shadow-md">
+              <CardContent className="p-6 space-y-3">
+                <Badge variant="outline">Roteiro do Vídeo</Badge>
+                {scriptTitulo && <h2 className="font-display text-xl font-bold">{scriptTitulo}</h2>}
+                <p className="text-sm whitespace-pre-wrap leading-relaxed">{scriptRoteiro}</p>
+              </CardContent>
+            </Card>
+          )}
+
+          <Card className="border-t-4 border-t-accent bg-accent/5">
+            <CardContent className="flex flex-wrap items-center justify-between gap-4 p-4">
+              <div>
+                <p className="font-semibold flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-accent" /> O que achou?
+                </p>
+                <p className="text-xs text-muted-foreground max-w-[320px] mt-1">
+                  O texto está travado. Se não gostou, use "Corrigir" — a I.A aprende com seu feedback e regenera.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => openFeedback('discard')}>
+                  Rejeitar Totalmente
+                </Button>
+                <Button variant="outline" onClick={() => openFeedback('correct')}>
+                  Corrigir
+                </Button>
+                <Button variant="accent" onClick={handleApproveText}>
+                  {flow === 'video_ready' ? 'Aprovar e Agendar' : 'Aprovar e Salvar Rascunho'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* IMAGE_PREVIEW: design de um post de imagem aprovado */}
+      {state === 'IMAGE_PREVIEW' && activeItem && (
+        <div className="space-y-6">
+          <Card className="shadow-md overflow-hidden">
+            <CardContent className="p-0">
+              <div className="bg-secondary/20 p-4 border-b text-center text-sm font-medium text-muted-foreground flex justify-between items-center">
+                <span className="font-mono text-xs">{activeItem.codigo}</span>
+                <Badge variant="outline" className="bg-background">{activeItem.pick.platform}</Badge>
+              </div>
+              <div className="p-8 flex justify-center bg-secondary/10">
+                <StaticCanvasPreview
+                  key={activeItem.quote}
+                  fabricJson={activeItem.fabricJson}
+                  width={previewDims.width}
+                  height={previewDims.height}
+                  className="shadow-2xl rounded-sm"
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-t-4 border-t-accent bg-accent/5">
+            <CardContent className="flex flex-wrap items-center justify-between gap-4 p-4">
+              <div>
+                <p className="font-semibold flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-accent" /> Gostou do design?
+                </p>
+                <p className="text-xs text-muted-foreground max-w-[300px] mt-1">
+                  Agende agora ou deixe em stand-by pra postar depois. Se cortou o texto, abra a edição manual.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" onClick={() => void handleManualEditItem(activeItem)}>
+                  <Edit3 className="h-4 w-4 mr-1" /> Edição Manual
+                </Button>
+                <Button variant="outline" onClick={() => void finalizeImageItem(activeItem, null)}>
+                  <PauseCircle className="h-4 w-4 mr-1" /> Stand-by
+                </Button>
+                <Button variant="accent" onClick={() => { setImageScheduleId(activeItem.post.id); setScheduleOpen(true); }}>
+                  Agendar
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       )}
     </div>
-  );
-}
-
-// Selector compacto de post de referencia.
-// Mostra apenas posts da plataforma OPOSTA (faz sentido pra cross-platform).
-function ReferencePostSelector({
-  posts,
-  value,
-  onChange,
-  excludePlatform,
-}: {
-  posts: UserPost[];
-  value?: string;
-  onChange: (id: string | undefined) => void;
-  excludePlatform: Platform;
-}) {
-  const eligible = posts
-    .filter((p) => p.platform !== excludePlatform && (p.caption || (p.carousel_text as { quote?: string })?.quote))
-    .slice(0, 50);
-
-  return (
-    <select
-      value={value ?? ''}
-      onChange={(e) => onChange(e.target.value || undefined)}
-      className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
-    >
-      <option value="">— nao adaptar (criar do zero) —</option>
-      {eligible.length === 0 ? (
-        <option disabled>(sem posts {excludePlatform === 'instagram' ? 'do LinkedIn' : 'do Instagram'} pra adaptar)</option>
-      ) : (
-        eligible.map((p) => {
-          const date = new Date(p.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
-          const quote = (p.carousel_text as { quote?: string } | undefined)?.quote;
-          const label = `[${p.platform === 'instagram' ? 'IG' : 'LI'}] ${date} · ${p.title?.slice(0, 60) ?? quote?.slice(0, 60) ?? 'sem titulo'}`;
-          return (
-            <option key={p.id} value={p.id}>
-              {label}
-            </option>
-          );
-        })
-      )}
-    </select>
   );
 }

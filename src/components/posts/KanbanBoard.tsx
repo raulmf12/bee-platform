@@ -130,6 +130,24 @@ export function KanbanBoard() {
                     <p className="text-sm font-medium leading-tight line-clamp-2 pr-6">
                       {p.title || p.briefing?.slice(0, 60) || 'Sem titulo'}
                     </p>
+                    {p.codigo && (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-[9px] text-muted-foreground truncate">{p.codigo}</span>
+                        {p.virality_score != null && (
+                          <span
+                            className={cn(
+                              'text-[9px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap',
+                              p.virality_score >= 70 ? 'bg-emerald-500/15 text-emerald-600'
+                                : p.virality_score >= 40 ? 'bg-amber-500/15 text-amber-600'
+                                : 'bg-rose-500/15 text-rose-600',
+                            )}
+                            title="Potencial de viralização"
+                          >
+                            🚀 {p.virality_score}
+                          </span>
+                        )}
+                      </div>
+                    )}
                     <div className="flex items-center justify-between">
                       <PlatformBadge platform={p.platform} />
                       <span className="text-[10px] text-muted-foreground">

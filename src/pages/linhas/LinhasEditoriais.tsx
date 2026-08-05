@@ -88,9 +88,10 @@ export function LinhasEditoriais() {
 }
 
 const EMPTY_GATE: AiGate = {
-  amostra: 0, intactos: 0, alterados: 0, geracoes: 0, acuracia: 0,
-  meta: 90, min_amostra: 30, min_geracoes: 6, destravada: false, total_revisados: 0,
-};
+  meta: 90, min_amostra: 8, relock_band: 80, ajuste_max_drift: 15,
+  total_segmentos: 0, destravados: 0, em_risco: false, destravada: false,
+  amostra_total: 0, segmentos: [],
+}
 
 function CampanhaAtiva() {
   const [lines, setLines] = useState<EditorialLine[]>([]);

@@ -56,33 +56,34 @@ async function fetchPendingLines(): Promise<EditorialLine[]> {
   return await res.json();
 }
 
-// O PORTAO — a trava que importa de verdade.
+// O PORTAO, agora POR SEGMENTO (editoria × plataforma × alvo).
 //
-// A UI mostrar cadeado nao impede nada: quem gera e publica sozinho e ESTE
-// cron, e ele roda sem sessao, a cada 15min. Sem esta checagem a campanha
-// continuaria produzindo com a UI travada.
+// A campanha nao libera toda de uma vez: cada conjunto abre no seu ritmo. O
+// tick so gera (e auto-publica) pros segmentos JA liberados; os demais seguem
+// em modo de aprendizado manual.
 //
-// Consulta a MESMA funcao do banco que o frontend (ai_gate_status), por
-// usuario: a eficacia e da IA aprendendo a voz DAQUELE usuario.
-async function gateOpen(userId: string): Promise<{ open: boolean; why: string }> {
+// Consulta a MESMA funcao do banco que o frontend (ai_segment_status), por
+// usuario. Devolve o conjunto de chaves "editorial|plataforma|alvo" liberadas.
+function segKey(ed: string, plat: string, av: string): string {
+  return `${ed}|${plat}|${av}`;
+}
+
+async function fetchUnlockedSegments(userId: string): Promise<Set<string> | null> {
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/ai_gate_status`, {
-      method: 'POST',
-      headers: svc(),
-      body: JSON.stringify({ p_user_id: userId }),
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/ai_segment_status`, {
+      method: 'POST', headers: svc(), body: JSON.stringify({ p_user_id: userId }),
     });
-    if (!res.ok) {
-      return { open: false, why: `portao indisponivel (HTTP ${res.status})` };
+    if (!res.ok) return null; // null = portao indisponivel -> nao gera nada
+    const segs = await res.json() as Array<{ editorial_slug: string; platform: string; target_avatar: string; destravada: boolean }>;
+    const set = new Set<string>();
+    for (const s of segs) {
+      if (s.destravada) set.add(segKey(s.editorial_slug, s.platform, s.target_avatar));
     }
-    const g = await res.json();
-    return {
-      open: g?.destravada === true,
-      why: `acuracia ${g?.acuracia}% · amostra ${g?.amostra}/${g?.min_amostra} · geracoes ${g?.geracoes}/${g?.min_geracoes}`,
-    };
+    return set;
   } catch (e) {
-    // Falhou ao perguntar? NAO gera. Uma campanha autonoma errando e cara;
-    // ficar parada 15min ate o proximo tick nao e.
-    return { open: false, why: `portao inacessivel: ${String(e).slice(0, 80)}` };
+    // Falhou ao perguntar? NAO gera. Campanha autonoma errando e cara.
+    console.error('[tick] portao inacessivel', String(e).slice(0, 80));
+    return null;
   }
 }
 
@@ -259,7 +260,11 @@ async function createPost(input: {
       companion_post_id: input.companion_post_id ?? null,
       platform: input.platform,
       format: 'image',
-      status: 'idea',
+      // Autonomia total (escolha do usuario, item 4): o tick so roda com a
+      // campanha DESTRAVADA, entao o post ja nasce aprovado — sem revisao
+      // humana. NAO cria ai_reviews: uma auto-aprovacao viraria um "intacto"
+      // falso e travaria o portao aberto em 100% pra sempre.
+      status: 'approved',
       title: input.title,
       briefing: input.briefing,
       carousel_text: input.carousel_text,
@@ -314,9 +319,23 @@ async function updateLineAfterRun(line: EditorialLine) {
   });
 }
 
-async function processLine(line: EditorialLine) {
+async function processLine(line: EditorialLine, unlocked: Set<string>) {
   const t0 = Date.now();
   const editorialSlug = line.editorial_slugs[line.rotation_cursor % line.editorial_slugs.length];
+  const avatar = line.target_avatar ?? 'ambos';
+
+  // Filtra as plataformas cujo SEGMENTO (editoria+plataforma+alvo) ja liberou.
+  // Segmento travado nao auto-gera: aquele conjunto ainda esta aprendendo.
+  const allPlatforms = (line.platforms && line.platforms.length) ? line.platforms : ['linkedin'];
+  const platforms = allPlatforms.filter((pl) => unlocked.has(segKey(editorialSlug, pl, avatar)));
+
+  if (platforms.length === 0) {
+    // Nenhum segmento deste editorial liberou — nao gasta IA. A rotacao avanca
+    // e o proximo tick tenta outro editorial.
+    await updateLineAfterRun(line);
+    return { line_id: line.id, skipped: 'segmento(s) travado(s)', editorial: editorialSlug };
+  }
+
   const previousPosts = await fetchLastPosts(line.id, 5);
   const kanbanColId = await fetchDefaultKanbanColumn(line.user_id);
 
@@ -324,7 +343,6 @@ async function processLine(line: EditorialLine) {
   const content = await generateContentForLine(line, editorialSlug, previousPosts);
   const t1 = Date.now();
 
-  const platforms = (line.platforms && line.platforms.length) ? line.platforms : ['linkedin'];
   let firstPostId: string | null = null;
 
   for (const platform of platforms) {
@@ -386,22 +404,27 @@ Deno.serve(async (req: Request) => {
 
     const results = [];
     let travadas = 0;
-    // Cache por usuario: varias linhas do mesmo dono nao precisam de N chamadas.
-    const portao = new Map<string, { open: boolean; why: string }>();
+    // Cache por usuario: os segmentos liberados sao os mesmos pra todas as linhas dele.
+    const segCache = new Map<string, Set<string> | null>();
 
     for (const line of lines) {
       try {
-        if (!portao.has(line.user_id)) {
-          portao.set(line.user_id, await gateOpen(line.user_id));
+        if (!segCache.has(line.user_id)) {
+          segCache.set(line.user_id, await fetchUnlockedSegments(line.user_id));
         }
-        const g = portao.get(line.user_id)!;
-        if (!g.open) {
+        const unlocked = segCache.get(line.user_id) ?? null;
+        if (unlocked === null) {
           travadas++;
-          console.log(`[tick] linha ${line.id} pulada — campanha travada (${g.why})`);
-          results.push({ line_id: line.id, skipped: 'campanha travada', gate: g.why });
+          console.log(`[tick] linha ${line.id} pulada — portao indisponivel`);
+          results.push({ line_id: line.id, skipped: 'portao indisponivel' });
           continue;
         }
-        results.push(await processLine(line));
+        if (unlocked.size === 0) {
+          travadas++;
+          results.push({ line_id: line.id, skipped: 'nenhum segmento liberado' });
+          continue;
+        }
+        results.push(await processLine(line, unlocked));
       } catch (e) {
         console.error('[tick] line failed', line.id, e);
         results.push({ line_id: line.id, error: String(e).slice(0, 200) });
