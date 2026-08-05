@@ -794,52 +794,12 @@ export const suggestionApi = {
 };
 
 // ----------------------------------------------------------------------------
-// ALMA — a psique viva (Fase 1: leitura do estado + editar objetivo)
+// BARRAMENTO DE EVENTOS (legado alma_eventos) — o Genesis substituiu a psique,
+// mas o barramento continua sendo a memória viva do sistema. emitEvento move a
+// oitava das dimensões (agora genesis_dimensoes) quando vem dimensão+delta.
 // ----------------------------------------------------------------------------
 export const almaApi = {
-  async snapshot(): Promise<import('@/types').AlmaSnapshot> {
-    const [estado, objetivo, dimensoes, crencas, sombra, pulsoes, eventos, lexico] =
-      await Promise.all([
-        db.selectOne<import('@/types').AlmaEstado>('alma_estado', {}),
-        db.selectOne<import('@/types').AlmaObjetivo>('alma_objetivo', {
-          is_current: 'eq.true', order: 'created_at.desc',
-        }),
-        db.select<import('@/types').AlmaDimensao>('alma_dimensoes', { order: 'ordem.asc' }),
-        db.select<import('@/types').AlmaCrenca>('alma_crencas', { order: 'forca.desc' }),
-        db.select<import('@/types').AlmaSombra>('alma_sombra', { ativa: 'eq.true' }),
-        db.select<import('@/types').AlmaPulsao>('alma_pulsoes', { order: 'ordem.asc' }),
-        db.select<import('@/types').AlmaEvento>('alma_eventos', {
-          order: 'created_at.desc', limit: '8',
-        }),
-        db.select<import('@/types').AlmaLexico>('bee_glossary', {
-          select: 'term,is_mantra', order: 'is_mantra.desc,term.asc',
-        }),
-      ]);
-    return { estado, objetivo, dimensoes, crencas, sombra, pulsoes, eventos, lexico };
-  },
-
-  // Objetivo é vivo: cada edição cria uma nova versão vigente (histórico preservado)
-  async updateObjetivo(texto: string): Promise<import('@/types').AlmaObjetivo> {
-    const userId = getCurrentUserId();
-    await db.update('alma_objetivo', { is_current: 'eq.true' }, { is_current: false });
-    const rows = await db.insert<import('@/types').AlmaObjetivo>('alma_objetivo', {
-      texto, is_current: true, edited_by: userId,
-    });
-    await db.insert(
-      'alma_eventos',
-      {
-        tipo: 'objetivo',
-        descricao: 'O criador reorientou o objetivo da Alma',
-        source: 'alma',
-        user_id: userId,
-        payload: { texto },
-      },
-      { returning: false },
-    );
-    return rows[0];
-  },
-
-  // Barramento: qualquer ação do sistema alimenta a Alma. Se vier dimensão+delta,
+  // Barramento: qualquer ação do sistema alimenta o Genesis. Se vier dimensão+delta,
   // move a oitava (clamp 0..100). Fire-and-forget: nunca quebra o fluxo chamador.
   async emitEvento(evt: {
     tipo: string;
@@ -863,22 +823,67 @@ export const almaApi = {
         { returning: false },
       );
       if (evt.dimensao_slug && evt.delta) {
-        const dim = await db.selectOne<import('@/types').AlmaDimensao>('alma_dimensoes', {
+        const dim = await db.selectOne<import('@/types').GenesisDimensao>('genesis_dimensoes', {
           slug: `eq.${evt.dimensao_slug}`,
           select: 'slug,oitava',
         });
         if (dim) {
           const nova = Math.max(0, Math.min(100, dim.oitava + evt.delta));
           await db.update(
-            'alma_dimensoes',
+            'genesis_dimensoes',
             { slug: `eq.${evt.dimensao_slug}` },
             { oitava: nova, updated_at: new Date().toISOString() },
           );
         }
       }
     } catch (e) {
-      console.warn('[alma.emitEvento]', e);
+      console.warn('[barramento.emitEvento]', e);
     }
+  },
+};
+
+// ----------------------------------------------------------------------------
+// GENESIS — a Constituicao Cognitiva (substitui o modelo da Alma).
+// Leitura completa + edição do núcleo (persona/voz/missão) e dos princípios.
+// ----------------------------------------------------------------------------
+export const genesisApi = {
+  async snapshot(): Promise<import('@/types').GenesisSnapshot> {
+    const [core, principios, avatares, paradigmas, fluxo, dimensoes] = await Promise.all([
+      db.selectOne<import('@/types').GenesisCore>('genesis_core', {}),
+      db.select<import('@/types').GenesisPrincipio>('genesis_principios', { order: 'camada.asc,ordem.asc' }),
+      db.select<import('@/types').GenesisAvatar>('genesis_avatares', { order: 'ordem.asc' }),
+      db.select<import('@/types').GenesisParadigma>('genesis_paradigmas', { order: 'ordem.asc' }),
+      db.select<import('@/types').GenesisFluxoPergunta>('genesis_fluxo', { order: 'ordem.asc' }),
+      db.select<import('@/types').GenesisDimensao>('genesis_dimensoes', { order: 'ordem.asc' }),
+    ]);
+    return { core, principios, avatares, paradigmas, fluxo, dimensoes };
+  },
+
+  // Núcleo é singleton (id=true). Edita persona, voz, missão, frases.
+  async updateCore(patch: Partial<import('@/types').GenesisCore>): Promise<import('@/types').GenesisCore> {
+    const { id: _id, ...safe } = patch;
+    const rows = await db.update<import('@/types').GenesisCore>(
+      'genesis_core',
+      { id: 'eq.true' },
+      { ...safe, updated_at: new Date().toISOString() },
+    );
+    if (!rows[0]) throw new Error('genesis_core nao encontrado');
+    return rows[0];
+  },
+
+  // Curadoria humana dos princípios: editar texto/aplicação, ligar/desligar.
+  async updatePrincipio(
+    id: string,
+    patch: Partial<import('@/types').GenesisPrincipio>,
+  ): Promise<import('@/types').GenesisPrincipio> {
+    const { id: _id, ...safe } = patch;
+    const rows = await db.update<import('@/types').GenesisPrincipio>(
+      'genesis_principios',
+      { id: `eq.${id}` },
+      safe,
+    );
+    if (!rows[0]) throw new Error('principio nao encontrado');
+    return rows[0];
   },
 };
 

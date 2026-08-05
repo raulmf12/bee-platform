@@ -767,6 +767,96 @@ export interface AlmaSnapshot {
 }
 
 // ---------------------------------------------------------------------------
+// GENESIS — a Constituicao Cognitiva (substitui o modelo da Alma)
+// ---------------------------------------------------------------------------
+export interface GenesisCore {
+  id?: boolean;
+  version: string;
+  pergunta_fundadora: string | null;
+  pergunta_silenciosa: string | null;
+  produto_real: string | null;
+  frase_organizadora: string | null;
+  missao: string | null;
+  persona_nome: string | null;
+  persona_postura: string | null;
+  voz_como_escreve: string | null;
+  voz_verbos: string[] | null;
+  voz_nunca: string[] | null;
+  updated_at?: string;
+}
+export type GenesisCamada =
+  | 'epistemologia' | 'constituicao_agente' | 'diagnostico' | 'linguagem' | 'paradigma';
+export interface GenesisPrincipio {
+  id: string;
+  camada: GenesisCamada | string;
+  codigo: string;
+  titulo: string | null;
+  principio: string;
+  aplicacao: string | null;
+  ordem: number;
+  inviolavel: boolean;
+  ativo: boolean;
+}
+export interface GenesisAvatar {
+  id: string;
+  slug: string;
+  nome: string;
+  ordem: number;
+  eixo_percepcao: number;
+  eixo_identificacao: number;
+  pergunta_central: string | null;
+  sofrimento: string | null;
+  relacao_autoridade: string | null;
+  linguagem: string | null;
+  frase_silenciosa: string | null;
+  o_que_teme: string | null;
+  o_que_busca: string | null;
+  frases_tipicas: string[] | null;
+  como_conversar: string | null;
+  erros_comuns: string | null;
+  movimento_seguinte: string | null;
+}
+export interface GenesisParadigma {
+  id: string;
+  slug: string;
+  nome: string;
+  arquetipo: string | null;
+  logica: string | null;
+  potencia: string | null;
+  limite: string | null;
+  sofrimento_tipico: string | null;
+  ordem: number;
+}
+export interface GenesisFluxoPergunta {
+  id: string;
+  ordem: number;
+  pergunta: string;
+  nota: string | null;
+}
+export interface GenesisDimensao {
+  id: string;
+  slug: string;
+  nome: string;
+  ordem: number;
+  natureza: string | null;
+  consciencia: string | null;
+  formula_mecanica: string | null;
+  frase_mecanica: string | null;
+  sintomas: string | null;
+  frase_sistemica: string | null;
+  impactos: string | null;
+  oitava: number;
+}
+export interface GenesisSnapshot {
+  core: GenesisCore | null;
+  principios: GenesisPrincipio[];
+  avatares: GenesisAvatar[];
+  paradigmas: GenesisParadigma[];
+  fluxo: GenesisFluxoPergunta[];
+  dimensoes: GenesisDimensao[];
+}
+
+// ---------------------------------------------------------------------------
 // EFICACIA DA IA
 // ---------------------------------------------------------------------------
 // O ciclo: gerar (ai_generations + 5 ai_variations) -> voce corrige -> Aprovar

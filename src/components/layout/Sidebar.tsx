@@ -14,7 +14,6 @@ import {
   Mic,
   Boxes,
   Paintbrush,
-  Heart,
   Brain,
   MessagesSquare,
   Users,
@@ -87,7 +86,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Perfil',
     icon: UserCircle,
     items: [
-      { to: '/alma', label: 'Alma', icon: Heart },
+      { to: '/genesis', label: 'Genesis', icon: BrainCircuit },
       { to: '/produtos', label: 'Produtos', icon: Package },
     ]
   },
