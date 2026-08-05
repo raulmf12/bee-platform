@@ -20,6 +20,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { usePostStore } from '@/store/postStore';
 import { useAuthStore } from '@/store/authStore';
@@ -68,6 +69,9 @@ interface BatchItem {
   tituloStatus: FieldStatus;
   legendaStatus: FieldStatus;
   editRounds: number;            // quantas correções a IA precisou
+  aiQuote: string;               // última frase gerada pela IA (baseline da medição)
+  aiCaption: string;             // última legenda gerada pela IA (baseline da medição)
+  manualEdits: number;           // quantas vezes o humano editou texto à mão
 }
 
 function isSameDay(iso: string, ref: Date): boolean {
@@ -134,6 +138,15 @@ export function NewPost() {
   const [batch, setBatch] = useState<BatchItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [correctingField, setCorrectingField] = useState<'titulo' | 'legenda' | null>(null);
+  const [correctingMode, setCorrectingMode] = useState<'corrigir' | 'rejeitar'>('rejeitar');
+  const [editingQuote, setEditingQuote] = useState(false);
+  const [quoteDraft, setQuoteDraft] = useState('');
+  const [savingQuote, setSavingQuote] = useState(false);
+  const [editingCaption, setEditingCaption] = useState(false);
+  const [captionDraft, setCaptionDraft] = useState('');
+  const [savingCaption, setSavingCaption] = useState(false);
+  // Fecha as edições manuais ao trocar de post ou voltar pra fila.
+  useEffect(() => { setEditingQuote(false); setEditingCaption(false); }, [activeId]);
   const [imageScheduleId, setImageScheduleId] = useState<string | null>(null);
 
   // --- Fluxo VÍDEO PRONTO / ROTEIRO (item único) ---
@@ -323,6 +336,7 @@ export function NewPost() {
           quote: row.quote, caption: row.caption, score, reason, codigo, sizeId,
           pick: { editorialSlug: pick.editorial.slug, platform: pick.platform, targetAvatar: pick.targetAvatar },
           tituloStatus: 'pending', legendaStatus: 'pending', editRounds: 0,
+          aiQuote: row.quote, aiCaption: row.caption, manualEdits: 0,
         });
       }
 
@@ -342,20 +356,91 @@ export function NewPost() {
     patchItem(activeItem.post.id, field === 'titulo' ? { tituloStatus: 'approved' } : { legendaStatus: 'approved' });
   }
 
-  // "Rejeitar" um campo abre o feedback → a IA aprende e regenera SÓ aquele campo.
-  function openFieldReject(field: 'titulo' | 'legenda') {
+  // Abre o feedback pra IA regenerar um campo. mode 'corrigir' APROVEITA o texto
+  // atual (refina mantendo a essência); 'rejeitar' cria do zero (nova ideia).
+  // O título usa os dois; a legenda usa só 'rejeitar'.
+  function openFieldFeedback(field: 'titulo' | 'legenda', mode: 'corrigir' | 'rejeitar') {
     if (!activeItem) return;
-    patchItem(activeItem.post.id, field === 'titulo' ? { tituloStatus: 'rejected' } : { legendaStatus: 'rejected' });
+    if (mode === 'rejeitar') {
+      patchItem(activeItem.post.id, field === 'titulo' ? { tituloStatus: 'rejected' } : { legendaStatus: 'rejected' });
+    }
     setCorrectingField(field);
+    setCorrectingMode(mode);
     setFeedbackAction('correct');
     setFeedbackOpen(true);
   }
 
+  // Edição manual da frase (título): re-renderiza a imagem, persiste e conta como
+  // edição manual — a medição registra que o humano reescreveu à mão.
+  async function saveManualQuote(item: BatchItem) {
+    const txt = quoteDraft.trim();
+    if (!txt || txt === item.quote) { setEditingQuote(false); return; }
+    setSavingQuote(true);
+    try {
+      const { fabricJson, templateId } = await renderBeeQuote(item.sizeId, txt);
+      await postApi.update(item.post.id, {
+        carousel_text: itemCarouselText(item, { quote: txt }),
+        carousel_fabric_json: [fabricJson],
+      });
+      patchItem(item.post.id, {
+        quote: txt, fabricJson, templateId,
+        manualEdits: item.manualEdits + 1,
+        tituloStatus: 'approved',
+      });
+      setEditingQuote(false);
+      toast.success('Frase editada à mão.');
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro ao salvar a frase.');
+    } finally {
+      setSavingQuote(false);
+    }
+  }
+
+  // Edição manual da legenda: persiste e conta como edição manual.
+  async function saveManualCaption(item: BatchItem) {
+    const txt = captionDraft.trim();
+    if (!txt || txt === item.caption) { setEditingCaption(false); return; }
+    setSavingCaption(true);
+    try {
+      await postApi.update(item.post.id, {
+        caption: txt,
+        carousel_text: itemCarouselText(item, { caption: txt }),
+      });
+      patchItem(item.post.id, {
+        caption: txt,
+        manualEdits: item.manualEdits + 1,
+        legendaStatus: 'approved',
+      });
+      setEditingCaption(false);
+      toast.success('Legenda editada à mão.');
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro ao salvar a legenda.');
+    } finally {
+      setSavingCaption(false);
+    }
+  }
+
   // Regenera SÓ o campo rejeitado, mantendo o outro (que você já pode ter
   // aprovado). Usa uma geração fresca e troca apenas o texto daquele campo.
-  async function regenerateField(item: BatchItem, field: 'titulo' | 'legenda', briefing: string) {
+  async function regenerateField(
+    item: BatchItem,
+    field: 'titulo' | 'legenda',
+    briefing: string,
+    mode: 'corrigir' | 'rejeitar' = 'rejeitar',
+  ) {
     setState('GENERATING');
     setGenLabel(field === 'titulo' ? 'Reescrevendo o título...' : 'Reescrevendo a legenda...');
+
+    // "corrigir" APROVEITA o texto atual (refina mantendo a essência);
+    // "rejeitar" cria um texto NOVO do zero, com outro ângulo. Vale pros dois campos.
+    const alvo = field === 'titulo' ? 'frase da imagem' : 'legenda';
+    const atual = field === 'titulo' ? item.quote : item.caption;
+    const effectiveBriefing = mode === 'corrigir'
+      ? `Aproveite e aprimore a ${alvo} atual, mantendo a essência e o sentido dela. Texto atual: "${atual}". Ajuste pedido: ${briefing || 'deixe mais forte, claro e afiado'}`
+      : `Crie uma ${alvo} completamente NOVA sobre o mesmo tema, do zero, com um ângulo diferente da anterior. ${briefing || ''}`.trim();
+
     try {
       const res = await edge.generateContent({
         editorial_slug: item.pick.editorialSlug,
@@ -363,7 +448,7 @@ export function NewPost() {
         target_platform: item.pick.platform === 'instagram' ? 'instagram' : 'linkedin',
         quote_max_chars: 200,
         variations: 1,
-        briefing: briefing || undefined,
+        briefing: effectiveBriefing || undefined,
       });
       const fresh = res.variations?.[0] ?? res;
 
@@ -375,7 +460,7 @@ export function NewPost() {
 
       if (field === 'titulo') {
         const { fabricJson, templateId } = await renderBeeQuote(item.sizeId, fresh.quote);
-        patch = { ...patch, quote: fresh.quote, fabricJson, templateId, tituloStatus: 'pending' };
+        patch = { ...patch, quote: fresh.quote, aiQuote: fresh.quote, fabricJson, templateId, tituloStatus: 'pending' };
         await postApi.update(item.post.id, {
           carousel_text: itemCarouselText(item, { quote: fresh.quote, virality_score: patch.score, virality_reason: patch.reason }),
           carousel_fabric_json: [fabricJson],
@@ -383,7 +468,7 @@ export function NewPost() {
           virality_reason: patch.reason ?? null,
         });
       } else {
-        patch = { ...patch, caption: fresh.caption, legendaStatus: 'pending' };
+        patch = { ...patch, caption: fresh.caption, aiCaption: fresh.caption, legendaStatus: 'pending' };
         await postApi.update(item.post.id, {
           caption: fresh.caption,
           carousel_text: itemCarouselText(item, { caption: fresh.caption, virality_score: patch.score, virality_reason: patch.reason }),
@@ -393,7 +478,9 @@ export function NewPost() {
       }
 
       patchItem(item.post.id, patch);
-      toast.success(field === 'titulo' ? 'Título regenerado.' : 'Legenda regenerada.');
+      toast.success(field === 'titulo'
+        ? (mode === 'corrigir' ? 'Frase corrigida (aproveitada).' : 'Frase nova gerada do zero.')
+        : 'Legenda regenerada.');
     } catch (e) {
       console.error(e);
       toast.error('Erro ao regenerar. Tente de novo.');
@@ -446,15 +533,15 @@ export function NewPost() {
         renderedSlides = { slide1: publicUrl };
       }
 
-      // Medição da eficácia. No wizard NÃO há edição manual de texto (só aprovar
-      // ou regenerar), então o baseline é o texto FINAL da IA — assim um post
-      // regenerado registra "intacto" (o humano não reescreveu à mão). As
-      // regenerações da IA já são contadas em ai_edit_rounds; as edições manuais,
-      // no PostEditor. Mantém os FKs (variation_id/generation_id) da linha real.
+      // Medição da eficácia. Baseline = último texto da IA (item.aiQuote); final =
+      // o que vai ao ar. Se o humano editou a frase à mão (manualEdits>0), o final
+      // difere do baseline → registra drift; senão, intacto. As regenerações da IA
+      // contam em ai_edit_rounds; as edições manuais, em manual_edits. Mantém os
+      // FKs (variation_id/generation_id) da linha real.
       void aiApi
         .recordReview({
           post_id: item.post.id,
-          variation: { ...item.variation, quote: item.quote, caption: item.caption },
+          variation: { ...item.variation, quote: item.aiQuote, caption: item.aiCaption },
           quote_final: item.quote,
           caption_final: item.caption,
         })
@@ -463,6 +550,7 @@ export function NewPost() {
       await postApi.update(item.post.id, {
         status: date ? 'scheduled' : 'approved',
         ai_edit_rounds: item.editRounds,
+        manual_edits: item.manualEdits,
         ...(date ? { scheduled_date: date.toISOString() } : {}),
         ...(renderedSlides ? { rendered_slides: renderedSlides } : {}),
       });
@@ -739,7 +827,7 @@ export function NewPost() {
       } catch (e) {
         console.error(e);
       }
-      await regenerateField(item, field, feedbackText);
+      await regenerateField(item, field, feedbackText, correctingMode);
       return;
     }
     await submitVideoRoteiroFeedback(feedbackText, facet);
@@ -1024,19 +1112,46 @@ export function NewPost() {
                 <Badge variant="outline">Título (frase da imagem)</Badge>
                 <StatusPill status={activeItem.tituloStatus} />
               </div>
-              <p className="font-display text-lg font-medium leading-relaxed">"{activeItem.quote}"</p>
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant={activeItem.tituloStatus === 'approved' ? 'accent' : 'outline'}
-                  onClick={() => approveField('titulo')}
-                >
-                  <Check className="h-4 w-4 mr-1" /> Aprovar título
-                </Button>
-                <Button size="sm" variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => openFieldReject('titulo')}>
-                  <RefreshCw className="h-4 w-4 mr-1" /> Rejeitar / regenerar
-                </Button>
-              </div>
+              {editingQuote ? (
+                <div className="space-y-2">
+                  <Textarea
+                    rows={2}
+                    maxLength={200}
+                    value={quoteDraft}
+                    onChange={(e) => setQuoteDraft(e.target.value)}
+                    className="font-display text-lg leading-relaxed"
+                    placeholder="Escreva a frase da imagem…"
+                  />
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="accent" disabled={savingQuote} onClick={() => void saveManualQuote(activeItem)}>
+                      <Check className="h-4 w-4 mr-1" /> {savingQuote ? 'Salvando…' : 'Salvar frase'}
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={savingQuote} onClick={() => setEditingQuote(false)}>Cancelar</Button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p className="font-display text-lg font-medium leading-relaxed">"{activeItem.quote}"</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant={activeItem.tituloStatus === 'approved' ? 'accent' : 'outline'}
+                      onClick={() => approveField('titulo')}
+                    >
+                      <Check className="h-4 w-4 mr-1" /> Aprovar
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => { setQuoteDraft(activeItem.quote); setEditingQuote(true); }}>
+                      <Edit3 className="h-4 w-4 mr-1" /> Editar à mão
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => openFieldFeedback('titulo', 'corrigir')}>
+                      <Sparkles className="h-4 w-4 mr-1" /> Corrigir (aproveita)
+                    </Button>
+                    <Button size="sm" variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => openFieldFeedback('titulo', 'rejeitar')}>
+                      <RefreshCw className="h-4 w-4 mr-1" /> Rejeitar (nova ideia)
+                    </Button>
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
 
@@ -1047,19 +1162,45 @@ export function NewPost() {
                 <Badge variant="outline">Legenda do post</Badge>
                 <StatusPill status={activeItem.legendaStatus} />
               </div>
-              <p className="text-sm whitespace-pre-wrap leading-relaxed text-muted-foreground">{activeItem.caption}</p>
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant={activeItem.legendaStatus === 'approved' ? 'accent' : 'outline'}
-                  onClick={() => approveField('legenda')}
-                >
-                  <Check className="h-4 w-4 mr-1" /> Aprovar legenda
-                </Button>
-                <Button size="sm" variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => openFieldReject('legenda')}>
-                  <RefreshCw className="h-4 w-4 mr-1" /> Rejeitar / regenerar
-                </Button>
-              </div>
+              {editingCaption ? (
+                <div className="space-y-2">
+                  <Textarea
+                    rows={6}
+                    value={captionDraft}
+                    onChange={(e) => setCaptionDraft(e.target.value)}
+                    className="text-sm leading-relaxed"
+                    placeholder="Escreva a legenda…"
+                  />
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="accent" disabled={savingCaption} onClick={() => void saveManualCaption(activeItem)}>
+                      <Check className="h-4 w-4 mr-1" /> {savingCaption ? 'Salvando…' : 'Salvar legenda'}
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={savingCaption} onClick={() => setEditingCaption(false)}>Cancelar</Button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p className="text-sm whitespace-pre-wrap leading-relaxed text-muted-foreground">{activeItem.caption}</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant={activeItem.legendaStatus === 'approved' ? 'accent' : 'outline'}
+                      onClick={() => approveField('legenda')}
+                    >
+                      <Check className="h-4 w-4 mr-1" /> Aprovar
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => { setCaptionDraft(activeItem.caption); setEditingCaption(true); }}>
+                      <Edit3 className="h-4 w-4 mr-1" /> Editar à mão
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => openFieldFeedback('legenda', 'corrigir')}>
+                      <Sparkles className="h-4 w-4 mr-1" /> Corrigir (aproveita)
+                    </Button>
+                    <Button size="sm" variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => openFieldFeedback('legenda', 'rejeitar')}>
+                      <RefreshCw className="h-4 w-4 mr-1" /> Rejeitar (nova ideia)
+                    </Button>
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
 
