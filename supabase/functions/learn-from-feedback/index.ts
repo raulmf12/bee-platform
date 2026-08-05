@@ -1,17 +1,10 @@
-// Edge function: learn-from-correction
+// Edge function: learn-from-feedback
 //
-// Recebe uma correcao (ai_reviews) e destila a LICAO por tras dela: nao "o que
-// mudou", mas a regra que a mudanca revela. "Cortou 'basicamente'" nao serve;
-// "corta adverbios de enchimento" serve, porque vale pro proximo post.
-//
-// As licoes entram sozinhas no prompt da proxima geracao (ai_learnings.ativo).
-// Isso NAO fere o principio de curadoria humana da metodologia: aqui a IA
-// aprende de um ato humano deliberado — voce corrigindo. Diferente do
-// mine-content, que destila de texto externo e por isso precisa da fila.
-//
-// DEDUP e o coracao disto. Sem ele, 30 correcoes viram 30 licoes quase-iguais
-// e o prompt vira ruido — o oposto de aprender. Licao parecida com uma que ja
-// existe REFORCA a existente (evidencias+1) em vez de criar outra.
+// Recebe um feedback EXPLÍCITO do usuário sobre uma geração (ex: "está muito longo")
+// e destila a LIÇÃO por trás dela. Diferente do learn-from-correction (que infere 
+// a lição de um diff de texto), aqui o usuário está dizendo o que quer.
+// A função transforma esse pedido em uma regra acionável e generalizável,
+// e a insere/reforça na tabela ai_learnings.
 
 import {
   errorResponse,
@@ -31,30 +24,18 @@ const MODEL_CHAIN = [
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-// Calibrado medindo pares reais de licoes, nao no chute:
-//   mesma licao com palavras diferentes .... ~0.60
-//     ("Elimine adverbios de preenchimento como 'basicamente'..." vs
-//      "Elimine adverbios redundantes como 'basicamente'...")
-//   licoes de fato diferentes ............... <=0.29
-//     ("Elimine adverbios..." vs "Comece a caption com o gancho...")
-// A janela util e (0.29 .. 0.60]; 0.45 fica no meio. O primeiro valor que
-// tentei, 0.72, ficava ACIMA do teto dos verdadeiros positivos: nada nunca
-// deduplicava e cada correcao criava uma licao quase-igual.
 const DEDUP_THRESHOLD = 0.45;
-// O prompt de geracao so carrega as licoes mais fortes; guardar 500 e inutil.
 const MAX_LEARNINGS_PER_USER = 40;
 
-interface Review {
-  id: string;
-  user_id: string;
+interface FeedbackRequest {
+  post_id?: string;
+  feedback_text: string;
   quote_original: string;
-  quote_final: string;
   caption_original: string;
-  caption_final: string;
-  quote_changed: boolean;
-  caption_changed: boolean;
-  changed: boolean;
-  drift_pct: number | null;
+  editorial_slug?: string;
+  platform?: string;
+  target_avatar?: string;
+  facet_focus?: 'texto' | 'legenda' | 'ambos';
 }
 
 interface Learning {
@@ -63,6 +44,23 @@ interface Learning {
   categoria: string;
   facet: string;
   evidencias: number;
+  editorial_slug?: string | null;
+  platform?: string | null;
+  target_avatar?: string | null;
+}
+
+interface Scope {
+  editorial_slug: string | null;
+  platform: string | null;
+  target_avatar: string | null;
+}
+
+// Duas lições no mesmo alcance? (a faceta já é filtrada antes) — mesma
+// semântica do commit-learning, pra o dedup ser consistente entre os writers.
+function sameScope(a: Partial<Scope>, b: Scope): boolean {
+  return (a.editorial_slug ?? null) === b.editorial_slug
+    && (a.platform ?? null) === b.platform
+    && (a.target_avatar ?? null) === b.target_avatar;
 }
 
 interface DistilledLearning {
@@ -80,11 +78,6 @@ function sbHeaders(extra: Record<string, string> = {}) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// SIMILARIDADE — dedup sem depender de embeddings.
-// Jaccard sobre bigramas de caracteres: pega parafrase ("corta adverbios" vs
-// "cortar os adverbios") sem precisar de outra chamada de modelo.
-// ---------------------------------------------------------------------------
 function bigrams(s: string): Set<string> {
   const norm = s
     .toLowerCase()
@@ -107,55 +100,45 @@ function similarity(a: string, b: string): number {
   return inter / (A.size + B.size - inter);
 }
 
-// ---------------------------------------------------------------------------
-// GEMINI
-// ---------------------------------------------------------------------------
 function buildSystemPrompt(): string {
   return [
-    'Voce analisa CORRECOES editoriais e destila a regra por tras delas.',
+    'Voce analisa FEEDBACKS DIRETOS de um humano sobre um post gerado por IA e destila a regra por tras.',
     '',
-    'Contexto: uma IA escreveu um post no estilo da Bee Consulting e um humano',
-    'corrigiu. Sua tarefa e entender O QUE A CORRECAO ENSINA sobre a voz dele.',
+    'Contexto: a IA escreveu um post. O humano rejeitou ou pediu para corrigir, fornecendo um motivo escrito.',
+    'Sua tarefa e entender o que esse feedback ensina sobre a voz dele e transformar em uma regra.',
     '',
     '=== O QUE FAZ UMA LICAO BOA ===',
     '- Ela e GENERALIZAVEL: vale pro proximo post, nao so pra este.',
     '  RUIM: "trocou a palavra planilha por relatorio"',
     '  BOA:  "prefere o termo concreto do dia a dia do cliente"',
-    '- Ela e ACIONAVEL: diz o que fazer/evitar, nao descreve o diff.',
-    '  RUIM: "o humano encurtou a frase"',
+    '- Ela e ACIONAVEL: diz o que fazer/evitar, em vez de descrever o erro.',
+    '  RUIM: "o texto esta longo"',
     '  BOA:  "corta a segunda oracao quando a primeira ja fecha o sentido"',
     '- Ela e ESPECIFICA o bastante pra mudar um texto futuro.',
     '  RUIM: "escrever melhor"',
     '',
-    '=== QUANDO NAO HA LICAO ===',
-    'Se a correcao foi so pontuacao, digitacao, ou preferencia irrepetivel,',
-    'devolva um array VAZIO. Inventar regra de um ajuste cosmetico envenena',
-    'as proximas geracoes — e pior que nao aprender nada.',
-    '',
     '=== SAIDA ===',
     'JSON puro, sem markdown: { "learnings": [ { "texto": "...", "categoria": "...", "facet": "..." } ] }',
-    '- No maximo 2 licoes. Prefira 1 boa a 2 fracas. Zero e resposta valida.',
+    '- No maximo 2 licoes. Prefira 1 boa a 2 fracas.',
     '- "texto": a regra, em 1 frase imperativa, em portugues. Max 120 chars.',
     '- "categoria": uma de voz | estrutura | lexico | tom | tamanho.',
-    '- "facet": "texto" se a licao e sobre a FRASE DA IMAGEM, "legenda" se e sobre a CAPTION.',
+    '- "facet": "texto" se a licao se aplica a FRASE DA IMAGEM, "legenda" se se aplica a CAPTION.',
   ].join('\n');
 }
 
-function buildUserPrompt(r: Review): string {
+function buildUserPrompt(r: FeedbackRequest): string {
   const parts: string[] = [];
-  if (r.quote_changed) {
-    parts.push('=== FRASE DA IMAGEM ===');
-    parts.push(`A IA escreveu:\n${r.quote_original}`);
-    parts.push(`O humano deixou:\n${r.quote_final}`);
-    parts.push('');
+  parts.push('=== TEXTO ORIGINAL GERADO PELA IA ===');
+  if (r.quote_original) parts.push(`Frase da imagem: "${r.quote_original}"`);
+  if (r.caption_original) parts.push(`Legenda: "${r.caption_original}"`);
+  parts.push('');
+  parts.push('=== FEEDBACK DO HUMANO ===');
+  parts.push(`"${r.feedback_text}"`);
+  if (r.facet_focus && r.facet_focus !== 'ambos') {
+    parts.push(`(O humano informou que este problema esta focado na: ${r.facet_focus})`);
   }
-  if (r.caption_changed) {
-    parts.push('=== CAPTION ===');
-    parts.push(`A IA escreveu:\n${r.caption_original}`);
-    parts.push(`O humano deixou:\n${r.caption_final}`);
-    parts.push('');
-  }
-  parts.push('O que esta correcao ensina sobre a voz dele? Devolva o JSON.');
+  parts.push('');
+  parts.push('Transforme esse feedback em regra(s) acionável(is) para o prompt da IA. Devolva o JSON.');
   return parts.join('\n');
 }
 
@@ -177,13 +160,7 @@ async function callGemini(
               systemInstruction: { parts: [{ text: sys }] },
               contents: [{ role: 'user', parts: [{ text: usr }] }],
               generationConfig: {
-                // Baixa de proposito: aqui queremos analise consistente, nao
-                // criatividade. A criatividade e do generate-content.
                 temperature: 0.3,
-                // Generoso apesar da saida ser curta: os modelos gemini 3.x
-                // sao thinking models e os tokens de raciocinio saem DESTE
-                // mesmo orcamento. Com 700 o modelo pensava e nao sobrava nada
-                // pra resposta — o JSON chegava vazio/truncado.
                 maxOutputTokens: 3000,
                 responseMimeType: 'application/json',
               },
@@ -216,14 +193,11 @@ async function callGemini(
 function parseLearnings(raw: string): DistilledLearning[] {
   const cleaned = (raw ?? '').trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim();
   if (!cleaned) return [];
-  // "Nao consegui destilar" e um desfecho legitimo: aprender e o efeito
-  // colateral de aprovar um post, e nunca deve derrubar a aprovacao. Zero
-  // licoes > um 500.
   let parsed: unknown;
   try {
     parsed = JSON.parse(cleaned);
   } catch (e) {
-    console.error('[learn] JSON invalido do modelo (%s): %s', (e as Error).message, cleaned.slice(0, 200));
+    console.error('[learn-from-feedback] JSON invalido do modelo (%s): %s', (e as Error).message, cleaned.slice(0, 200));
     return [];
   }
   const list = Array.isArray(parsed)
@@ -242,7 +216,6 @@ function parseLearnings(raw: string): DistilledLearning[] {
     .slice(0, 2);
 }
 
-// ---------------------------------------------------------------------------
 Deno.serve(async (req: Request) => {
   const cors = preflight(req);
   if (cors) return cors;
@@ -255,30 +228,8 @@ Deno.serve(async (req: Request) => {
     const rl = checkRateLimit(userId, 60_000, 30);
     if (!rl.ok) return errorResponse(`Rate limit. Tente em ${Math.ceil(rl.resetIn / 1000)}s`, 429);
 
-    const { review_id } = (await req.json()) as { review_id?: string };
-    if (!review_id) return errorResponse('review_id obrigatorio', 400);
-
-    const rRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/ai_reviews?id=eq.${review_id}&select=*`,
-      { headers: sbHeaders() },
-    );
-    const reviews = (await rRes.json()) as Review[];
-    const review = reviews?.[0];
-    if (!review) return errorResponse('Revisao nao encontrada', 404);
-    // O JWT diz quem e; a linha diz de quem e. Sem esta checagem daria pra
-    // aprender (e gastar a chave) em cima da correcao de outro usuario.
-    if (review.user_id !== userId) return errorResponse('Revisao de outro usuario', 403);
-
-    // Regua graduada: intacto e ajuste cosmetico (drift <= 15%) nao viram licao.
-    // Destilar de uma virgula gasta Gemini e polui o prompt. So reescrita passa.
-    // AJUSTE_MAX_DRIFT (15) tem que bater com api.ts e o ai_gate_status().
-    const AJUSTE_MAX_DRIFT = 15;
-    if (!review.changed) {
-      return jsonResponse({ success: true, learnings: [], skipped: 'sem alteracao' });
-    }
-    if ((review.drift_pct ?? 100) <= AJUSTE_MAX_DRIFT) {
-      return jsonResponse({ success: true, learnings: [], skipped: 'ajuste cosmetico' });
-    }
+    const body = (await req.json()) as FeedbackRequest;
+    if (!body.feedback_text) return errorResponse('feedback_text obrigatorio', 400);
 
     const apiKey = await getUserGeminiKey(userId);
     if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
@@ -286,7 +237,7 @@ Deno.serve(async (req: Request) => {
     const { text, usage, model_used } = await callGemini(
       apiKey,
       buildSystemPrompt(),
-      buildUserPrompt(review),
+      buildUserPrompt(body),
     );
     const distilled = parseLearnings(text);
 
@@ -297,40 +248,43 @@ Deno.serve(async (req: Request) => {
       model: model_used,
       tokens_input: usage.input,
       tokens_output: usage.output,
-      metadata: { fn: 'learn-from-correction', review_id },
+      metadata: { fn: 'learn-from-feedback', post_id: body.post_id },
     });
 
     if (distilled.length === 0) {
       return jsonResponse({ success: true, learnings: [], skipped: 'nada generalizavel' });
     }
 
-    // Licoes que ja existem
+    const scope: Scope = {
+      editorial_slug: body.editorial_slug || null,
+      platform: body.platform || null,
+      target_avatar: body.target_avatar || null,
+    };
+
     const exRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/ai_learnings?user_id=eq.${userId}&select=id,texto,categoria,facet,evidencias`,
+      `${SUPABASE_URL}/rest/v1/ai_learnings?user_id=eq.${userId}` +
+        `&select=id,texto,categoria,facet,evidencias,editorial_slug,platform,target_avatar`,
       { headers: sbHeaders() },
     );
-    const existing = (await exRes.json()) as Learning[];
+    const existing = exRes.ok ? ((await exRes.json()) as Learning[]) : [];
 
     const out: Array<{ texto: string; categoria: string; facet: string; reforcou: boolean }> = [];
 
     for (const d of distilled) {
-      // Dedup DENTRO da faceta: uma licao de texto nao reforca uma de legenda,
-      // mesmo que a frase seja parecida — sao eixos diferentes.
+      // Dedup só dentro da MESMA faceta E do MESMO alcance — senão um feedback
+      // com escopo reforçaria uma lição global (ou de outro escopo) por engano.
       const match = existing
-        .filter((e) => e.facet === d.facet)
+        .filter((e) => e.facet === d.facet && sameScope(e, scope))
         .map((e) => ({ e, sim: similarity(e.texto, d.texto) }))
         .sort((a, b) => b.sim - a.sim)[0];
 
       if (match && match.sim >= DEDUP_THRESHOLD) {
-        // Ja sabiamos disso: a correcao vira mais uma evidencia da mesma regra.
-        // E o que faz uma licao repetida pesar mais em vez de poluir.
         await fetch(`${SUPABASE_URL}/rest/v1/ai_learnings?id=eq.${match.e.id}`, {
           method: 'PATCH',
           headers: sbHeaders({ Prefer: 'return=minimal' }),
           body: JSON.stringify({
             evidencias: match.e.evidencias + 1,
             last_reforcada_em: new Date().toISOString(),
-            // Reforcar reativa: o padrao voltou a aparecer.
             ativo: true,
           }),
         });
@@ -339,7 +293,7 @@ Deno.serve(async (req: Request) => {
       }
 
       if (existing.length >= MAX_LEARNINGS_PER_USER) {
-        console.warn(`[learn] teto de ${MAX_LEARNINGS_PER_USER} licoes atingido, ignorando nova`);
+        console.warn(`[learn-from-feedback] teto de ${MAX_LEARNINGS_PER_USER} licoes atingido, ignorando nova`);
         continue;
       }
 
@@ -353,10 +307,12 @@ Deno.serve(async (req: Request) => {
           facet: d.facet,
           evidencias: 1,
           ativo: true,
-          // exemplo do eixo certo: se a licao e de legenda, mostra a caption
-          exemplo_antes: (d.facet === 'legenda' ? review.caption_original : review.quote_original)?.slice(0, 400),
-          exemplo_depois: (d.facet === 'legenda' ? review.caption_final : review.quote_final)?.slice(0, 400),
-          origem_review_id: review.id,
+          exemplo_antes: (d.facet === 'legenda' ? body.caption_original : body.quote_original)?.slice(0, 400),
+          exemplo_depois: `Feedback: ${body.feedback_text.slice(0, 300)}`,
+          origem: 'conversa',
+          editorial_slug: body.editorial_slug || null,
+          platform: body.platform || null,
+          target_avatar: body.target_avatar || null,
         }),
       });
       if (ins.ok) {
@@ -364,13 +320,14 @@ Deno.serve(async (req: Request) => {
         if (row) existing.push(row as Learning);
         out.push({ texto: d.texto, categoria: d.categoria, facet: d.facet, reforcou: false });
       } else {
-        console.error('[learn] insert falhou:', (await ins.text()).slice(0, 200));
+        console.error('[learn-from-feedback] insert falhou:', (await ins.text()).slice(0, 200));
       }
     }
 
     return jsonResponse({ success: true, learnings: out });
   } catch (e) {
-    console.error('[learn-from-correction]', e);
-    return errorResponse('Erro ao aprender com a correcao', 500, (e as Error).message);
+    console.error('[learn-from-feedback]', e);
+    return errorResponse('Erro ao extrair licao do feedback', 500, (e as Error).message);
   }
 });
+
