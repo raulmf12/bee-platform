@@ -1,8 +1,11 @@
-// Edge function: generate-content (versao Bee Editorial v2)
+// Edge function: generate-content (versao Bee Editorial v3 — governada pelo GENESIS)
 // Recebe { editorial_slug, arsenal_item_id?, target_avatar?, briefing? }.
 // Constroi prompt em camadas:
-//   1. Persona Bee
-//   2. Avatar alvo (Identificado / Incomodado / Ambos)
+//   0. CAMADA 0 — CONSTITUICAO COGNITIVA (GENESIS): missao, principios
+//      invioláveis (15 artigos + epistemologia + diagnostico + etica da
+//      linguagem), paradigmas, Fluxo Cognitivo (7 perguntas), persona.
+//   1. Uma lente: as 6 Dimensoes Sistemicas
+//   2. Leitura do interlocutor (avatar/estado da Matriz Cognitiva)
 //   3. Editorial + estrutura
 //   4. Arsenal selecionado
 //   5. Few-shot: 1-2 example_posts do mesmo editorial
@@ -10,6 +13,7 @@
 //   7. Glossario proprietario
 //   8. Hashtags obrigatorias
 //   9. RAG: top-K chunks relevantes
+//  10. Autochecagem (Regra de Ouro / régua da comunicacao)
 // Devolve { quote, caption, headline_type_used, analogy_used }
 
 import {
@@ -106,13 +110,29 @@ async function rpcRest<T>(fn: string, args: object): Promise<T> {
 interface BeeAudience { quem?: string; dor?: string; desejo?: string; objecoes?: string[]; gatilhos?: string[]; linguagem?: string }
 interface BeeEditorial { slug: string; name: string; description: string; frequency_hint: string; structure_template: string; emotional_sequence: string[]; objetivo?: string; tom?: string; fazer?: string[]; evitar?: string[]; temas?: string[]; audience?: BeeAudience }
 interface BeeArsenal { id?: string; title: string; summary: string; details: string | null; type: string }
-interface BeeAvatar { slug: string; name: string; state: string; dor: string; gatilhos: string[]; example_phrases: string[] }
 interface BeeExamplePost { id?: string; editorial_slug: string; image_quote: string; caption: string; why_good: string; headline_type: string; analogy: string }
 interface BeeGlossaryTerm { term: string; meaning: string; usage_note: string; must_appear: boolean }
 interface BeeStyleRule { rule: string; rationale: string }
 interface BeeHeadlineType { name: string; description: string; examples: string[] }
 interface BeeAnalogy { name: string; description: string; best_for: string }
 interface BeeHashtag { tag: string; required: boolean; topic: string | null }
+
+// GENESIS — a Constituicao Cognitiva (Camada 0) vira dado.
+interface GenesisCore {
+  persona_nome?: string; persona_postura?: string;
+  missao?: string; frase_organizadora?: string; pergunta_silenciosa?: string; produto_real?: string;
+  voz_como_escreve?: string; voz_verbos?: string[]; voz_nunca?: string[];
+}
+interface GenesisPrincipio { camada: string; codigo: string; titulo: string | null; principio: string; aplicacao: string | null; inviolavel: boolean }
+interface GenesisAvatar {
+  slug: string; nome: string; eixo_percepcao: number; eixo_identificacao: number;
+  pergunta_central: string | null; sofrimento: string | null; relacao_autoridade: string | null;
+  linguagem: string | null; frase_silenciosa: string | null; o_que_teme: string | null; o_que_busca: string | null;
+  frases_tipicas: string[] | null; como_conversar: string | null; erros_comuns: string | null; movimento_seguinte: string | null;
+}
+interface GenesisParadigma { nome: string; arquetipo: string; logica: string; sofrimento_tipico: string }
+interface GenesisDimensao { nome: string; oitava: number; frase_sistemica: string; natureza: string }
+interface GenesisFluxo { ordem: number; pergunta: string; nota: string | null }
 
 interface ReferencePost {
   id: string;
@@ -131,9 +151,11 @@ async function fetchReferencePost(id: string): Promise<ReferencePost | null> {
 }
 
 async function loadBeeContext(input: GenerateInput, userId: string) {
-  const avatarFilter = input.target_avatar && input.target_avatar !== 'ambos'
-    ? `&slug=eq.${input.target_avatar}`
-    : '';
+  // Mapeia o alvo (identificado/incomodado/ambos) pros slugs do genesis_avatares.
+  const avatarSlugs = !input.target_avatar || input.target_avatar === 'ambos'
+    ? ['identificado', 'incomodado']
+    : [input.target_avatar];
+  const avatarFilter = `&slug=in.(${avatarSlugs.join(',')})`;
 
   const [
     editorial,
@@ -148,10 +170,11 @@ async function loadBeeContext(input: GenerateInput, userId: string) {
     analogiesNew,
     analogiesUsed,
     hashtags,
-    almaObjetivo,
-    almaDimensoes,
-    almaPulsoes,
-    almaCrencas,
+    genesisCore,
+    genesisPrincipios,
+    genesisDimensoes,
+    genesisParadigmas,
+    genesisFluxo,
   ] = await Promise.all([
     fetchRest<BeeEditorial[]>(`/bee_editorials?slug=eq.${input.editorial_slug}&limit=1`),
     input.arsenal_item_id
@@ -159,7 +182,8 @@ async function loadBeeContext(input: GenerateInput, userId: string) {
       // Sem item escolhido: ROTACIONA — pega o item ativo menos usado / mais antigo
       // (metodologia viva: a cada geracao varia o material e evita repetir).
       : fetchRest<BeeArsenal[]>(`/bee_arsenal?editorial_slug=eq.${input.editorial_slug}&is_active=eq.true&order=last_used_at.asc.nullsfirst,usage_count.asc&limit=1`),
-    fetchRest<BeeAvatar[]>(`/bee_avatars?order=position.asc${avatarFilter}`),
+    // AVATARES — agora do genesis_avatares (os 5 estados da Matriz Cognitiva).
+    fetchRest<GenesisAvatar[]>(`/genesis_avatares?order=ordem.asc${avatarFilter}`),
     // Few-shot tambem rotaciona por frescor (exemplos ativos menos usados primeiro).
     fetchRest<BeeExamplePost[]>(`/bee_example_posts?editorial_slug=eq.${input.editorial_slug}&is_active=eq.true&order=last_used_at.asc.nullsfirst,position.asc&limit=2`),
     fetchRest<BeeGlossaryTerm[]>(`/bee_glossary?select=term,meaning,usage_note,must_appear`),
@@ -170,11 +194,12 @@ async function loadBeeContext(input: GenerateInput, userId: string) {
     fetchRest<BeeAnalogy[]>(`/bee_analogies?used=eq.false`),
     fetchRest<BeeAnalogy[]>(`/bee_analogies?used=eq.true`),
     fetchRest<BeeHashtag[]>(`/bee_hashtags?order=position.asc`),
-    // ALMA — camada 0 (o principio vivo que guia tudo)
-    fetchRest<{ texto: string }[]>(`/alma_objetivo?is_current=eq.true&select=texto&limit=1`),
-    fetchRest<{ nome: string; oitava: number; frase_sistemica: string; natureza: string }[]>(`/alma_dimensoes?select=nome,oitava,frase_sistemica,natureza&order=ordem.asc`),
-    fetchRest<{ nome: string; intensidade: number }[]>(`/alma_pulsoes?select=nome,intensidade&order=intensidade.desc&limit=3`),
-    fetchRest<{ texto: string }[]>(`/alma_crencas?direcao=eq.sistemico&select=texto&order=forca.desc&limit=4`),
+    // CAMADA 0 — GENESIS (a Constituicao Cognitiva que governa tudo abaixo)
+    fetchRest<GenesisCore[]>(`/genesis_core?limit=1`),
+    fetchRest<GenesisPrincipio[]>(`/genesis_principios?ativo=eq.true&select=camada,codigo,titulo,principio,aplicacao,inviolavel&order=camada.asc,ordem.asc`),
+    fetchRest<GenesisDimensao[]>(`/genesis_dimensoes?select=nome,oitava,frase_sistemica,natureza&order=ordem.asc`),
+    fetchRest<GenesisParadigma[]>(`/genesis_paradigmas?select=nome,arquetipo,logica,sofrimento_tipico&order=ordem.asc`),
+    fetchRest<GenesisFluxo[]>(`/genesis_fluxo?select=ordem,pergunta,nota&order=ordem.asc`),
   ]);
 
   // APRENDIZADOS do SEGMENTO desta geracao (correcoes + conversa com o agente).
@@ -202,11 +227,12 @@ async function loadBeeContext(input: GenerateInput, userId: string) {
     headlineTypes,
     analogiesNew, analogiesUsed,
     hashtags,
-    alma: {
-      objetivo: almaObjetivo[0]?.texto ?? '',
-      dimensoes: almaDimensoes,
-      pulsoes: almaPulsoes,
-      crencas: almaCrencas,
+    genesis: {
+      core: genesisCore[0],
+      principios: genesisPrincipios,
+      dimensoes: genesisDimensoes,
+      paradigmas: genesisParadigmas,
+      fluxo: genesisFluxo,
     },
     learnings,
   };
@@ -290,55 +316,95 @@ function buildSystemPrompt(
   const ai = ctx.arsenalItem;
   const lines: string[] = [];
 
-  // CAMADA 0 — A ALMA (o principio vivo que guia TUDO abaixo)
-  const alma = ctx.alma;
-  if (alma) {
-    lines.push('=== CAMADA 0 — A ALMA (o principio vivo que guia tudo) ===');
-    if (alma.objetivo) lines.push(`Objetivo vivo da Bee: ${alma.objetivo}`);
-    lines.push('A Alma e AMORAL: nao escreve por "certo x errado" — mostra a consequencia de cada olhar. Considera possibilidades, nao pensa em binario.');
-    if (alma.dimensoes?.length) {
-      lines.push('As 6 Dimensoes agora (0=mecanico, 100=sistemico) — escreva SEMPRE do olhar sistemico, com atencao redobrada onde a oitava esta mais baixa:');
-      for (const d of alma.dimensoes) {
-        lines.push(`  • ${d.nome} (${d.oitava}): "${d.frase_sistemica}"`);
-      }
+  // CAMADA 0 — CONSTITUICAO COGNITIVA (GENESIS): governa TUDO abaixo.
+  const g = ctx.genesis;
+  const core = g?.core;
+  lines.push('=== CAMADA 0 — CONSTITUICAO COGNITIVA (GENESIS) ===');
+  lines.push('Esta camada GOVERNA tudo abaixo. Se qualquer instrucao posterior conflitar com ela, esta prevalece.');
+  if (core?.missao) lines.push(`Missao: ${core.missao}`);
+  if (core?.frase_organizadora) lines.push(`Frase que organiza tudo: ${core.frase_organizadora}`);
+  if (core?.pergunta_silenciosa) lines.push(`Pergunta silenciosa (carregue sempre): ${core.pergunta_silenciosa}`);
+  lines.push('');
+
+  if (g?.principios?.length) {
+    const byCamada = (c: string) => g.principios.filter((p) => p.camada === c);
+    const art = byCamada('constituicao_agente');
+    const epi = byCamada('epistemologia');
+    const diag = byCamada('diagnostico');
+    const ling = byCamada('linguagem');
+    const para = byCamada('paradigma');
+
+    if (art.length) {
+      lines.push('CONSTITUICAO DO AGENTE (invioláveis):');
+      art.forEach((p) => lines.push(`  • ${p.principio}${p.aplicacao ? ` — ${p.aplicacao}` : ''}`));
     }
-    if (alma.crencas?.length) {
-      lines.push('Crencas vivas a sustentar: ' + alma.crencas.map((c) => `"${c.texto}"`).join(' · '));
+    if (epi.length) {
+      lines.push('EPISTEMOLOGIA (como sabemos o que sabemos):');
+      epi.forEach((p) => lines.push(`  • ${p.principio}`));
     }
-    if (alma.pulsoes?.length) {
-      lines.push('Pulsoes ativas (a energia do conteudo): ' + alma.pulsoes.map((p) => p.nome).join(' · '));
+    if (diag.length) {
+      lines.push('DIAGNOSTICO (como observamos antes de escrever):');
+      diag.forEach((p) => lines.push(`  • ${p.principio}`));
     }
+    if (ling.length) {
+      lines.push('ETICA DA LINGUAGEM:');
+      ling.filter((p) => p.codigo !== 'ling-regua').forEach((p) => lines.push(`  • ${p.principio}`));
+    }
+    para.forEach((p) => lines.push(`Pergunta operacional dos paradigmas: ${p.principio}${p.aplicacao ? ` (${p.aplicacao})` : ''}`));
     lines.push('');
   }
 
-  // PERSONA
-  lines.push('Voce e Marcos Piccini, escrevendo para a Bee Academy.');
-  lines.push('Persona: alguem que viu de dentro. Viveu o colapso antes de nomea-lo.');
-  lines.push('Passou pela propria travessia antes de convidar outros. Nao tem respostas prontas.');
-  lines.push('Tem perguntas que ninguem esta fazendo. Voz com autoridade que vem de 20 anos');
-  lines.push('de cases reais e dois livros escritos. Fala de dentro do sistema, nao de cima dele.');
+  // OS DOIS PARADIGMAS — localizar de onde o leitor percebe (arquétipos, nao religiao)
+  if (g?.paradigmas?.length) {
+    lines.push('OS DOIS PARADIGMAS (arquétipos, nunca religiao) — localize de onde o leitor percebe a realidade:');
+    g.paradigmas.forEach((pp) => lines.push(`  • ${pp.nome} (${pp.arquetipo}): ${pp.logica} Sofrimento tipico: ${pp.sofrimento_tipico}`));
+    lines.push('A maturidade INTEGRA ordem e liberdade — nunca escolhe um lado nem humilha quem esta no outro.');
+    lines.push('');
+  }
+
+  // FLUXO COGNITIVO — raciocine ANTES de escrever
+  if (g?.fluxo?.length) {
+    lines.push('FLUXO COGNITIVO — responda em silencio, nesta ordem, ANTES de escrever (nao imprima as respostas):');
+    g.fluxo.forEach((f) => lines.push(`  ${f.ordem}. ${f.pergunta}${f.nota ? ` (${f.nota})` : ''}`));
+    lines.push('');
+  }
+
+  // PERSONA (do genesis_core — Marcos Piccini)
+  lines.push(`Voce e ${core?.persona_nome ?? 'Marcos Piccini'}, escrevendo para a Bee Academy.`);
+  if (core?.persona_postura) lines.push(`Postura: ${core.persona_postura}`);
+  lines.push('Autoridade que vem de 20 anos de cases reais e dois livros. Nao tem respostas prontas — tem perguntas que ninguem esta fazendo.');
+  if (core?.voz_como_escreve) lines.push(`Como escreve: ${core.voz_como_escreve}`);
+  if (core?.voz_verbos?.length) lines.push(`Verbos de percepcao a preferir: ${core.voz_verbos.join(', ')}.`);
+  if (core?.voz_nunca?.length) lines.push(`Nunca: ${core.voz_nunca.join(', ')}.`);
   lines.push('');
 
-  // AVATAR ALVO
+  // UMA LENTE — as 6 Dimensoes Sistemicas (nao o centro; uma forma de perceber)
+  if (g?.dimensoes?.length) {
+    lines.push('=== UMA LENTE: AS 6 DIMENSOES SISTEMICAS (0=mecanico, 100=sistemico) ===');
+    lines.push('Sao UMA lente de percepcao, nao o centro. Escreva do olhar sistemico, com atencao redobrada onde a oitava esta mais baixa:');
+    g.dimensoes.forEach((d) => lines.push(`  • ${d.nome} (${d.oitava}): "${d.frase_sistemica}"`));
+    lines.push('');
+  }
+
+  // LEITURA DO INTERLOCUTOR — avatar/estado da Matriz Cognitiva
   if (ctx.avatars.length) {
-    if (ctx.avatars.length === 1) {
-      const av = ctx.avatars[0];
-      lines.push(`=== AVATAR ALVO: ${av.name} ===`);
-      lines.push(`Estado: ${av.state}`);
-      lines.push(`Dor: ${av.dor}`);
-      lines.push(`Gatilhos a usar: ${av.gatilhos?.join(', ')}`);
-      if (av.example_phrases?.length) {
-        lines.push(`Tom esperado (exemplos):`);
-        av.example_phrases.slice(0, 2).forEach((p) => lines.push(`  • "${p}"`));
-      }
-      lines.push('');
-    } else {
-      lines.push('=== AVATARES BEE (gere para ambos, mas o post deve ressoar nos dois) ===');
-      ctx.avatars.forEach((av) => {
-        lines.push(`- ${av.name}: ${av.state}`);
-      });
-      lines.push('');
+    lines.push('=== LEITURA DO INTERLOCUTOR (estado de consciencia) ===');
+    lines.push('Escreva do estado onde a pessoa esta, mirando o PROXIMO movimento possivel — nunca dois adiante. Os avatares sao ESTADOS, nunca identidades: jamais rotule a pessoa.');
+    if (ctx.avatars.length > 1) {
+      lines.push('O post deve ressoar nos dois estados abaixo sem tratar nenhum como superior.');
     }
+    ctx.avatars.forEach((av) => {
+      lines.push(`\n--- ${av.nome} (percepcao ${av.eixo_percepcao}/100 · identificacao ${av.eixo_identificacao}/100) ---`);
+      if (av.pergunta_central) lines.push(`Pergunta central dele: "${av.pergunta_central}"`);
+      if (av.sofrimento) lines.push(`Sofrimento: ${av.sofrimento}`);
+      if (av.linguagem) lines.push(`Linguagem que reconhece: ${av.linguagem}`);
+      if (av.frase_silenciosa) lines.push(`Frase silenciosa: "${av.frase_silenciosa}"`);
+      if (av.frases_tipicas?.length) lines.push(`Frases tipicas: ${av.frases_tipicas.map((f) => `"${f}"`).join(' · ')}`);
+      if (av.como_conversar) lines.push(`COMO CONVERSAR: ${av.como_conversar}`);
+      if (av.erros_comuns) lines.push(`Erro a evitar: ${av.erros_comuns}`);
+      if (av.movimento_seguinte) lines.push(`Proximo movimento a convidar (sutil, sem empurrar): ${av.movimento_seguinte}`);
+    });
+    lines.push('');
   }
 
   // EDITORIAL
@@ -552,6 +618,14 @@ function buildSystemPrompt(
   } else {
     lines.push('- Devolva um JSON com a chave "variations": um array de 1 objeto { "quote", "caption", "headline_type_used", "analogy_used", "virality_score", "virality_reason" }.');
   }
+
+  // AUTOCHECAGEM — Regra de Ouro / régua da comunicacao (Genesis)
+  lines.push('');
+  lines.push('=== AUTOCHECAGEM ANTES DE DEVOLVER (Regra de Ouro) ===');
+  const regua = ctx.genesis?.principios?.find((p) => p.codigo === 'ling-regua');
+  if (regua) lines.push(`- ${regua.principio}`);
+  lines.push('- Se esta pessoa nunca mais conversar com voce, este texto continua produzindo vida (percepcao/liberdade)? Se nao, reescreva antes de devolver.');
+  lines.push('');
   lines.push('- Saida em JSON puro, SEM markdown.');
 
   return lines.join('\n');
@@ -799,7 +873,7 @@ Deno.serve(async (req: Request) => {
       ctx.editorial.name,
       ctx.arsenalItem?.title,
       ctx.arsenalItem?.summary,
-      ctx.avatars[0]?.dor,
+      ctx.avatars[0]?.sofrimento,
       input.briefing,
       referencePost?.carousel_text?.quote,
     ].filter(Boolean).join(' . ');
