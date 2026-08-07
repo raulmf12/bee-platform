@@ -49,8 +49,13 @@ type WizardFlow = 'image' | 'video_ready' | 'roteiro';
 type FieldStatus = 'pending' | 'approved' | 'rejected';
 
 const MAX_VIDEO_MB = 200;
-const BATCH_MIN = 3;
+const BATCH_MIN = 1;
 const BATCH_MAX = 5;
+const BATCH_DEFAULT = 3;
+// Autochecagem interna: abaixo disso o post é regenerado (invisível ao usuário).
+const QA_PASS = 70;
+const QA_MAX_RETRIES = 1;   // 1 nova tentativa (2 gerações no total, no pior caso)
+const PLATFORMS: Platform[] = ['linkedin', 'instagram'];
 
 // Um post de imagem dentro do lote gerado. Cada um é independente e revisado
 // individualmente (título e legenda separados).
@@ -72,8 +77,7 @@ interface BatchItem {
   aiQuote: string;               // última frase gerada pela IA (baseline da medição)
   aiCaption: string;             // última legenda gerada pela IA (baseline da medição)
   manualEdits: number;           // quantas vezes o humano editou texto à mão
-  qa?: QaResult | null;          // autochecagem contra os critérios das Diretrizes
-  qaBusy?: boolean;
+  qa?: QaResult | null;          // autochecagem interna (não exibida; guia a regeneração)
 }
 
 function isSameDay(iso: string, ref: Date): boolean {
@@ -130,17 +134,31 @@ export function NewPost() {
   const [state, setState] = useState<WizardState>('FORMAT');
   const [flow, setFlow] = useState<WizardFlow>('image');
   const [genLabel, setGenLabel] = useState('Deixe a mágica acontecer...');
+  const [genProgress, setGenProgress] = useState(0); // 0-100, barra de progresso do lote
 
   // Dados Mestre (para Auto-seleção)
   const [editorials, setEditorials] = useState<BeeEditorial[]>([]);
   const [avatars, setAvatars] = useState<BeeAvatar[]>([]);
 
   // --- Fluxo IMAGEM (lote) ---
-  const [batchQuantity, setBatchQuantity] = useState(BATCH_MIN);
+  const [batchQuantity, setBatchQuantity] = useState(BATCH_DEFAULT);
+  // Seleção manual (opcional). Vazio = a IA escolhe e varia sozinha.
+  const [selPlatforms, setSelPlatforms] = useState<Platform[]>([]);
+  const [selEditorials, setSelEditorials] = useState<string[]>([]);
   const [batch, setBatch] = useState<BatchItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [correctingField, setCorrectingField] = useState<'titulo' | 'legenda' | null>(null);
   const [correctingMode, setCorrectingMode] = useState<'corrigir' | 'rejeitar'>('rejeitar');
+  // Rejeição do post inteiro (título + legenda) via diálogo de motivo.
+  const [correctingWhole, setCorrectingWhole] = useState(false);
+  // Limites de seleção dependem da quantidade: até min(2, qty) plataformas e até qty editorias.
+  const maxPlatforms = Math.min(PLATFORMS.length, batchQuantity);
+  const maxEditorials = batchQuantity;
+  // Ao reduzir a quantidade, apara seleções que passaram do novo limite.
+  useEffect(() => {
+    setSelPlatforms((p) => p.slice(0, Math.min(PLATFORMS.length, batchQuantity)));
+    setSelEditorials((e) => e.slice(0, batchQuantity));
+  }, [batchQuantity]);
   const [editingQuote, setEditingQuote] = useState(false);
   const [quoteDraft, setQuoteDraft] = useState('');
   const [savingQuote, setSavingQuote] = useState(false);
@@ -181,25 +199,6 @@ export function NewPost() {
 
   function patchItem(id: string, patch: Partial<BatchItem>) {
     setBatch((prev) => prev.map((it) => (it.post.id === id ? { ...it, ...patch } : it)));
-  }
-
-  // AUTOCHECAGEM (QA): avalia o texto ATUAL do item contra os critérios das
-  // Diretrizes. Não bloqueia nem regenera — só mostra nota + o que falhou.
-  async function runQa(item: BatchItem) {
-    patchItem(item.post.id, { qaBusy: true });
-    try {
-      const res = await edge.qaCheck({
-        quote: item.quote,
-        caption: item.caption,
-        target_platform: item.pick.platform === 'instagram' ? 'instagram' : 'linkedin',
-        editorial_slug: item.pick.editorialSlug,
-      });
-      patchItem(item.post.id, { qa: { score: res.score ?? 0, checks: res.checks, resumo: res.resumo }, qaBusy: false });
-    } catch (e) {
-      console.error(e);
-      toast.error(e instanceof Error ? e.message : 'Erro na autochecagem');
-      patchItem(item.post.id, { qaBusy: false });
-    }
   }
 
   // Monta o carousel_text a partir dos valores ATUAIS do item (não do post
@@ -263,63 +262,154 @@ export function NewPost() {
   // ==========================================================================
   // FLUXO IMAGEM — geração em LOTE (3–5 posts independentes)
   // ==========================================================================
-  async function handleStartImageBatch(quantity: number) {
+  // Monta as escolhas (editoria/plataforma/avatar) de cada post do lote.
+  // Respeita a seleção manual (rotacionando quando há menos itens que posts);
+  // sem seleção, a IA varia sozinha (plataforma alternada, editoria sem repetir).
+  function buildPicks(quantity: number) {
+    const picks: { editorial: BeeEditorial; platform: Platform; targetAvatar: TargetAvatar }[] = [];
+    const avatarPool: TargetAvatar[] = ['ambos', 'ambos', 'ambos', ...avatars.map((a) => a.slug as TargetAvatar)];
+    // ponto de partida da alternância automática: o oposto da última plataforma usada
+    const lastPlatform = [...posts]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .map((p) => p.platform).find(Boolean);
+    let autoPlat: Platform = lastPlatform === 'linkedin' ? 'instagram' : 'linkedin';
+    let lastEdi: string | null = null;
+
+    for (let i = 0; i < quantity; i++) {
+      // plataforma
+      let platform: Platform;
+      if (selPlatforms.length) {
+        platform = selPlatforms[i % selPlatforms.length];
+      } else {
+        platform = autoPlat;
+        autoPlat = autoPlat === 'linkedin' ? 'instagram' : 'linkedin';
+      }
+      // editoria
+      let editorial: BeeEditorial;
+      if (selEditorials.length) {
+        const slug = selEditorials[i % selEditorials.length];
+        editorial = editorials.find((e) => e.slug === slug) ?? editorials[0];
+      } else {
+        let pool = editorials.filter((e) => e.slug !== lastEdi);
+        if (!pool.length) pool = editorials;
+        editorial = weightedPick(pool, editorialWeight);
+        lastEdi = editorial.slug;
+      }
+      const targetAvatar = avatarPool[Math.floor(Math.random() * avatarPool.length)];
+      picks.push({ editorial, platform, targetAvatar });
+    }
+    return picks;
+  }
+
+  // Gera UM post (título + legenda) e roda a autochecagem INTERNA. Se reprovar
+  // (nota < QA_PASS), regenera até QA_MAX_RETRIES vezes usando o que falhou como
+  // briefing, e devolve a melhor versão. Invisível ao usuário.
+  async function generateOneWithQa(
+    pick: { editorial: BeeEditorial; platform: Platform; targetAvatar: TargetAvatar },
+    idx: number,
+    quantity: number,
+  ) {
+    type Cand = { v: any; qa: QaResult | null; qaScore: number };
+    let best: Cand | null = null;
+    let briefing: string | undefined;
+
+    for (let attempt = 0; attempt <= QA_MAX_RETRIES; attempt++) {
+      const pctBase = ((idx + (attempt === 0 ? 0.15 : 0.5)) / quantity) * 100;
+      setGenProgress(Math.round(pctBase));
+      setGenLabel(attempt === 0
+        ? `Escrevendo o post ${idx + 1} de ${quantity} — ${pick.editorial.name} · ${pick.platform}...`
+        : `Refinando o post ${idx + 1} para bater a régua de qualidade...`);
+
+      const res = await edge.generateContent({
+        editorial_slug: pick.editorial.slug,
+        target_avatar: pick.targetAvatar,
+        target_platform: pick.platform === 'instagram' ? 'instagram' : 'linkedin',
+        quote_max_chars: 200,
+        variations: 1,
+        briefing,
+      });
+      const v = res.variations?.[0] ?? res;
+
+      setGenLabel(`Checando a qualidade do post ${idx + 1}...`);
+      let qa: QaResult | null = null;
+      try {
+        const q = await edge.qaCheck({
+          quote: v.quote, caption: v.caption,
+          target_platform: pick.platform === 'instagram' ? 'instagram' : 'linkedin',
+          editorial_slug: pick.editorial.slug,
+        });
+        qa = { score: q.score ?? 100, checks: q.checks, resumo: q.resumo };
+      } catch {
+        qa = null; // sem QA disponível: não trava o fluxo
+      }
+      const qaScore = qa?.score ?? 100; // sem critérios cadastrados => passa
+      const cand: Cand = { v, qa, qaScore };
+      if (!best || qaScore > best.qaScore) best = cand;
+      if (qaScore >= QA_PASS) break;
+
+      const failed = (qa?.checks ?? []).filter((c) => !c.passed);
+      briefing = failed.length
+        ? `A versão anterior falhou nestes critérios de qualidade — corrija especificamente: ${failed.map((f) => `${f.titulo}: ${f.nota}`).join(' | ')}`
+        : 'Aumente a qualidade, a força do gancho e a densidade do texto.';
+    }
+
+    const v = best!.v;
+    return {
+      quote: v.quote as string,
+      caption: v.caption as string,
+      headline_type: v.headline_type_used as string | undefined,
+      analogy: v.analogy_used as string | undefined,
+      score: (v.virality_score ?? null) as number | null,
+      reason: (v.virality_reason ?? null) as string | null,
+      qa: best!.qa,
+    };
+  }
+
+  async function handleStartImageBatch() {
     if (editorials.length === 0) {
       toast.error('Carregando conhecimentos... aguarde 1 segundo.');
       return;
     }
+    const quantity = batchQuantity;
     setFlow('image');
     setState('GENERATING');
-    setGenLabel(`Gerando ${quantity} posts — cada um com nota de viralização...`);
+    setGenProgress(2);
+    setGenLabel('Preparando o lote...');
     try {
-      const pick = autoChoose();
-
-      const result = await edge.generateContent({
-        editorial_slug: pick.editorial.slug,
-        target_avatar: pick.targetAvatar,
-        target_platform: pick.platform,
-        quote_max_chars: 200,
-        variations: quantity,
-      });
-
-      const list = result.variations?.length ? result.variations : [result];
-
-      const generation = await aiApi.createGeneration({
-        editorial_slug: pick.editorial.slug,
-        target_avatar: pick.targetAvatar,
-        platform: pick.platform,
-        variations_count: list.length,
-      });
-
-      const pristineRows = await aiApi.createVariations(
-        generation.id,
-        list.map((v, i) => ({
-          idx: i + 1,
-          quote: v.quote,
-          caption: v.caption,
-          headline_type: v.headline_type_used,
-          analogy: v.analogy_used,
-          virality_score: v.virality_score ?? null,
-          virality_reason: v.virality_reason ?? null,
-        })),
-      );
-
-      // Bases da nomenclatura, calculadas UMA vez (o create() abaixo cresce o
-      // store — usar posts.length dentro do loop contaria duplicado).
+      const picks = buildPicks(quantity);
       const now = new Date();
       const baseGlobal = posts.length;
       const baseDay = posts.filter((p) => isSameDay(p.created_at, now)).length;
-      const sizeId: BeeQuoteSize = pick.platform === 'instagram' ? 'square' : 'portrait';
 
       const items: BatchItem[] = [];
-      for (let i = 0; i < pristineRows.length; i++) {
-        const row = pristineRows[i];
-        const v = list[i];
-        const score = v.virality_score ?? null;
-        const reason = v.virality_reason ?? null;
-        const codigo = buildCodigo(now, baseGlobal + i + 1, baseDay + i + 1, i + 1);
+      for (let i = 0; i < quantity; i++) {
+        const pick = picks[i];
+        const sizeId: BeeQuoteSize = pick.platform === 'instagram' ? 'square' : 'portrait';
 
-        const { fabricJson, templateId } = await renderBeeQuote(sizeId, row.quote);
+        // gera + autochecagem interna (pode regenerar)
+        const fresh = await generateOneWithQa(pick, i, quantity);
+
+        setGenLabel(`Montando o post ${i + 1} de ${quantity}...`);
+        setGenProgress(Math.round(((i + 0.85) / quantity) * 100));
+
+        const generation = await aiApi.createGeneration({
+          editorial_slug: pick.editorial.slug,
+          target_avatar: pick.targetAvatar,
+          platform: pick.platform,
+          variations_count: 1,
+        });
+        const [row] = await aiApi.createVariations(generation.id, [{
+          idx: 1,
+          quote: fresh.quote,
+          caption: fresh.caption,
+          headline_type: fresh.headline_type,
+          analogy: fresh.analogy,
+          virality_score: fresh.score,
+          virality_reason: fresh.reason,
+        }]);
+
+        const codigo = buildCodigo(now, baseGlobal + i + 1, baseDay + i + 1, i + 1);
+        const { fabricJson, templateId } = await renderBeeQuote(sizeId, fresh.quote);
 
         const post = await create({
           template_id: templateId,
@@ -328,25 +418,26 @@ export function NewPost() {
           format: 'image',
           status: 'pending_approval',
           codigo,
-          virality_score: score,
-          virality_reason: reason,
-          caption: row.caption,
+          virality_score: fresh.score,
+          virality_reason: fresh.reason,
+          caption: fresh.caption,
           carousel_text: {
-            quote: row.quote,
-            caption: row.caption,
-            headline_type: row.headline_type,
-            analogy: row.analogy,
-            virality_score: score,
-            virality_reason: reason,
+            quote: fresh.quote,
+            caption: fresh.caption,
+            headline_type: fresh.headline_type,
+            analogy: fresh.analogy,
+            virality_score: fresh.score,
+            virality_reason: fresh.reason,
           },
           carousel_fabric_json: [fabricJson],
           metadata: {
             canvas_size: sizeId,
             editorial_slug: pick.editorial.slug,
             target_avatar: pick.targetAvatar,
-            variation_idx: row.idx,
+            variation_idx: 1,
             batch_id: generation.id,
             auto_generated: true,
+            qa_score: fresh.qa?.score ?? null,
           },
         });
 
@@ -354,13 +445,14 @@ export function NewPost() {
 
         items.push({
           post, variation: row, fabricJson, templateId,
-          quote: row.quote, caption: row.caption, score, reason, codigo, sizeId,
+          quote: fresh.quote, caption: fresh.caption, score: fresh.score, reason: fresh.reason, codigo, sizeId,
           pick: { editorialSlug: pick.editorial.slug, platform: pick.platform, targetAvatar: pick.targetAvatar },
           tituloStatus: 'pending', legendaStatus: 'pending', editRounds: 0,
-          aiQuote: row.quote, aiCaption: row.caption, manualEdits: 0,
+          aiQuote: fresh.quote, aiCaption: fresh.caption, manualEdits: 0, qa: fresh.qa,
         });
       }
 
+      setGenProgress(100);
       setBatch(items);
       setActiveId(null);
       setState('REVIEW_QUEUE');
@@ -385,9 +477,19 @@ export function NewPost() {
     if (mode === 'rejeitar') {
       patchItem(activeItem.post.id, field === 'titulo' ? { tituloStatus: 'rejected' } : { legendaStatus: 'rejected' });
     }
+    setCorrectingWhole(false);
     setCorrectingField(field);
     setCorrectingMode(mode);
     setFeedbackAction('correct');
+    setFeedbackOpen(true);
+  }
+
+  // Rejeição do POST INTEIRO: pergunta o motivo e regenera título + legenda juntos.
+  function openWholeFeedback() {
+    if (!activeItem) return;
+    setCorrectingField(null);
+    setCorrectingWhole(true);
+    setFeedbackAction('discard'); // título do diálogo: "Motivo da rejeição total"
     setFeedbackOpen(true);
   }
 
@@ -455,12 +557,16 @@ export function NewPost() {
     setGenLabel(field === 'titulo' ? 'Reescrevendo o título...' : 'Reescrevendo a legenda...');
 
     // "corrigir" APROVEITA o texto atual (refina mantendo a essência);
-    // "rejeitar" cria um texto NOVO do zero, com outro ângulo. Vale pros dois campos.
+    // "rejeitar" cria um texto NOVO do zero. Em AMBOS, o campo regenerado fica
+    // interligado ao OUTRO (título ↔ legenda) pra manter o mesmo assunto.
     const alvo = field === 'titulo' ? 'frase da imagem' : 'legenda';
     const atual = field === 'titulo' ? item.quote : item.caption;
+    const outroLabel = field === 'titulo' ? 'legenda' : 'frase da imagem (título)';
+    const outroTexto = field === 'titulo' ? item.caption : item.quote;
+    const elo = `A ${outroLabel} deste post é: "${outroTexto}". A nova ${alvo} deve falar do MESMO assunto e ficar coerente com essa ${outroLabel} — não mude de tema.`;
     const effectiveBriefing = mode === 'corrigir'
-      ? `Aproveite e aprimore a ${alvo} atual, mantendo a essência e o sentido dela. Texto atual: "${atual}". Ajuste pedido: ${briefing || 'deixe mais forte, claro e afiado'}`
-      : `Crie uma ${alvo} completamente NOVA sobre o mesmo tema, do zero, com um ângulo diferente da anterior. ${briefing || ''}`.trim();
+      ? `Aproveite e aprimore a ${alvo} atual, mantendo a essência e o sentido dela. Texto atual: "${atual}". ${elo} Ajuste pedido: ${briefing || 'deixe mais forte, claro e afiado'}`
+      : `Gere uma NOVA ${alvo} para este post, diferente da anterior (que foi rejeitada). ${elo} ${alvo === 'frase da imagem' ? 'Frase' : 'Legenda'} anterior rejeitada: "${atual}". Motivo da rejeição / o que ajustar: ${briefing || 'traga um ângulo melhor'}`;
 
     try {
       const res = await edge.generateContent({
@@ -517,12 +623,13 @@ export function NewPost() {
   // conteúdo e volta os dois campos pra pendente. Reseta a autochecagem.
   async function regenerateWholePost(item: BatchItem, briefing = '') {
     setState('GENERATING');
+    setGenProgress(35);
     setGenLabel('Gerando um post totalmente novo — título e legenda do zero...');
     const effectiveBriefing = [
       'Crie um post completamente NOVO sobre o mesmo tema, do zero, com um ângulo DIFERENTE do atual —',
-      'nova frase da imagem E nova legenda. Não repita a abordagem anterior.',
-      `Evite repetir esta frase atual: "${item.quote}".`,
-      briefing,
+      'nova frase da imagem E nova legenda, coerentes entre si. Não repita a abordagem anterior.',
+      `Frase anterior rejeitada (evite repetir): "${item.quote}".`,
+      briefing ? `Motivo da rejeição / o que ajustar: ${briefing}` : '',
     ].filter(Boolean).join(' ').trim();
     try {
       const res = await edge.generateContent({
@@ -879,6 +986,27 @@ export function NewPost() {
 
   // Roteador do FeedbackDialog: imagem (campo) vs vídeo/roteiro (post inteiro).
   async function handleFeedbackSubmit(feedbackText: string, facet: 'texto' | 'legenda' | 'ambos') {
+    // Rejeição do post inteiro (título + legenda): aprende e regenera os dois.
+    if (flow === 'image' && correctingWhole && activeItem) {
+      const item = activeItem;
+      setCorrectingWhole(false);
+      try {
+        await edge.learnFromFeedback({
+          post_id: item.post.id,
+          feedback_text: feedbackText,
+          quote_original: item.quote,
+          caption_original: item.caption,
+          editorial_slug: item.pick.editorialSlug,
+          platform: item.pick.platform,
+          target_avatar: item.pick.targetAvatar,
+          facet_focus: facet,
+        });
+      } catch (e) {
+        console.error(e);
+      }
+      await regenerateWholePost(item, feedbackText);
+      return;
+    }
     if (flow === 'image' && correctingField && activeItem) {
       const item = activeItem;
       const field = correctingField;
@@ -993,7 +1121,7 @@ export function NewPost() {
               </div>
               <div>
                 <h3 className="font-display font-bold text-lg">Post de Imagem</h3>
-                <p className="text-sm text-muted-foreground max-w-[220px] mt-1">A IA gera de 3 a 5 opções pra você escolher e aprovar.</p>
+                <p className="text-sm text-muted-foreground max-w-[220px] mt-1">A IA gera de 1 a 5 posts pra você revisar e aprovar.</p>
               </div>
             </CardContent>
           </Card>
@@ -1012,16 +1140,17 @@ export function NewPost() {
         </div>
       )}
 
-      {/* BATCH_CONFIG: quantos posts gerar */}
+      {/* BATCH_CONFIG: quantos posts + plataforma/editoria (opcional) */}
       {state === 'BATCH_CONFIG' && (
-        <div className="mt-8 space-y-6">
+        <div className="mt-8 space-y-4">
+          {/* Quantidade */}
           <Card>
-            <CardContent className="py-10 flex flex-col items-center gap-6 text-center">
+            <CardContent className="py-8 flex flex-col items-center gap-5 text-center">
               <div className="rounded-full bg-accent/20 p-4"><Layers className="h-8 w-8 text-accent" /></div>
               <div>
                 <h3 className="font-display font-bold text-lg">Quantos posts?</h3>
                 <p className="text-sm text-muted-foreground max-w-sm mt-1">
-                  A IA gera vários de uma vez (cada um com nota de viralização) pra você aprovar em sequência e acelerar o fluxo.
+                  De 1 a 5. A IA gera cada um, checa a qualidade sozinha e refaz o que não passar na régua.
                 </p>
               </div>
               <div className="flex gap-2">
@@ -1036,11 +1165,77 @@ export function NewPost() {
                   </Button>
                 ))}
               </div>
-              <Button variant="accent" size="lg" onClick={() => void handleStartImageBatch(batchQuantity)}>
-                <Sparkles className="h-4 w-4 mr-2" /> Gerar {batchQuantity} posts
-              </Button>
             </CardContent>
           </Card>
+
+          {/* Plataforma (opcional) */}
+          <Card>
+            <CardContent className="p-5 space-y-3">
+              <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                <h4 className="font-semibold">Plataforma <span className="text-xs font-normal text-muted-foreground">(opcional)</span></h4>
+                <span className="text-xs text-muted-foreground">
+                  {selPlatforms.length ? `${selPlatforms.length}/${maxPlatforms} selecionada(s)` : `até ${maxPlatforms} — vazio = a IA varia`}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {PLATFORMS.map((p) => {
+                  const on = selPlatforms.includes(p);
+                  return (
+                    <Button
+                      key={p}
+                      variant={on ? 'accent' : 'outline'}
+                      size="sm"
+                      className="capitalize"
+                      onClick={() => setSelPlatforms((cur) => {
+                        if (cur.includes(p)) return cur.filter((x) => x !== p);
+                        if (cur.length >= maxPlatforms) { toast.info(`Máximo ${maxPlatforms} plataforma(s) para ${batchQuantity} post(s).`); return cur; }
+                        return [...cur, p];
+                      })}
+                    >
+                      {on && <Check className="h-3.5 w-3.5 mr-1" />}{p}
+                    </Button>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Linha editorial (opcional) */}
+          <Card>
+            <CardContent className="p-5 space-y-3">
+              <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                <h4 className="font-semibold">Linha editorial <span className="text-xs font-normal text-muted-foreground">(opcional)</span></h4>
+                <span className="text-xs text-muted-foreground">
+                  {selEditorials.length ? `${selEditorials.length}/${maxEditorials} selecionada(s)` : `até ${maxEditorials} — vazio = a IA varia`}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {editorials.map((e) => {
+                  const on = selEditorials.includes(e.slug);
+                  return (
+                    <Button
+                      key={e.slug}
+                      variant={on ? 'accent' : 'outline'}
+                      size="sm"
+                      onClick={() => setSelEditorials((cur) => {
+                        if (cur.includes(e.slug)) return cur.filter((x) => x !== e.slug);
+                        if (cur.length >= maxEditorials) { toast.info(`Máximo ${maxEditorials} linha(s) editorial(is) para ${batchQuantity} post(s).`); return cur; }
+                        return [...cur, e.slug];
+                      })}
+                    >
+                      {on && <Check className="h-3.5 w-3.5 mr-1" />}{e.name}
+                    </Button>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="flex justify-center pt-1">
+            <Button variant="accent" size="lg" onClick={() => void handleStartImageBatch()}>
+              <Sparkles className="h-4 w-4 mr-2" /> Gerar {batchQuantity} {batchQuantity === 1 ? 'post' : 'posts'}
+            </Button>
+          </div>
         </div>
       )}
 
@@ -1113,8 +1308,18 @@ export function NewPost() {
             <Zap className="h-12 w-12 animate-pulse text-accent" />
             <div className="space-y-2">
               <h2 className="font-display text-xl font-bold">Sua I.A está trabalhando...</h2>
-              <p className="text-muted-foreground max-w-sm mx-auto">{genLabel}</p>
+              <p className="text-muted-foreground max-w-md mx-auto min-h-[2.5rem]">{genLabel}</p>
             </div>
+            {/* Barra de progresso do lote (imagem) — mostra que está andando mesmo se demorar */}
+            {flow === 'image' && genProgress > 0 && (
+              <div className="w-full max-w-sm">
+                <div className="h-2.5 rounded-full bg-secondary overflow-hidden">
+                  <div className="h-full bg-accent transition-all duration-500" style={{ width: `${genProgress}%` }} />
+                </div>
+                <p className="text-xs text-muted-foreground mt-1.5">{genProgress}%</p>
+              </div>
+            )}
+            {/* Barra de upload do vídeo */}
             {uploadPct > 0 && uploadPct < 100 && (
               <div className="w-full max-w-xs">
                 <div className="h-2 rounded-full bg-secondary overflow-hidden">
@@ -1176,53 +1381,6 @@ export function NewPost() {
 
           <Card><CardContent className="p-4"><ViralityBar score={activeItem.score} reason={activeItem.reason} /></CardContent></Card>
 
-          {/* AUTOCHECAGEM (QA) — avalia o texto atual contra os critérios das Diretrizes */}
-          <Card className="shadow-sm">
-            <CardContent className="p-5 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline">Autochecagem</Badge>
-                  {activeItem.qa && (
-                    <span
-                      className="rounded-full px-2.5 py-0.5 text-xs font-bold text-white"
-                      style={{ background: activeItem.qa.score >= 80 ? '#5aa87a' : activeItem.qa.score >= 50 ? '#c79a4c' : '#c17c72' }}
-                    >
-                      {activeItem.qa.score}/100
-                    </span>
-                  )}
-                </div>
-                <Button size="sm" variant="outline" disabled={activeItem.qaBusy} onClick={() => void runQa(activeItem)}>
-                  <Sparkles className="h-4 w-4 mr-1" />
-                  {activeItem.qaBusy ? 'Checando…' : activeItem.qa ? 'Rechecar' : 'Checar contra os critérios'}
-                </Button>
-              </div>
-              {activeItem.qa ? (
-                <div className="space-y-2">
-                  <p className="text-xs text-muted-foreground italic">{activeItem.qa.resumo}</p>
-                  {activeItem.qa.checks.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">Nenhum critério cadastrado para este escopo — adicione critérios nas Diretrizes.</p>
-                  ) : (
-                    <div className="space-y-1.5">
-                      {activeItem.qa.checks.map((c, i) => (
-                        <div key={i} className="flex gap-2 text-sm">
-                          <span className={c.passed ? 'text-emerald-600 font-bold' : 'text-destructive font-bold'}>{c.passed ? '✓' : '✗'}</span>
-                          <div className="leading-snug">
-                            <span className="font-medium">{c.titulo}</span>
-                            {c.nota && <span className="text-muted-foreground"> — {c.nota}</span>}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Roda os critérios de excelência das Diretrizes sobre este texto e mostra o que passou e o que falhou. Você decide o que fazer.
-                </p>
-              )}
-            </CardContent>
-          </Card>
-
           {/* TÍTULO (frase da imagem) */}
           <Card className="shadow-sm">
             <CardContent className="p-5 space-y-3">
@@ -1261,11 +1419,8 @@ export function NewPost() {
                     <Button size="sm" variant="outline" onClick={() => { setQuoteDraft(activeItem.quote); setEditingQuote(true); }}>
                       <Edit3 className="h-4 w-4 mr-1" /> Editar à mão
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => openFieldFeedback('titulo', 'corrigir')}>
-                      <Sparkles className="h-4 w-4 mr-1" /> Corrigir (aproveita)
-                    </Button>
                     <Button size="sm" variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => openFieldFeedback('titulo', 'rejeitar')}>
-                      <RefreshCw className="h-4 w-4 mr-1" /> Rejeitar (nova ideia)
+                      <RefreshCw className="h-4 w-4 mr-1" /> Rejeitar
                     </Button>
                   </div>
                 </>
@@ -1310,11 +1465,8 @@ export function NewPost() {
                     <Button size="sm" variant="outline" onClick={() => { setCaptionDraft(activeItem.caption); setEditingCaption(true); }}>
                       <Edit3 className="h-4 w-4 mr-1" /> Editar à mão
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => openFieldFeedback('legenda', 'corrigir')}>
-                      <Sparkles className="h-4 w-4 mr-1" /> Corrigir (aproveita)
-                    </Button>
                     <Button size="sm" variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => openFieldFeedback('legenda', 'rejeitar')}>
-                      <RefreshCw className="h-4 w-4 mr-1" /> Rejeitar (nova ideia)
+                      <RefreshCw className="h-4 w-4 mr-1" /> Rejeitar
                     </Button>
                   </div>
                 </>
@@ -1334,18 +1486,8 @@ export function NewPost() {
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    if (confirm('Rejeitar este post inteiro e gerar um título e uma legenda completamente novos?')) {
-                      void regenerateWholePost(activeItem);
-                    }
-                  }}
-                >
-                  <RefreshCw className="h-4 w-4 mr-1" /> Rejeitar tudo (novo)
-                </Button>
-                <Button variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => void discardBatchPost(activeItem)}>
-                  <X className="h-4 w-4 mr-1" /> Descartar post
+                <Button variant="outline" className="text-destructive hover:bg-destructive/10" onClick={openWholeFeedback}>
+                  <RefreshCw className="h-4 w-4 mr-1" /> Rejeitar
                 </Button>
                 <Button variant="accent" disabled={!bothApproved} onClick={() => setState('IMAGE_PREVIEW')}>
                   <ArrowRight className="h-4 w-4 mr-1" /> Ir pro design
