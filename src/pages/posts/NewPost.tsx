@@ -1438,10 +1438,10 @@ export function NewPost() {
               {editingCaption ? (
                 <div className="space-y-2">
                   <Textarea
-                    rows={6}
+                    rows={14}
                     value={captionDraft}
                     onChange={(e) => setCaptionDraft(e.target.value)}
-                    className="text-sm leading-relaxed"
+                    className="text-sm leading-relaxed min-h-[340px] resize-y"
                     placeholder="Escreva a legenda…"
                   />
                   <div className="flex gap-2">
