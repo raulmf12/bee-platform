@@ -134,6 +134,10 @@ interface GenesisTensao { nome: string; arquetipo: string; logica: string; sofri
 interface GenesisLente { nome: string; oitava: number; frase_sistemica: string; natureza: string }
 interface GenesisFluxo { ordem: number; pergunta: string; nota: string | null }
 
+// DIRETRIZES DE CRIAÇÃO — a camada de ofício (como executar), separada do
+// Genesis (por que/quem). universal + a plataforma + a linha editorial.
+interface BeeDirective { scope: string; scope_ref: string | null; tipo: string; inviolavel: boolean; titulo: string | null; instrucao: string; ordem: number }
+
 interface ReferencePost {
   id: string;
   platform: string;
@@ -175,6 +179,7 @@ async function loadBeeContext(input: GenerateInput, userId: string) {
     genesisLentes,
     genesisTensoes,
     genesisFluxo,
+    directives,
   ] = await Promise.all([
     fetchRest<BeeEditorial[]>(`/bee_editorials?slug=eq.${input.editorial_slug}&limit=1`),
     input.arsenal_item_id
@@ -200,6 +205,11 @@ async function loadBeeContext(input: GenerateInput, userId: string) {
     fetchRest<GenesisLente[]>(`/genesis_lentes?select=nome,oitava,frase_sistemica,natureza&order=ordem.asc`),
     fetchRest<GenesisTensao[]>(`/genesis_tensoes?select=nome,arquetipo,logica,sofrimento_tipico&order=ordem.asc`),
     fetchRest<GenesisFluxo[]>(`/genesis_fluxo?select=ordem,pergunta,nota&order=ordem.asc`),
+    // DIRETRIZES DE CRIAÇÃO — universal + a plataforma-alvo + a linha editorial.
+    // scope_ref: universal=is.null, platform=<plataforma>, editorial=<slug>.
+    fetchRest<BeeDirective[]>(
+      `/bee_directives?ativo=eq.true&select=scope,scope_ref,tipo,inviolavel,titulo,instrucao,ordem&or=(scope.eq.universal,and(scope.eq.platform,scope_ref.eq.${input.target_platform ?? 'linkedin'}),and(scope.eq.editorial,scope_ref.eq.${input.editorial_slug}))&order=scope.asc,ordem.asc`,
+    ),
   ]);
 
   // APRENDIZADOS do SEGMENTO desta geracao (correcoes + conversa com o agente).
@@ -234,6 +244,7 @@ async function loadBeeContext(input: GenerateInput, userId: string) {
       tensoes: genesisTensoes,
       fluxo: genesisFluxo,
     },
+    directives,
     learnings,
   };
 }
@@ -577,6 +588,60 @@ function buildSystemPrompt(
     lines.push('=== BASE DE CONHECIMENTO BEE (trechos relevantes ao tema) ===');
     lines.push(ragContext);
     lines.push('=== FIM DA BASE ===');
+    lines.push('');
+  }
+
+  // DIRETRIZES DE CRIAÇÃO — o OFÍCIO. Vem por último, colado nas REGRAS DE
+  // SAÍDA, porque é o "como escrever de fato" que precisa estar mais fresco na
+  // hora de produzir. Universal → plataforma → linha editorial.
+  const dirs = ctx.directives ?? [];
+  if (dirs.length) {
+    const platLabel = input.target_platform === 'instagram' ? 'INSTAGRAM' : 'LINKEDIN';
+    const fmt = (d: BeeDirective) => `${d.titulo ? `${d.titulo}: ` : ''}${d.instrucao}`;
+
+    // Dentro de cada escopo, as diretrizes são agrupadas por TIPO — cada tipo
+    // com enquadramento próprio (regra dura, proibição, preferência, estrutura).
+    // 'criterio' também vira a autochecagem (QA), mas aqui entra como garantia.
+    const renderScope = (label: string, items: BeeDirective[]) => {
+      if (!items.length) return;
+      const of = (t: string) => items.filter((d) => d.tipo === t);
+      lines.push(`\n— ${label}:`);
+      const regras = of('regra');
+      if (regras.length) {
+        regras.forEach((d) => lines.push(`  ${d.inviolavel ? '⛔ INVIOLÁVEL' : '•'} ${fmt(d)}`));
+      }
+      const fluxo = of('fluxo');
+      if (fluxo.length) {
+        lines.push('  Estrutura / fluxo (respeite a ordem):');
+        fluxo.forEach((d, i) => lines.push(`    ${i + 1}. ${fmt(d)}`));
+      }
+      const fort = of('fortalecer');
+      if (fort.length) {
+        lines.push('  FORTALEÇA (priorize):');
+        fort.forEach((d) => lines.push(`    ✓ ${fmt(d)}`));
+      }
+      const evi = of('evitar');
+      if (evi.length) {
+        lines.push('  NÃO FAÇA (proibido):');
+        evi.forEach((d) => lines.push(`    ✗ ${fmt(d)}`));
+      }
+      const params = of('parametro');
+      if (params.length) {
+        lines.push('  Parâmetros:');
+        params.forEach((d) => lines.push(`    • ${fmt(d)}`));
+      }
+      const crit = of('criterio');
+      if (crit.length) {
+        lines.push('  Garanta antes de entregar:');
+        crit.forEach((d) => lines.push(`    ▸ ${fmt(d)}`));
+      }
+    };
+
+    lines.push('=== DIRETRIZES DE CRIAÇÃO (o ofício — COMO escrever de fato) ===');
+    lines.push('Regras concretas de execução. Obedeça-as ao construir título/frase e legenda. Sob a Constituição (Camada 0), mas acima das preferências de estilo. ⛔ = inviolável.');
+    renderScope('UNIVERSAIS (todo post)', dirs.filter((d) => d.scope === 'universal'));
+    renderScope(`DESTA PLATAFORMA (${platLabel})`, dirs.filter((d) => d.scope === 'platform'));
+    renderScope('DESTA LINHA EDITORIAL', dirs.filter((d) => d.scope === 'editorial'));
     lines.push('');
   }
 

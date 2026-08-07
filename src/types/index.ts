@@ -859,6 +859,43 @@ export interface GenesisSnapshot {
 }
 
 // ---------------------------------------------------------------------------
+// DIRETRIZES DE CRIAÇÃO (bee_directives) — a camada de OFÍCIO/execução.
+// Trabalha junto com o Genesis (filosofia). Diz "como escrever de fato",
+// em 3 escopos: universal, por plataforma, por linha editorial.
+// ---------------------------------------------------------------------------
+export type DirectiveScope = 'universal' | 'platform' | 'editorial';
+// O tipo governa como a diretriz age no prompt e como é renderizada na tela.
+// 'criterio' também alimenta a autochecagem (QA) das variações geradas.
+export type DirectiveTipo = 'regra' | 'evitar' | 'fortalecer' | 'fluxo' | 'criterio' | 'parametro';
+export interface BeeDirective {
+  id: string;
+  scope: DirectiveScope;
+  // null (universal) | 'linkedin'/'instagram' (platform) | editorial_slug (editorial)
+  scope_ref: string | null;
+  tipo: DirectiveTipo;
+  inviolavel: boolean;
+  titulo: string | null;
+  instrucao: string;
+  ordem: number;
+  ativo: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// Resultado da autochecagem (QA) de uma variação contra os critérios.
+export interface QaCheckItem {
+  titulo: string;
+  criterio: string;
+  passed: boolean;
+  nota: string;
+}
+export interface QaResult {
+  score: number;            // 0-100
+  checks: QaCheckItem[];
+  resumo: string;
+}
+
+// ---------------------------------------------------------------------------
 // EFICACIA DA IA
 // ---------------------------------------------------------------------------
 // O ciclo: gerar (ai_generations + 5 ai_variations) -> voce corrige -> Aprovar

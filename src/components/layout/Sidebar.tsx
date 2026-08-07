@@ -23,6 +23,7 @@ import {
   PenTool,
   Library,
   Database,
+  ScrollText,
   UserCircle
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -87,6 +88,7 @@ const NAV_GROUPS: NavGroup[] = [
     icon: UserCircle,
     items: [
       { to: '/genesis', label: 'Genesis', icon: BrainCircuit },
+      { to: '/diretrizes', label: 'Diretrizes de Criação', icon: ScrollText },
       { to: '/produtos', label: 'Produtos', icon: Package },
     ]
   },

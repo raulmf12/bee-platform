@@ -21,6 +21,7 @@ import { NewPodcastClip } from '@/pages/podcasts/NewPodcastClip';
 import { Templates } from '@/pages/templates/Templates';
 import { TemplateEditor } from '@/pages/templates/TemplateEditor';
 import { Genesis } from '@/pages/genesis/Genesis';
+import { Directives } from '@/pages/directives/Directives';
 import { Aprendizado } from '@/pages/aprendizado/Aprendizado';
 import { Coach } from '@/pages/coach/Coach';
 import { Personas } from '@/pages/personas/Personas';
@@ -89,6 +90,7 @@ export default function App() {
         >
           <Route index element={<Dashboard />} />
           <Route path="genesis" element={<Genesis />} />
+          <Route path="diretrizes" element={<Directives />} />
           <Route path="alma" element={<Navigate to="/genesis" replace />} />
           <Route path="templates" element={<Templates />} />
           <Route path="aprendizado" element={<Aprendizado />} />

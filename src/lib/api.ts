@@ -20,6 +20,9 @@ import type {
   BeeProduct,
   BeeStyleRule,
   BeeSuggestion,
+  BeeDirective,
+  DirectiveScope,
+  DirectiveTipo,
   EditorialLine,
   EditorialLineRun,
   KanbanColumn,
@@ -906,6 +909,57 @@ export const genesisApi = {
 
   async removePrincipio(id: string): Promise<void> {
     return db.delete('genesis_principios', { id: `eq.${id}` });
+  },
+};
+
+// ----------------------------------------------------------------------------
+// DIRETRIZES DE CRIAÇÃO (bee_directives) — a "mão" que trabalha junto do Genesis.
+// Como executar a criação, em 3 escopos: universal, plataforma, linha editorial.
+// ----------------------------------------------------------------------------
+export const directivesApi = {
+  // Tudo de uma vez — a tela agrupa por escopo/ref no cliente.
+  async list(): Promise<BeeDirective[]> {
+    return db.select<BeeDirective>('bee_directives', {
+      order: 'scope.asc,scope_ref.asc.nullsfirst,ordem.asc',
+    });
+  },
+
+  async create(input: {
+    scope: DirectiveScope;
+    scope_ref?: string | null;
+    tipo?: DirectiveTipo;
+    inviolavel?: boolean;
+    titulo?: string | null;
+    instrucao: string;
+    ordem?: number;
+  }): Promise<BeeDirective> {
+    const rows = await db.insert<BeeDirective>('bee_directives', {
+      scope: input.scope,
+      scope_ref: input.scope_ref ?? null,
+      tipo: input.tipo ?? 'regra',
+      inviolavel: input.inviolavel ?? false,
+      titulo: input.titulo ?? null,
+      instrucao: input.instrucao,
+      ordem: input.ordem ?? 0,
+      ativo: true,
+    });
+    if (!rows[0]) throw new Error('Falha ao criar diretriz');
+    return rows[0];
+  },
+
+  async update(id: string, patch: Partial<BeeDirective>): Promise<BeeDirective> {
+    const { id: _id, created_at: _c, ...safe } = patch;
+    const rows = await db.update<BeeDirective>(
+      'bee_directives',
+      { id: `eq.${id}` },
+      { ...safe, updated_at: new Date().toISOString() },
+    );
+    if (!rows[0]) throw new Error('Diretriz não encontrada');
+    return rows[0];
+  },
+
+  async remove(id: string): Promise<void> {
+    return db.delete('bee_directives', { id: `eq.${id}` });
   },
 };
 
