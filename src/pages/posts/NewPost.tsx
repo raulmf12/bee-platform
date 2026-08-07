@@ -35,7 +35,7 @@ import { v4 as uuid } from 'uuid';
 import { StaticCanvasPreview } from '@/components/posts/wizard/StaticCanvasPreview';
 import { ScheduleModal } from '@/components/posts/wizard/ScheduleModal';
 import { FeedbackDialog, FeedbackActionType } from '@/components/posts/wizard/FeedbackDialog';
-import type { AiVariation, BeeEditorial, BeeAvatar, Platform, TargetAvatar, UserPost } from '@/types';
+import type { AiVariation, BeeEditorial, BeeAvatar, Platform, TargetAvatar, UserPost, QaResult } from '@/types';
 
 type WizardState =
   | 'FORMAT' | 'BATCH_CONFIG'
@@ -72,6 +72,8 @@ interface BatchItem {
   aiQuote: string;               // última frase gerada pela IA (baseline da medição)
   aiCaption: string;             // última legenda gerada pela IA (baseline da medição)
   manualEdits: number;           // quantas vezes o humano editou texto à mão
+  qa?: QaResult | null;          // autochecagem contra os critérios das Diretrizes
+  qaBusy?: boolean;
 }
 
 function isSameDay(iso: string, ref: Date): boolean {
@@ -179,6 +181,25 @@ export function NewPost() {
 
   function patchItem(id: string, patch: Partial<BatchItem>) {
     setBatch((prev) => prev.map((it) => (it.post.id === id ? { ...it, ...patch } : it)));
+  }
+
+  // AUTOCHECAGEM (QA): avalia o texto ATUAL do item contra os critérios das
+  // Diretrizes. Não bloqueia nem regenera — só mostra nota + o que falhou.
+  async function runQa(item: BatchItem) {
+    patchItem(item.post.id, { qaBusy: true });
+    try {
+      const res = await edge.qaCheck({
+        quote: item.quote,
+        caption: item.caption,
+        target_platform: item.pick.platform === 'instagram' ? 'instagram' : 'linkedin',
+        editorial_slug: item.pick.editorialSlug,
+      });
+      patchItem(item.post.id, { qa: { score: res.score ?? 0, checks: res.checks, resumo: res.resumo }, qaBusy: false });
+    } catch (e) {
+      console.error(e);
+      toast.error(e instanceof Error ? e.message : 'Erro na autochecagem');
+      patchItem(item.post.id, { qaBusy: false });
+    }
   }
 
   // Monta o carousel_text a partir dos valores ATUAIS do item (não do post
@@ -486,6 +507,56 @@ export function NewPost() {
       toast.error('Erro ao regenerar. Tente de novo.');
       // Volta o campo pra pendente pra não travar preso em "rejeitado".
       patchItem(item.post.id, field === 'titulo' ? { tituloStatus: 'pending' } : { legendaStatus: 'pending' });
+    } finally {
+      setState('REVIEW_ONE');
+    }
+  }
+
+  // Rejeita o post INTEIRO: gera um título E uma legenda completamente novos,
+  // do zero, com outro ângulo. Mantém o mesmo post (não descarta), só troca o
+  // conteúdo e volta os dois campos pra pendente. Reseta a autochecagem.
+  async function regenerateWholePost(item: BatchItem, briefing = '') {
+    setState('GENERATING');
+    setGenLabel('Gerando um post totalmente novo — título e legenda do zero...');
+    const effectiveBriefing = [
+      'Crie um post completamente NOVO sobre o mesmo tema, do zero, com um ângulo DIFERENTE do atual —',
+      'nova frase da imagem E nova legenda. Não repita a abordagem anterior.',
+      `Evite repetir esta frase atual: "${item.quote}".`,
+      briefing,
+    ].filter(Boolean).join(' ').trim();
+    try {
+      const res = await edge.generateContent({
+        editorial_slug: item.pick.editorialSlug,
+        target_avatar: item.pick.targetAvatar,
+        target_platform: item.pick.platform === 'instagram' ? 'instagram' : 'linkedin',
+        quote_max_chars: 200,
+        variations: 1,
+        briefing: effectiveBriefing,
+      });
+      const fresh = res.variations?.[0] ?? res;
+      const score = fresh.virality_score ?? item.score;
+      const reason = fresh.virality_reason ?? item.reason;
+      const { fabricJson, templateId } = await renderBeeQuote(item.sizeId, fresh.quote);
+      await postApi.update(item.post.id, {
+        caption: fresh.caption,
+        carousel_text: itemCarouselText(item, { quote: fresh.quote, caption: fresh.caption, virality_score: score, virality_reason: reason }),
+        carousel_fabric_json: [fabricJson],
+        virality_score: score ?? null,
+        virality_reason: reason ?? null,
+      });
+      patchItem(item.post.id, {
+        quote: fresh.quote, caption: fresh.caption,
+        aiQuote: fresh.quote, aiCaption: fresh.caption,
+        fabricJson, templateId,
+        score, reason,
+        tituloStatus: 'pending', legendaStatus: 'pending',
+        editRounds: item.editRounds + 1,
+        qa: null,
+      });
+      toast.success('Post novo gerado — título e legenda do zero.');
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro ao regenerar o post. Tente de novo.');
     } finally {
       setState('REVIEW_ONE');
     }
@@ -1105,6 +1176,53 @@ export function NewPost() {
 
           <Card><CardContent className="p-4"><ViralityBar score={activeItem.score} reason={activeItem.reason} /></CardContent></Card>
 
+          {/* AUTOCHECAGEM (QA) — avalia o texto atual contra os critérios das Diretrizes */}
+          <Card className="shadow-sm">
+            <CardContent className="p-5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline">Autochecagem</Badge>
+                  {activeItem.qa && (
+                    <span
+                      className="rounded-full px-2.5 py-0.5 text-xs font-bold text-white"
+                      style={{ background: activeItem.qa.score >= 80 ? '#5aa87a' : activeItem.qa.score >= 50 ? '#c79a4c' : '#c17c72' }}
+                    >
+                      {activeItem.qa.score}/100
+                    </span>
+                  )}
+                </div>
+                <Button size="sm" variant="outline" disabled={activeItem.qaBusy} onClick={() => void runQa(activeItem)}>
+                  <Sparkles className="h-4 w-4 mr-1" />
+                  {activeItem.qaBusy ? 'Checando…' : activeItem.qa ? 'Rechecar' : 'Checar contra os critérios'}
+                </Button>
+              </div>
+              {activeItem.qa ? (
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground italic">{activeItem.qa.resumo}</p>
+                  {activeItem.qa.checks.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">Nenhum critério cadastrado para este escopo — adicione critérios nas Diretrizes.</p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {activeItem.qa.checks.map((c, i) => (
+                        <div key={i} className="flex gap-2 text-sm">
+                          <span className={c.passed ? 'text-emerald-600 font-bold' : 'text-destructive font-bold'}>{c.passed ? '✓' : '✗'}</span>
+                          <div className="leading-snug">
+                            <span className="font-medium">{c.titulo}</span>
+                            {c.nota && <span className="text-muted-foreground"> — {c.nota}</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Roda os critérios de excelência das Diretrizes sobre este texto e mostra o que passou e o que falhou. Você decide o que fazer.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
           {/* TÍTULO (frase da imagem) */}
           <Card className="shadow-sm">
             <CardContent className="p-5 space-y-3">
@@ -1216,6 +1334,16 @@ export function NewPost() {
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (confirm('Rejeitar este post inteiro e gerar um título e uma legenda completamente novos?')) {
+                      void regenerateWholePost(activeItem);
+                    }
+                  }}
+                >
+                  <RefreshCw className="h-4 w-4 mr-1" /> Rejeitar tudo (novo)
+                </Button>
                 <Button variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => void discardBatchPost(activeItem)}>
                   <X className="h-4 w-4 mr-1" /> Descartar post
                 </Button>

@@ -46,6 +46,14 @@ export interface GenerateContentOutput extends GeneratedVariation {
   error?: string;
 }
 
+export interface QaCheckOutput {
+  success: boolean;
+  score: number | null;
+  resumo: string;
+  checks: Array<{ titulo: string; criterio: string; passed: boolean; nota: string }>;
+  error?: string;
+}
+
 export interface LearnFromCorrectionOutput {
   success: boolean;
   learnings: Array<{ texto: string; categoria: string; facet?: string; reforcou: boolean }>;
@@ -244,6 +252,24 @@ export const edge = {
       throw new Error(`generate-content HTTP ${res.status}: ${text.slice(0, 300)}`);
     }
     return JSON.parse(text) as GenerateContentOutput;
+  },
+
+  // Autochecagem (QA): avalia a variação contra os critérios das Diretrizes.
+  async qaCheck(input: {
+    quote: string;
+    caption: string;
+    target_platform?: 'linkedin' | 'instagram';
+    editorial_slug?: string;
+  }): Promise<QaCheckOutput> {
+    const headers = await authHeader();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/qa-check`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(input),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`qa-check HTTP ${res.status}: ${text.slice(0, 300)}`);
+    return JSON.parse(text) as QaCheckOutput;
   },
 
   async generateImage(input: {
