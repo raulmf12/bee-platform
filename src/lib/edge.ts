@@ -254,6 +254,28 @@ export const edge = {
     return JSON.parse(text) as GenerateContentOutput;
   },
 
+  // Editar com IA: ajuste CIRÚRGICO de um campo (título/legenda). A IA muda só
+  // o que foi pedido e preserva o resto. Iterável — chame quantas vezes quiser.
+  async editText(input: {
+    field: 'titulo' | 'legenda';
+    text: string;
+    instruction: string;
+    counterpart?: string;
+    editorial_slug?: string;
+    target_platform?: 'linkedin' | 'instagram';
+    max_chars?: number;
+  }): Promise<{ success: boolean; text: string; error?: string }> {
+    const headers = await authHeader();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/edit-text`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(input),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`edit-text HTTP ${res.status}: ${text.slice(0, 300)}`);
+    return JSON.parse(text) as { success: boolean; text: string; error?: string };
+  },
+
   // Autochecagem (QA): avalia a variação contra os critérios das Diretrizes.
   async qaCheck(input: {
     quote: string;

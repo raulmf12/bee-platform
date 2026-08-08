@@ -4,11 +4,12 @@
 
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trash2 } from 'lucide-react';
+import { PenLine, Trash2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { usePostStore } from '@/store/postStore';
 import { POST_STATUS_LABELS, type PostStatus, type UserPost } from '@/types';
 import { PlatformBadge } from '@/components/shared/PlatformBadge';
+import { isTextPending, postClickRoute } from '@/lib/postReview';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
@@ -124,12 +125,17 @@ export function KanbanBoard() {
                     'group relative hover:border-accent/40 transition-all cursor-grab active:cursor-grabbing',
                     draggingId === p.id && 'opacity-40 scale-95',
                   )}
-                  onClick={() => navigate(`/posts/${p.id}`)}
+                  onClick={() => navigate(postClickRoute(p))}
                 >
                   <CardContent className="space-y-2 p-3">
                     <p className="text-sm font-medium leading-tight line-clamp-2 pr-6">
                       {p.title || p.briefing?.slice(0, 60) || 'Sem titulo'}
                     </p>
+                    {isTextPending(p) && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-amber-600">
+                        <PenLine className="h-2.5 w-2.5" /> Texto pendente
+                      </span>
+                    )}
                     {p.codigo && (
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-mono text-[9px] text-muted-foreground truncate">{p.codigo}</span>

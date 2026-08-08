@@ -11,11 +11,11 @@
 // learn-from-feedback + regeneração.
 
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, ArrowRight, Check, Edit3, FileText, Film, Image as ImageIcon,
   Layers, Loader2, PauseCircle, RefreshCw, Scissors, Sparkles, TrendingUp,
-  UploadCloud, Video, X, Zap,
+  UploadCloud, Video, Wand2, X, Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -25,6 +25,7 @@ import { cn } from '@/lib/utils';
 import { usePostStore } from '@/store/postStore';
 import { useAuthStore } from '@/store/authStore';
 import { beeApi, aiApi, postApi } from '@/lib/api';
+import { isTextPending } from '@/lib/postReview';
 import { edge } from '@/lib/edge';
 import { renderBeeQuote } from '@/lib/templates/resolve';
 import { renderFabricToDataUrl } from '@/lib/templates/renderPost';
@@ -35,7 +36,8 @@ import { v4 as uuid } from 'uuid';
 import { StaticCanvasPreview } from '@/components/posts/wizard/StaticCanvasPreview';
 import { ScheduleModal } from '@/components/posts/wizard/ScheduleModal';
 import { FeedbackDialog, FeedbackActionType } from '@/components/posts/wizard/FeedbackDialog';
-import type { AiVariation, BeeEditorial, BeeAvatar, Platform, TargetAvatar, UserPost, QaResult } from '@/types';
+import { AiEditDialog } from '@/components/posts/wizard/AiEditDialog';
+import type { AiVariation, BeeEditorial, BeeAvatar, Platform, PostContent, TargetAvatar, UserPost, QaResult } from '@/types';
 
 type WizardState =
   | 'FORMAT' | 'BATCH_CONFIG'
@@ -128,8 +130,12 @@ function StatusPill({ status }: { status: FieldStatus }) {
 
 export function NewPost() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { create, posts, load: loadPosts } = usePostStore();
   const currentUser = useAuthStore((s) => s.currentUser);
+  // Retomada: /posts/novo?retomar=1[&post=<id>] reconstrói a fila de aprovação
+  // de textos dos posts que ficaram pendentes (rodado uma vez, no mount).
+  const resumeStarted = useRef(false);
 
   const [state, setState] = useState<WizardState>('FORMAT');
   const [flow, setFlow] = useState<WizardFlow>('image');
@@ -165,8 +171,11 @@ export function NewPost() {
   const [editingCaption, setEditingCaption] = useState(false);
   const [captionDraft, setCaptionDraft] = useState('');
   const [savingCaption, setSavingCaption] = useState(false);
-  // Fecha as edições manuais ao trocar de post ou voltar pra fila.
-  useEffect(() => { setEditingQuote(false); setEditingCaption(false); }, [activeId]);
+  // Editar com IA: qual campo está no modal de refino iterativo (+ se aplicando).
+  const [aiEditField, setAiEditField] = useState<'titulo' | 'legenda' | null>(null);
+  const [aiEditBusy, setAiEditBusy] = useState(false);
+  // Fecha as edições (manual e IA) ao trocar de post ou voltar pra fila.
+  useEffect(() => { setEditingQuote(false); setEditingCaption(false); setAiEditField(null); }, [activeId]);
   const [imageScheduleId, setImageScheduleId] = useState<string | null>(null);
 
   // --- Fluxo VÍDEO PRONTO / ROTEIRO (item único) ---
@@ -195,10 +204,98 @@ export function NewPost() {
     void beeApi.avatars().then(setAvatars).catch(console.error);
   }, [loadPosts]);
 
+  // Retomada da aprovação de textos: reconstrói a fila a partir do banco.
+  useEffect(() => {
+    if (searchParams.get('retomar') !== '1' || resumeStarted.current) return;
+    resumeStarted.current = true;
+    void resumeTextReview(searchParams.get('post'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   const activeItem = batch.find((it) => it.post.id === activeId) ?? null;
+
+  // Recria UM BatchItem a partir de um post salvo (tudo já persistido: texto,
+  // legenda, fabric, editoria, e o status por campo em metadata).
+  async function rebuildItem(p: UserPost): Promise<BatchItem> {
+    const meta = (p.metadata ?? {}) as Record<string, unknown>;
+    const ct = (p.carousel_text ?? {}) as PostContent;
+    const quote = (ct.quote as string) ?? '';
+    const caption = p.caption ?? (ct.caption as string) ?? '';
+    const sizeId = (meta.canvas_size as BeeQuoteSize) ?? (p.platform === 'instagram' ? 'square' : 'portrait');
+    const variation = await aiApi.variationForPost(p.id).catch(() => null);
+    const fabricJson = (p.carousel_fabric_json?.[0] ?? {}) as object;
+    // Baseline da medição: a variação pristina se existir; senão o texto atual.
+    const baseline: AiVariation = variation ?? {
+      id: '', generation_id: (meta.batch_id as string) ?? '', user_id: p.user_id,
+      idx: (meta.variation_idx as number) ?? 1, quote, caption,
+      headline_type: (ct.headline_type as string) ?? null,
+      analogy: (ct.analogy as string) ?? null,
+      virality_score: p.virality_score ?? null, virality_reason: p.virality_reason ?? null,
+      post_id: p.id, created_at: p.created_at,
+    };
+    return {
+      post: p, variation: baseline, fabricJson, templateId: p.template_id ?? undefined,
+      quote, caption, score: p.virality_score ?? null, reason: p.virality_reason ?? null,
+      codigo: p.codigo ?? '', sizeId,
+      pick: {
+        editorialSlug: (meta.editorial_slug as string) ?? '',
+        platform: p.platform,
+        targetAvatar: (meta.target_avatar as TargetAvatar) ?? 'ambos',
+      },
+      tituloStatus: (meta.titulo_status as FieldStatus) ?? 'pending',
+      legendaStatus: (meta.legenda_status as FieldStatus) ?? 'pending',
+      editRounds: p.ai_edit_rounds ?? 0,
+      aiQuote: variation?.quote ?? quote,
+      aiCaption: variation?.caption ?? caption,
+      manualEdits: p.manual_edits ?? 0,
+      qa: null,
+    };
+  }
+
+  // Retoma a aprovação de textos: busca os posts de imagem com texto pendente e
+  // remonta a fila. focusId opcional cai direto na revisão daquele post.
+  async function resumeTextReview(focusId: string | null) {
+    setFlow('image');
+    setState('GENERATING');
+    setGenProgress(15);
+    setGenLabel('Recuperando seus posts pendentes de aprovação...');
+    try {
+      const all = await postApi.list();
+      const pending = all.filter(isTextPending);
+      if (!pending.length) {
+        toast.info('Nenhum post pendente de aprovação de texto.');
+        navigate('/');
+        return;
+      }
+      const items = await Promise.all(pending.map(rebuildItem));
+      setGenProgress(100);
+      setBatch(items);
+      const focus = focusId && items.find((it) => it.post.id === focusId);
+      if (focus) {
+        setActiveId(focus.post.id);
+        setState('REVIEW_ONE');
+      } else {
+        setActiveId(null);
+        setState('REVIEW_QUEUE');
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro ao recuperar os posts pendentes.');
+      navigate('/');
+    }
+  }
 
   function patchItem(id: string, patch: Partial<BatchItem>) {
     setBatch((prev) => prev.map((it) => (it.post.id === id ? { ...it, ...patch } : it)));
+  }
+
+  // Persiste o ESTÁGIO de revisão no metadata do post (status por campo +
+  // review_stage), pra poder RETOMAR a aprovação de textos depois de sair.
+  // Fire-and-forget: mescla no metadata atual e atualiza o item em memória.
+  function persistReview(item: BatchItem, meta: Record<string, unknown>) {
+    const nextMeta = { ...(item.post.metadata ?? {}), ...meta };
+    patchItem(item.post.id, { post: { ...item.post, metadata: nextMeta } });
+    void postApi.update(item.post.id, { metadata: nextMeta }).catch((e) => console.error('[persistReview]', e));
   }
 
   // Monta o carousel_text a partir dos valores ATUAIS do item (não do post
@@ -438,6 +535,10 @@ export function NewPost() {
             batch_id: generation.id,
             auto_generated: true,
             qa_score: fresh.qa?.score ?? null,
+            // Estágio do wizard — permite retomar a aprovação de textos depois.
+            review_stage: 'texto',
+            titulo_status: 'pending',
+            legenda_status: 'pending',
           },
         });
 
@@ -467,6 +568,7 @@ export function NewPost() {
   function approveField(field: 'titulo' | 'legenda') {
     if (!activeItem) return;
     patchItem(activeItem.post.id, field === 'titulo' ? { tituloStatus: 'approved' } : { legendaStatus: 'approved' });
+    persistReview(activeItem, field === 'titulo' ? { titulo_status: 'approved' } : { legenda_status: 'approved' });
   }
 
   // Abre o feedback pra IA regenerar um campo. mode 'corrigir' APROVEITA o texto
@@ -510,6 +612,7 @@ export function NewPost() {
         manualEdits: item.manualEdits + 1,
         tituloStatus: 'approved',
       });
+      persistReview(item, { titulo_status: 'approved' });
       setEditingQuote(false);
       toast.success('Frase editada à mão.');
     } catch (e) {
@@ -535,6 +638,7 @@ export function NewPost() {
         manualEdits: item.manualEdits + 1,
         legendaStatus: 'approved',
       });
+      persistReview(item, { legenda_status: 'approved' });
       setEditingCaption(false);
       toast.success('Legenda editada à mão.');
     } catch (e) {
@@ -542,6 +646,59 @@ export function NewPost() {
       toast.error('Erro ao salvar a legenda.');
     } finally {
       setSavingCaption(false);
+    }
+  }
+
+  // Editar com IA: ajuste CIRÚRGICO do campo aberto no modal. A IA muda só o que
+  // foi pedido e preserva o resto (não é regeneração do zero, não aprende lição).
+  // Fica no modal — o texto atualiza ao vivo pra você refinar de novo se quiser.
+  async function applyAiEdit(instruction: string) {
+    if (!activeItem || !aiEditField) return;
+    const item = activeItem;
+    const field = aiEditField;
+    const isTitulo = field === 'titulo';
+    setAiEditBusy(true);
+    try {
+      const res = await edge.editText({
+        field,
+        text: isTitulo ? item.quote : item.caption,
+        instruction,
+        counterpart: isTitulo ? item.caption : item.quote,
+        target_platform: item.pick.platform === 'instagram' ? 'instagram' : 'linkedin',
+        editorial_slug: item.pick.editorialSlug,
+        max_chars: isTitulo ? 200 : undefined,
+      });
+      const novo = (res.text ?? '').trim();
+      if (!novo) { toast.error('A IA não retornou texto. Reformule o pedido.'); return; }
+
+      if (isTitulo) {
+        const { fabricJson, templateId } = await renderBeeQuote(item.sizeId, novo);
+        await postApi.update(item.post.id, {
+          carousel_text: itemCarouselText(item, { quote: novo }),
+          carousel_fabric_json: [fabricJson],
+        });
+        patchItem(item.post.id, {
+          quote: novo, aiQuote: novo, fabricJson, templateId,
+          editRounds: item.editRounds + 1, tituloStatus: 'pending',
+        });
+        persistReview(item, { titulo_status: 'pending' });
+      } else {
+        await postApi.update(item.post.id, {
+          caption: novo,
+          carousel_text: itemCarouselText(item, { caption: novo }),
+        });
+        patchItem(item.post.id, {
+          caption: novo, aiCaption: novo,
+          editRounds: item.editRounds + 1, legendaStatus: 'pending',
+        });
+        persistReview(item, { legenda_status: 'pending' });
+      }
+      toast.success('Ajuste aplicado. Refine de novo ou aprove.');
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro ao editar com IA. Tente de novo.');
+    } finally {
+      setAiEditBusy(false);
     }
   }
 
@@ -605,6 +762,7 @@ export function NewPost() {
       }
 
       patchItem(item.post.id, patch);
+      persistReview(item, field === 'titulo' ? { titulo_status: 'pending' } : { legenda_status: 'pending' });
       toast.success(field === 'titulo'
         ? (mode === 'corrigir' ? 'Frase corrigida (aproveitada).' : 'Frase nova gerada do zero.')
         : 'Legenda regenerada.');
@@ -660,6 +818,7 @@ export function NewPost() {
         editRounds: item.editRounds + 1,
         qa: null,
       });
+      persistReview(item, { review_stage: 'texto', titulo_status: 'pending', legenda_status: 'pending' });
       toast.success('Post novo gerado — título e legenda do zero.');
     } catch (e) {
       console.error(e);
@@ -1098,6 +1257,15 @@ export function NewPost() {
         lockedFacet={correctingField ? (correctingField === 'titulo' ? 'texto' : 'legenda') : undefined}
       />
 
+      <AiEditDialog
+        open={aiEditField !== null}
+        onOpenChange={(o) => { if (!o) setAiEditField(null); }}
+        fieldLabel={aiEditField === 'titulo' ? 'o título' : 'a legenda'}
+        currentText={aiEditField === 'titulo' ? (activeItem?.quote ?? '') : (activeItem?.caption ?? '')}
+        busy={aiEditBusy}
+        onApply={applyAiEdit}
+      />
+
       <ScheduleModal
         open={scheduleOpen}
         onOpenChange={setScheduleOpen}
@@ -1416,6 +1584,9 @@ export function NewPost() {
                     >
                       <Check className="h-4 w-4 mr-1" /> Aprovar
                     </Button>
+                    <Button size="sm" variant="outline" onClick={() => setAiEditField('titulo')}>
+                      <Wand2 className="h-4 w-4 mr-1" /> Editar com IA
+                    </Button>
                     <Button size="sm" variant="outline" onClick={() => { setQuoteDraft(activeItem.quote); setEditingQuote(true); }}>
                       <Edit3 className="h-4 w-4 mr-1" /> Editar à mão
                     </Button>
@@ -1462,6 +1633,9 @@ export function NewPost() {
                     >
                       <Check className="h-4 w-4 mr-1" /> Aprovar
                     </Button>
+                    <Button size="sm" variant="outline" onClick={() => setAiEditField('legenda')}>
+                      <Wand2 className="h-4 w-4 mr-1" /> Editar com IA
+                    </Button>
                     <Button size="sm" variant="outline" onClick={() => { setCaptionDraft(activeItem.caption); setEditingCaption(true); }}>
                       <Edit3 className="h-4 w-4 mr-1" /> Editar à mão
                     </Button>
@@ -1489,7 +1663,14 @@ export function NewPost() {
                 <Button variant="outline" className="text-destructive hover:bg-destructive/10" onClick={openWholeFeedback}>
                   <RefreshCw className="h-4 w-4 mr-1" /> Rejeitar
                 </Button>
-                <Button variant="accent" disabled={!bothApproved} onClick={() => setState('IMAGE_PREVIEW')}>
+                <Button
+                  variant="accent"
+                  disabled={!bothApproved}
+                  onClick={() => {
+                    persistReview(activeItem, { review_stage: 'design', titulo_status: 'approved', legenda_status: 'approved' });
+                    setState('IMAGE_PREVIEW');
+                  }}
+                >
                   <ArrowRight className="h-4 w-4 mr-1" /> Ir pro design
                 </Button>
               </div>

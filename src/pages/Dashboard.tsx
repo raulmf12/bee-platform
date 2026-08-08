@@ -3,11 +3,12 @@
 
 import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Image as ImageIcon, Plus, Sparkles, Zap } from 'lucide-react';
+import { ClipboardCheck, FileText, Image as ImageIcon, Plus, Sparkles, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { useAuthStore } from '@/store/authStore';
 import { usePostStore } from '@/store/postStore';
+import { isTextPending } from '@/lib/postReview';
 import { KanbanBoard } from '@/components/posts/KanbanBoard';
 
 export function Dashboard() {
@@ -20,6 +21,7 @@ export function Dashboard() {
 
   const published = posts.filter((p) => p.status === 'published').length;
   const drafts = posts.filter((p) => p.status === 'draft' || p.status === 'idea').length;
+  const pendingText = posts.filter(isTextPending).length;
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
@@ -59,6 +61,32 @@ export function Dashboard() {
           value={published}
         />
       </div>
+
+      {pendingText > 0 && (
+        <Card className="border-l-4 border-l-amber-500 bg-amber-500/5">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-md bg-amber-500/15 text-amber-600">
+                <ClipboardCheck className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold">
+                  {pendingText} {pendingText === 1 ? 'post aguardando' : 'posts aguardando'} aprovação de texto
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Título e legenda ainda não aprovados — retome de onde parou, sem cair no design.
+                </p>
+              </div>
+            </div>
+            <Button asChild variant="accent" size="sm">
+              <Link to="/posts/novo?retomar=1">
+                <ClipboardCheck className="h-3.5 w-3.5" />
+                Revisar agora
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <section className="space-y-3">
         <div className="flex flex-wrap items-end justify-between gap-3">
