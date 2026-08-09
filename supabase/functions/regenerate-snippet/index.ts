@@ -1,0 +1,157 @@
+// Edge function: regenerate-snippet — gera ALTERNATIVAS para um TRECHO
+// selecionado dentro de uma legenda (ou título), sem tocar no resto.
+// Ex: a pessoa gosta do texto mas quer outra opção de analogia numa frase.
+// Seleciona só aquele trecho, dá uma orientação, e a IA devolve 4-5 opções
+// que encaixam no lugar — coerentes com o texto ao redor e na voz da Bee.
+//
+// Entrada: { field?, full_text, snippet, instruction?, count?, editorial_slug?,
+//            target_platform? }
+// Saída:   { success, options: string[] }
+
+import {
+  errorResponse,
+  getUserGeminiKey,
+  jsonResponse,
+  logUsage,
+  preflight,
+  userIdFromAuth,
+  internalUserId,
+  checkRateLimit,
+} from '../_shared/security.ts';
+
+const MODEL_CHAIN = [
+  Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.5-flash',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-pro',
+];
+const MAX_RETRIES = 2;
+
+interface SnippetInput {
+  field?: 'titulo' | 'legenda';
+  full_text: string;
+  snippet: string;
+  instruction?: string;
+  count?: number;
+  editorial_slug?: string;
+  target_platform?: 'linkedin' | 'instagram';
+}
+
+async function callGeminiOnce(apiKey: string, sys: string, usr: string, model: string) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  return await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: sys }] },
+      contents: [{ role: 'user', parts: [{ text: usr }] }],
+      // Temperatura alta: as opções precisam ser DIFERENTES entre si.
+      generationConfig: { temperature: 0.95, maxOutputTokens: 1600, responseMimeType: 'application/json' },
+    }),
+  });
+}
+
+async function callGemini(apiKey: string, sys: string, usr: string) {
+  let lastErr = '';
+  for (const model of MODEL_CHAIN) {
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const res = await callGeminiOnce(apiKey, sys, usr, model);
+        if (!res.ok) {
+          lastErr = `[${model}] HTTP ${res.status}`;
+          if (res.status === 503 || res.status === 429) { await new Promise((r) => setTimeout(r, (attempt + 1) * 1500)); continue; }
+          break;
+        }
+        const json = await res.json();
+        const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+        if (!text || text.trim().length < 2) { lastErr = `[${model}] vazio`; continue; }
+        return {
+          text,
+          usage: { input: json.usageMetadata?.promptTokenCount, output: json.usageMetadata?.candidatesTokenCount },
+          model_used: model,
+        };
+      } catch (e) {
+        lastErr = `[${model}] ${(e as Error).message}`;
+        await new Promise((r) => setTimeout(r, 800));
+      }
+    }
+  }
+  throw new Error(`Gemini falhou. Último: ${lastErr}`);
+}
+
+Deno.serve(async (req: Request) => {
+  const cors = preflight(req);
+  if (cors) return cors;
+  if (req.method !== 'POST') return errorResponse('Use POST', 405);
+
+  try {
+    const userId = userIdFromAuth(req) ?? internalUserId(req);
+    if (!userId) return errorResponse('Nao autenticado', 401);
+
+    const rl = checkRateLimit(userId, 60_000, 40);
+    if (!rl.ok) return errorResponse(`Rate limit. Tente em ${Math.ceil(rl.resetIn / 1000)}s`, 429);
+
+    const input = (await req.json()) as SnippetInput;
+    if (!input.full_text?.trim()) return errorResponse('full_text obrigatorio', 400);
+    if (!input.snippet?.trim()) return errorResponse('snippet obrigatorio', 400);
+
+    const apiKey = await getUserGeminiKey(userId);
+    if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
+
+    const count = Math.max(2, Math.min(6, input.count ?? 5));
+
+    const sys = [
+      'Você é um editor da Bee que gera ALTERNATIVAS para um TRECHO específico dentro de um texto, SEM tocar no resto.',
+      `Gere exatamente ${count} opções, cada uma um SUBSTITUTO direto do trecho — encaixa no lugar dele mantendo a frase coerente com o texto ao redor.`,
+      'Cada opção preserva o PAPEL do trecho (se é uma analogia, traga OUTRA analogia; se é um gancho, outro gancho) e o MESMO assunto.',
+      'Mantenha a VOZ da Bee: olhar sistêmico, sem clichê corporativo, sem travessões (— ou -), sem emojis, sem hashtags.',
+      'As opções devem ser DIFERENTES entre si (imagens/ângulos distintos), não variações mínimas de palavra.',
+      'Devolva APENAS o trecho substituto em cada opção — NUNCA o texto inteiro, nem aspas envolventes.',
+    ].join('\n');
+
+    const usr = [
+      `PLATAFORMA: ${input.target_platform ?? 'linkedin'}${input.editorial_slug ? ` · EDITORIA: ${input.editorial_slug}` : ''}`,
+      input.field ? `CAMPO: ${input.field}` : '',
+      '',
+      'TEXTO COMPLETO (contexto — NÃO reescreva, é só pra manter coerência):',
+      '"""',
+      input.full_text,
+      '"""',
+      '',
+      'TRECHO A SUBSTITUIR (gere alternativas SÓ para isto):',
+      '"""',
+      input.snippet,
+      '"""',
+      '',
+      input.instruction?.trim() ? `ORIENTAÇÃO DO QUE QUERO: ${input.instruction.trim()}` : 'Sem orientação específica: traga ângulos/imagens variados, mantendo o sentido.',
+      '',
+      `Devolva JSON puro (sem markdown): { "options": [${Array.from({ length: count }, () => '"<alternativa>"').join(', ')}] }`,
+    ].filter((l) => l !== '').join('\n');
+
+    const { text, usage, model_used } = await callGemini(apiKey, sys, usr);
+
+    let parsed: { options?: unknown };
+    try {
+      parsed = JSON.parse(text.trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim());
+    } catch {
+      return errorResponse('Resposta da IA em formato inválido', 502);
+    }
+
+    const options = Array.isArray(parsed.options)
+      ? parsed.options.map((o) => String(o ?? '').trim()).filter((o) => o.length > 0).slice(0, count)
+      : [];
+    if (!options.length) return errorResponse('A IA não retornou opções', 502);
+
+    logUsage({
+      userId, provider: 'gemini', product: 'text', model: model_used,
+      tokens_input: usage?.input, tokens_output: usage?.output,
+      metadata: { fn: 'regenerate-snippet', field: input.field, platform: input.target_platform, editorial: input.editorial_slug, count: options.length },
+    });
+
+    return jsonResponse({ success: true, options });
+  } catch (e) {
+    console.error('[regenerate-snippet]', e);
+    return errorResponse('Erro ao gerar opções do trecho', 500, String(e));
+  }
+});
+
+export {};

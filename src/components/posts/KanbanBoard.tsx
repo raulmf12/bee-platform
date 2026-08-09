@@ -128,14 +128,34 @@ export function KanbanBoard() {
                   onClick={() => navigate(postClickRoute(p))}
                 >
                   <CardContent className="space-y-2 p-3">
-                    <p className="text-sm font-medium leading-tight line-clamp-2 pr-6">
-                      {p.title || p.briefing?.slice(0, 60) || 'Sem titulo'}
-                    </p>
-                    {isTextPending(p) && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-amber-600">
-                        <PenLine className="h-2.5 w-2.5" /> Texto pendente
-                      </span>
-                    )}
+                    {(() => {
+                      // O título do card = a FRASE do conteúdo (o que a pessoa lê),
+                      // não a editoria. A editoria vira etiqueta colorida abaixo.
+                      const ct = p.carousel_text as { quote?: string; titulo?: string } | undefined;
+                      const frase = (ct?.quote || ct?.titulo || '').trim();
+                      const editoria = (p.title || '').trim();
+                      const mainTitle = frase || editoria || p.briefing?.slice(0, 60) || 'Sem título';
+                      const showEditoria = !!frase && !!editoria;
+                      return (
+                        <>
+                          <p className="text-sm font-medium leading-snug line-clamp-3 pr-6">
+                            {mainTitle}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {showEditoria && (
+                              <span className="inline-flex items-center rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">
+                                {editoria}
+                              </span>
+                            )}
+                            {isTextPending(p) && (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-amber-600">
+                                <PenLine className="h-2.5 w-2.5" /> Texto pendente
+                              </span>
+                            )}
+                          </div>
+                        </>
+                      );
+                    })()}
                     {p.codigo && (
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-mono text-[9px] text-muted-foreground truncate">{p.codigo}</span>

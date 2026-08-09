@@ -14,7 +14,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, ArrowRight, Check, Edit3, FileText, Film, Image as ImageIcon,
-  Layers, Loader2, PauseCircle, RefreshCw, Scissors, Sparkles, TrendingUp,
+  Layers, Loader2, MessageCircle, PauseCircle, RefreshCw, Scissors, Sparkles, TrendingUp,
   UploadCloud, Video, Wand2, X, Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -37,6 +37,8 @@ import { StaticCanvasPreview } from '@/components/posts/wizard/StaticCanvasPrevi
 import { ScheduleModal } from '@/components/posts/wizard/ScheduleModal';
 import { FeedbackDialog, FeedbackActionType } from '@/components/posts/wizard/FeedbackDialog';
 import { AiEditDialog } from '@/components/posts/wizard/AiEditDialog';
+import { SnippetRegenDialog } from '@/components/posts/wizard/SnippetRegenDialog';
+import { PostChatPanel } from '@/components/posts/wizard/PostChatPanel';
 import type { AiVariation, BeeEditorial, BeeAvatar, Platform, PostContent, TargetAvatar, UserPost, QaResult } from '@/types';
 
 type WizardState =
@@ -174,8 +176,21 @@ export function NewPost() {
   // Editar com IA: qual campo está no modal de refino iterativo (+ se aplicando).
   const [aiEditField, setAiEditField] = useState<'titulo' | 'legenda' | null>(null);
   const [aiEditBusy, setAiEditBusy] = useState(false);
+  // Regenerar trecho: seleção capturada no título OU na legenda + opções geradas.
+  const titleRef = useRef<HTMLTextAreaElement>(null);
+  const captionRef = useRef<HTMLTextAreaElement>(null);
+  const [snippetSel, setSnippetSel] = useState<{ field: 'titulo' | 'legenda'; start: number; end: number; text: string } | null>(null);
+  const [snippetOpen, setSnippetOpen] = useState(false);
+  const [snippetBusy, setSnippetBusy] = useState(false);
+  const [snippetOptions, setSnippetOptions] = useState<string[]>([]);
+  // Chat de brainstorm lateral (vê o post e aplica sugestões).
+  const [chatOpen, setChatOpen] = useState(false);
   // Fecha as edições (manual e IA) ao trocar de post ou voltar pra fila.
-  useEffect(() => { setEditingQuote(false); setEditingCaption(false); setAiEditField(null); }, [activeId]);
+  useEffect(() => {
+    setEditingQuote(false); setEditingCaption(false); setAiEditField(null);
+    setSnippetOpen(false); setSnippetSel(null); setSnippetOptions([]);
+    setChatOpen(false);
+  }, [activeId]);
   const [imageScheduleId, setImageScheduleId] = useState<string | null>(null);
 
   // --- Fluxo VÍDEO PRONTO / ROTEIRO (item único) ---
@@ -610,14 +625,14 @@ export function NewPost() {
       patchItem(item.post.id, {
         quote: txt, fabricJson, templateId,
         manualEdits: item.manualEdits + 1,
-        tituloStatus: 'approved',
+        tituloStatus: 'pending',
       });
-      persistReview(item, { titulo_status: 'approved' });
+      persistReview(item, { titulo_status: 'pending' });
       setEditingQuote(false);
-      toast.success('Frase editada à mão.');
+      toast.success('Frase editada à mão. Aprove quando estiver bom.');
     } catch (e) {
       console.error(e);
-      toast.error('Erro ao salvar a frase.');
+      toast.error(`Erro ao salvar a frase: ${(e as Error).message.slice(0, 140)}`);
     } finally {
       setSavingQuote(false);
     }
@@ -636,16 +651,45 @@ export function NewPost() {
       patchItem(item.post.id, {
         caption: txt,
         manualEdits: item.manualEdits + 1,
-        legendaStatus: 'approved',
+        legendaStatus: 'pending',
       });
-      persistReview(item, { legenda_status: 'approved' });
+      persistReview(item, { legenda_status: 'pending' });
       setEditingCaption(false);
-      toast.success('Legenda editada à mão.');
+      toast.success('Legenda editada à mão. Aprove quando estiver bom.');
     } catch (e) {
       console.error(e);
-      toast.error('Erro ao salvar a legenda.');
+      toast.error(`Erro ao salvar a legenda: ${(e as Error).message.slice(0, 140)}`);
     } finally {
       setSavingCaption(false);
+    }
+  }
+
+  // Aplica um texto JÁ PRONTO num campo (usado pelo chat de brainstorm ao clicar
+  // "Aplicar"). Re-renderiza a imagem se for título; volta o campo pra pendente.
+  async function commitFieldText(item: BatchItem, field: 'titulo' | 'legenda', text: string) {
+    const novo = text.trim();
+    if (!novo) return;
+    if (field === 'titulo') {
+      const { fabricJson, templateId } = await renderBeeQuote(item.sizeId, novo);
+      await postApi.update(item.post.id, {
+        carousel_text: itemCarouselText(item, { quote: novo }),
+        carousel_fabric_json: [fabricJson],
+      });
+      patchItem(item.post.id, {
+        quote: novo, aiQuote: novo, fabricJson, templateId,
+        editRounds: item.editRounds + 1, tituloStatus: 'pending',
+      });
+      persistReview(item, { titulo_status: 'pending' });
+    } else {
+      await postApi.update(item.post.id, {
+        caption: novo,
+        carousel_text: itemCarouselText(item, { caption: novo }),
+      });
+      patchItem(item.post.id, {
+        caption: novo, aiCaption: novo,
+        editRounds: item.editRounds + 1, legendaStatus: 'pending',
+      });
+      persistReview(item, { legenda_status: 'pending' });
     }
   }
 
@@ -700,6 +744,65 @@ export function NewPost() {
     } finally {
       setAiEditBusy(false);
     }
+  }
+
+  // Regenerar trecho: captura a seleção atual do textarea (título ou legenda) e
+  // abre o modal de opções. Exige um trecho minimamente selecionado.
+  function openSnippetRegen(field: 'titulo' | 'legenda') {
+    const el = field === 'titulo' ? titleRef.current : captionRef.current;
+    const draft = field === 'titulo' ? quoteDraft : captionDraft;
+    if (!el) return;
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? 0;
+    const text = draft.slice(start, end).trim();
+    if (end - start < 3 || !text) {
+      toast.info(field === 'titulo'
+        ? 'Selecione um trecho do título primeiro.'
+        : 'Selecione um trecho da legenda primeiro (uma frase, uma analogia…).');
+      return;
+    }
+    setSnippetSel({ field, start, end, text });
+    setSnippetOptions([]);
+    setSnippetOpen(true);
+  }
+
+  // Pede as alternativas do trecho à IA (pode gerar de novo com outra orientação).
+  async function generateSnippetOptions(instruction: string) {
+    if (!snippetSel || !activeItem) return;
+    const draft = snippetSel.field === 'titulo' ? quoteDraft : captionDraft;
+    setSnippetBusy(true);
+    try {
+      const res = await edge.regenerateSnippet({
+        field: snippetSel.field,
+        full_text: draft,
+        snippet: snippetSel.text,
+        instruction,
+        count: 5,
+        editorial_slug: activeItem.pick.editorialSlug,
+        target_platform: activeItem.pick.platform === 'instagram' ? 'instagram' : 'linkedin',
+      });
+      setSnippetOptions(res.options ?? []);
+      if (!res.options?.length) toast.info('A IA não trouxe opções. Tente reformular a orientação.');
+    } catch (e) {
+      console.error(e);
+      toast.error(`Erro ao gerar opções: ${(e as Error).message.slice(0, 120)}`);
+    } finally {
+      setSnippetBusy(false);
+    }
+  }
+
+  // Substitui SÓ o trecho selecionado pela opção escolhida (no rascunho do campo
+  // em edição — a pessoa ainda salva à mão depois).
+  function pickSnippetOption(option: string) {
+    if (!snippetSel) return;
+    const draft = snippetSel.field === 'titulo' ? quoteDraft : captionDraft;
+    const next = draft.slice(0, snippetSel.start) + option + draft.slice(snippetSel.end);
+    if (snippetSel.field === 'titulo') setQuoteDraft(next); else setCaptionDraft(next);
+    const label = snippetSel.field === 'titulo' ? 'título' : 'legenda';
+    setSnippetOpen(false);
+    setSnippetSel(null);
+    setSnippetOptions([]);
+    toast.success(`Trecho substituído. Revise e salve o ${label}.`);
   }
 
   // Regenera SÓ o campo rejeitado, mantendo o outro (que você já pode ter
@@ -1266,6 +1369,33 @@ export function NewPost() {
         onApply={applyAiEdit}
       />
 
+      <SnippetRegenDialog
+        open={snippetOpen}
+        onOpenChange={(o) => { if (!o) { setSnippetOpen(false); setSnippetOptions([]); } }}
+        snippet={snippetSel?.text ?? ''}
+        busy={snippetBusy}
+        options={snippetOptions}
+        onGenerate={generateSnippetOptions}
+        onPick={pickSnippetOption}
+      />
+
+      {state === 'REVIEW_ONE' && activeItem && (
+        <PostChatPanel
+          key={activeItem.post.id}
+          open={chatOpen}
+          onClose={() => setChatOpen(false)}
+          postId={activeItem.post.id}
+          post={{
+            quote: activeItem.quote,
+            caption: activeItem.caption,
+            editorial_slug: activeItem.pick.editorialSlug,
+            platform: activeItem.pick.platform === 'instagram' ? 'instagram' : 'linkedin',
+            target_avatar: activeItem.pick.targetAvatar,
+          }}
+          onApply={(field, text) => commitFieldText(activeItem, field, text)}
+        />
+      )}
+
       <ScheduleModal
         open={scheduleOpen}
         onOpenChange={setScheduleOpen}
@@ -1544,7 +1674,12 @@ export function NewPost() {
         <div className="space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Badge variant="outline" className="font-mono text-xs">{activeItem.codigo}</Badge>
-            <Badge variant="outline">{activeItem.pick.platform} · {activeItem.pick.editorialSlug}</Badge>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" className="text-accent border-accent/40 hover:bg-accent/10" onClick={() => setChatOpen(true)}>
+                <MessageCircle className="h-4 w-4 mr-1" /> Assistente de geração de conteúdo
+              </Button>
+              <Badge variant="outline">{activeItem.pick.platform} · {activeItem.pick.editorialSlug}</Badge>
+            </div>
           </div>
 
           <Card><CardContent className="p-4"><ViralityBar score={activeItem.score} reason={activeItem.reason} /></CardContent></Card>
@@ -1559,19 +1694,39 @@ export function NewPost() {
               {editingQuote ? (
                 <div className="space-y-2">
                   <Textarea
+                    ref={titleRef}
                     rows={2}
                     maxLength={200}
                     value={quoteDraft}
                     onChange={(e) => setQuoteDraft(e.target.value)}
+                    onSelect={(e) => {
+                      const el = e.currentTarget;
+                      const start = el.selectionStart ?? 0;
+                      const end = el.selectionEnd ?? 0;
+                      setSnippetSel(end > start ? { field: 'titulo', start, end, text: quoteDraft.slice(start, end) } : null);
+                    }}
                     className="font-display text-lg leading-relaxed"
                     placeholder="Escreva a frase da imagem…"
                   />
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Button size="sm" variant="accent" disabled={savingQuote} onClick={() => void saveManualQuote(activeItem)}>
                       <Check className="h-4 w-4 mr-1" /> {savingQuote ? 'Salvando…' : 'Salvar frase'}
                     </Button>
                     <Button size="sm" variant="outline" disabled={savingQuote} onClick={() => setEditingQuote(false)}>Cancelar</Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-accent border-accent/40 hover:bg-accent/10"
+                      disabled={savingQuote || snippetSel?.field !== 'titulo'}
+                      onClick={() => openSnippetRegen('titulo')}
+                      title={snippetSel?.field === 'titulo' ? 'Gerar opções para o trecho selecionado' : 'Selecione um trecho do título primeiro'}
+                    >
+                      <Sparkles className="h-4 w-4 mr-1" /> Regenerar trecho
+                    </Button>
                   </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Dica: selecione um trecho acima e clique em <span className="text-accent font-medium">Regenerar trecho</span> pra ver outras opções.
+                  </p>
                 </div>
               ) : (
                 <>
@@ -1609,18 +1764,38 @@ export function NewPost() {
               {editingCaption ? (
                 <div className="space-y-2">
                   <Textarea
+                    ref={captionRef}
                     rows={14}
                     value={captionDraft}
                     onChange={(e) => setCaptionDraft(e.target.value)}
+                    onSelect={(e) => {
+                      const el = e.currentTarget;
+                      const start = el.selectionStart ?? 0;
+                      const end = el.selectionEnd ?? 0;
+                      setSnippetSel(end > start ? { field: 'legenda', start, end, text: captionDraft.slice(start, end) } : null);
+                    }}
                     className="text-sm leading-relaxed min-h-[340px] resize-y"
                     placeholder="Escreva a legenda…"
                   />
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Button size="sm" variant="accent" disabled={savingCaption} onClick={() => void saveManualCaption(activeItem)}>
                       <Check className="h-4 w-4 mr-1" /> {savingCaption ? 'Salvando…' : 'Salvar legenda'}
                     </Button>
                     <Button size="sm" variant="outline" disabled={savingCaption} onClick={() => setEditingCaption(false)}>Cancelar</Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-accent border-accent/40 hover:bg-accent/10"
+                      disabled={savingCaption || snippetSel?.field !== 'legenda'}
+                      onClick={() => openSnippetRegen('legenda')}
+                      title={snippetSel?.field === 'legenda' ? 'Gerar opções para o trecho selecionado' : 'Selecione um trecho da legenda primeiro'}
+                    >
+                      <Sparkles className="h-4 w-4 mr-1" /> Regenerar trecho
+                    </Button>
                   </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Dica: selecione uma frase ou analogia acima e clique em <span className="text-accent font-medium">Regenerar trecho</span> pra ver outras opções.
+                  </p>
                 </div>
               ) : (
                 <>

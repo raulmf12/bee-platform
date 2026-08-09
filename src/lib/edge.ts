@@ -276,6 +276,45 @@ export const edge = {
     return JSON.parse(text) as { success: boolean; text: string; error?: string };
   },
 
+  // Regenerar um TRECHO selecionado: devolve 4-5 alternativas que encaixam no
+  // lugar do trecho, coerentes com o resto. Pra trocar uma analogia sem mexer no post.
+  async regenerateSnippet(input: {
+    field?: 'titulo' | 'legenda';
+    full_text: string;
+    snippet: string;
+    instruction?: string;
+    count?: number;
+    editorial_slug?: string;
+    target_platform?: 'linkedin' | 'instagram';
+  }): Promise<{ success: boolean; options: string[]; error?: string }> {
+    const headers = await authHeader();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/regenerate-snippet`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(input),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`regenerate-snippet HTTP ${res.status}: ${text.slice(0, 300)}`);
+    return JSON.parse(text) as { success: boolean; options: string[]; error?: string };
+  },
+
+  // IA companheira de brainstorm do post: conversa vendo título+legenda e pode
+  // propor textos prontos pra aplicar (suggestions).
+  async postChat(input: {
+    messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+    post: { quote?: string; caption?: string; editorial_slug?: string; platform?: 'linkedin' | 'instagram'; target_avatar?: string };
+  }): Promise<{ success: boolean; reply: string; suggestions: Array<{ field: 'titulo' | 'legenda'; text: string; label?: string }>; error?: string }> {
+    const headers = await authHeader();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/post-chat`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(input),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`post-chat HTTP ${res.status}: ${text.slice(0, 300)}`);
+    return JSON.parse(text) as { success: boolean; reply: string; suggestions: Array<{ field: 'titulo' | 'legenda'; text: string; label?: string }>; error?: string };
+  },
+
   // Autochecagem (QA): avalia a variação contra os critérios das Diretrizes.
   async qaCheck(input: {
     quote: string;

@@ -569,19 +569,27 @@ function buildSystemPrompt(
     lines.push('');
   }
 
-  // HASHTAGS OBRIGATORIAS
+  // HASHTAGS — assinatura (identidade da marca) + variedade por tema (alcance).
+  // O problema antigo: as "obrigatórias" saíam SEMPRE iguais. Agora elas viram
+  // assinatura (só as coerentes com o tema) e a IA compõe 2-4 de maior alcance,
+  // variando conforme o assunto.
   const requiredHashtags = ctx.hashtags.filter((h) => h.required).map((h) => h.tag);
   if (requiredHashtags.length) {
-    lines.push('=== HASHTAGS OBRIGATORIAS (incluir no FIM da caption, separadas por espaco) ===');
+    lines.push('=== HASHTAGS DE ASSINATURA (identidade da marca) ===');
     lines.push(requiredHashtags.join(' '));
+    lines.push('Inclua as que forem COERENTES com o tema deste post (não precisa despejar todas se alguma não encaixar).');
     lines.push('');
   }
   const optionalHashtags = ctx.hashtags.filter((h) => !h.required).slice(0, 8);
   if (optionalHashtags.length) {
-    lines.push('=== HASHTAGS ADICIONAIS (escolha 1-3 mais relevantes ao tema) ===');
+    lines.push('=== HASHTAGS ADICIONAIS DA BASE (escolha as relevantes ao tema) ===');
     optionalHashtags.forEach((h) => lines.push(`• ${h.tag}${h.topic ? ` [${h.topic}]` : ''}`));
     lines.push('');
   }
+  lines.push('=== HASHTAGS DE ALCANCE (você compõe) ===');
+  lines.push('Além das de assinatura, ADICIONE 2 a 4 hashtags de MAIOR ALCANCE específicas do TEMA deste post (ex: liderança, gestão de pessoas, cultura organizacional, mudança) — as que um público mais amplo realmente busca. Na voz da Bee: sem termo genérico/vazio, sem hashtag em excesso.');
+  lines.push('VARIE conforme o assunto: dois posts de temas diferentes NÃO podem terminar com o mesmo conjunto de hashtags. Total final: 5 a 8 hashtags, TODAS no fim, depois de uma linha em branco, numa única linha separada por espaço.');
+  lines.push('');
 
   // RAG
   if (ragContext) {
@@ -652,12 +660,14 @@ function buildSystemPrompt(
   lines.push(`  CRÍTICO (Sentido): A frase deve carregar um sentido completo e encapsulado. Nao divida o mesmo raciocinio. A frase precisa ser auto-explicativa.`);
   lines.push(`  Sem emojis, sem hashtags nas frases.`);
   
-  const parLimit = input.target_platform === 'instagram' ? 3 : 4;
-  lines.push(`- "caption": MAXIMO ${parLimit} PARAGRAFOS CURTOS (2-4 frases cada). Densidade > extensao.`);
-  lines.push(`  CRÍTICO (Anonimizacao): NUNCA cite nomes reais de pessoas ou de empresas. Anonimize tudo usando arquétipos (ex: "uma grande multinacional", "um diretor", "uma empresa de tecnologia").`);
-  lines.push(`  CRÍTICO (Formatacao): PROIBIDO o uso de travessões (-) na legenda.`);
-  lines.push('  Estrutura: P1 gancho (primeiros 49 chars cabem na "ver mais") · P2 aprofundamento · P3 virada sistemica com analogia · P4 fechamento "Ve?" ou pergunta de implicacao.');
-  lines.push('  Hashtags obrigatorias DEPOIS dos paragrafos, em linha unica separada por espaco.');
+  // Legenda em BLOCOS CURTOS por ideia (frases quase soltas, com respiro entre
+  // elas) — leitura leve. O arco continua o mesmo, só que distribuído em vários
+  // blocos curtos em vez de 3-4 parágrafos densos.
+  lines.push('- "caption": escreva em BLOCOS CURTOS, UM POR IDEIA. Cada bloco tem 1 ou 2 frases (às vezes uma frase solta, quando ela tem peso). SEPARE cada bloco com UMA LINHA EM BRANCO (use \\n\\n no texto) pra dar respiro. Densidade > extensão: não encha linguiça, corte o que não for essencial.');
+  lines.push('  NUNCA cole 3 ou mais frases no mesmo bloco. Alterne blocos de 1 e de 2 frases pra criar ritmo e leveza na leitura.');
+  lines.push('  CRÍTICO (Anonimizacao): NUNCA cite nomes reais de pessoas ou de empresas. Anonimize tudo usando arquétipos (ex: "uma grande multinacional", "um diretor", "uma empresa de tecnologia").');
+  lines.push('  CRÍTICO (Formatacao): PROIBIDO travessões (— ou -) na legenda. Sem bullets/listas.');
+  lines.push('  Arco (espalhado nos blocos, NÃO em 4 parágrafos): abre com GANCHO (os primeiros ~49 chars têm que prender, cabem no "ver mais") → tensão/aprofundamento → virada sistêmica com a analogia → fecha com "Vê?" ou uma pergunta de implicação.');
   lines.push('- Frases curtas. Cada uma com peso. Sem rodeios.');
   lines.push('- "headline_type_used": slug (contradicao-direta, diagnostico-imperativo, pergunta-que-implica, metafora-que-nomeia).');
   lines.push('- "analogy_used": nome da analogia (ou null).');
