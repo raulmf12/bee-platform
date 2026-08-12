@@ -667,7 +667,8 @@ function buildSystemPrompt(
   lines.push('  NUNCA cole 3 ou mais frases no mesmo bloco. Alterne blocos de 1 e de 2 frases pra criar ritmo e leveza na leitura.');
   lines.push('  CRÍTICO (Anonimizacao): NUNCA cite nomes reais de pessoas ou de empresas. Anonimize tudo usando arquétipos (ex: "uma grande multinacional", "um diretor", "uma empresa de tecnologia").');
   lines.push('  CRÍTICO (Formatacao): PROIBIDO travessões (— ou -) na legenda. Sem bullets/listas.');
-  lines.push('  Arco (espalhado nos blocos, NÃO em 4 parágrafos): abre com GANCHO (os primeiros ~49 chars têm que prender, cabem no "ver mais") → tensão/aprofundamento → virada sistêmica com a analogia → fecha com "Vê?" ou uma pergunta de implicação.');
+  lines.push('  Arco (espalhado nos blocos, NÃO em 4 parágrafos): abre com GANCHO (os primeiros ~49 chars têm que prender, cabem no "ver mais") → tensão/aprofundamento → virada sistêmica com a analogia → fechamento que reverbera.');
+  lines.push('  CRÍTICO (Fechamento): VARIE o fecho entre posts. NÃO use "Vê?" como padrão (está repetitivo) — alterne entre uma pergunta de implicação, uma afirmação curta que assenta a ideia, ou um convite à reflexão. No máximo raríssimas vezes um "Vê?"; por padrão, NÃO use.');
   lines.push('- Frases curtas. Cada uma com peso. Sem rodeios.');
   lines.push('- "headline_type_used": slug (contradicao-direta, diagnostico-imperativo, pergunta-que-implica, metafora-que-nomeia).');
   lines.push('- "analogy_used": nome da analogia (ou null).');

@@ -24,6 +24,7 @@ import { useAuthStore } from '@/store/authStore';
 import { uploadAssetImage, hashDataUrl } from '@/lib/storage';
 import { edge } from '@/lib/edge';
 import { aiApi, almaApi, severidadeOf } from '@/lib/api';
+import { isoToLocalInput, localInputToIso, nowLocalInput } from '@/lib/schedule';
 import { extractSlotText } from '@/lib/templates/extract';
 import { PostCoach } from '@/components/ai/PostCoach';
 import { toast } from 'sonner';
@@ -510,13 +511,24 @@ export function PostEditor() {
                 <Input
                   id="sched"
                   type="datetime-local"
-                  value={post.scheduled_date ? new Date(post.scheduled_date).toISOString().slice(0, 16) : ''}
+                  min={nowLocalInput()}
+                  value={isoToLocalInput(post.scheduled_date)}
                   onChange={(e) => {
                     const value = e.target.value;
-                    void update(post.id, {
-                      scheduled_date: value || undefined,
-                      status: value ? 'scheduled' : post.status,
-                    }).then(() => toast.success(value ? 'Agendado' : 'Agendamento removido'));
+                    if (value) {
+                      const iso = localInputToIso(value);
+                      if (iso && new Date(iso).getTime() < Date.now()) {
+                        toast.error('Não dá pra agendar no passado.');
+                        return;
+                      }
+                      void update(post.id, { scheduled_date: iso, status: 'scheduled' })
+                        .then(() => toast.success('Agendado'));
+                    } else {
+                      void update(post.id, {
+                        scheduled_date: null,
+                        status: post.status === 'scheduled' ? 'approved' : post.status,
+                      }).then(() => toast.success('Agendamento removido'));
+                    }
                   }}
                   className="text-xs"
                 />

@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  eachDayOfInterval, endOfMonth, endOfWeek, format, isSameDay, isSameMonth,
+  addDays, eachDayOfInterval, endOfMonth, endOfWeek, format, isSameDay, isSameMonth,
   isToday, startOfMonth, startOfWeek,
 } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -32,8 +32,8 @@ import { usePostStore } from '@/store/postStore';
 import { useAuthStore } from '@/store/authStore';
 import { beeApi } from '@/lib/api';
 import {
-  DEFAULT_DISTRIBUTION, atTime, distributeStandby, editorialGapDays,
-  mergePrefs, timeForPlatform, type MergedPrefs,
+  DEFAULT_DISTRIBUTION, atTime, cadenceFor, distributeStandby, editorialGapDays,
+  isoToLocalInput, localInputToIso, mergePrefs, nowLocalInput, weekKey, type MergedPrefs,
 } from '@/lib/schedule';
 import {
   PLATFORM_COLORS, PLATFORM_LABELS, type BeeEditorial, type DistributionPrefs,
@@ -75,7 +75,8 @@ export function Agenda() {
   const updateSettings = useAuthStore((s) => s.updateSettings);
 
   const [editorials, setEditorials] = useState<BeeEditorial[]>([]);
-  const [cursor, setCursor] = useState<Date>(startOfMonth(new Date()));
+  const [cursor, setCursor] = useState<Date>(new Date());
+  const [view, setView] = useState<'month' | 'week' | 'day'>('month');
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overKey, setOverKey] = useState<string | null>(null);
   const [selected, setSelected] = useState<UserPost | null>(null);
@@ -134,12 +135,19 @@ export function Agenda() {
     [posts, hiddenPlatforms, hiddenEditorials],
   );
 
-  // Dias do grid (semanas completas cobrindo o mês).
+  // Dias exibidos: mês (semanas completas), semana (7 dias) ou dia (1).
   const days = useMemo(() => {
+    if (view === 'day') return [cursor];
+    if (view === 'week') {
+      return eachDayOfInterval({
+        start: startOfWeek(cursor, { weekStartsOn: 0 }),
+        end: endOfWeek(cursor, { weekStartsOn: 0 }),
+      });
+    }
     const gridStart = startOfWeek(startOfMonth(cursor), { weekStartsOn: 0 });
     const gridEnd = endOfWeek(endOfMonth(cursor), { weekStartsOn: 0 });
     return eachDayOfInterval({ start: gridStart, end: gridEnd });
-  }, [cursor]);
+  }, [cursor, view]);
 
   // Eventos visíveis agrupados por dia.
   const eventsByDay = useMemo(() => {
@@ -164,9 +172,13 @@ export function Agenda() {
     const post = posts.find((p) => p.id === postId);
     if (!post) return;
     const existing = eventDate(post);
-    // Mantém o horário se já tinha; senão usa o horário da plataforma nas prefs.
-    const time = existing ? format(existing, 'HH:mm') : timeForPlatform(prefs, post.platform);
+    // Mantém o horário se já tinha; senão usa o 1º horário da cadência da plataforma.
+    const time = existing ? format(existing, 'HH:mm') : cadenceFor(prefs, post.platform).times[0];
     const when = atTime(day, time);
+    if (when.getTime() < Date.now()) {
+      toast.error('Não dá pra agendar no passado.');
+      return;
+    }
     try {
       await update(postId, { status: 'scheduled', scheduled_date: when.toISOString() });
       toast.success(`Agendado pra ${format(when, "d 'de' MMM 'às' HH:mm", { locale: ptBR })}`);
@@ -203,9 +215,11 @@ export function Agenda() {
         return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
       });
 
-      // Estado do que já está no calendário (respeita ritmo e limite por dia).
+      // Estado do que já está no calendário (respeita ritmo, limite por dia e
+      // a cadência semanal por plataforma).
       const lastByEditorial: Record<string, Date> = {};
       const countByDay: Record<string, number> = {};
+      const countByWeekPlatform: Record<string, number> = {};
       for (const p of posts) {
         const d = eventDate(p);
         if (!d) continue;
@@ -213,6 +227,8 @@ export function Agenda() {
         if (!lastByEditorial[slug] || d > lastByEditorial[slug]) lastByEditorial[slug] = d;
         const k = dayKey(d);
         countByDay[k] = (countByDay[k] ?? 0) + 1;
+        const wpk = `${weekKey(d)}|${p.platform}`;
+        countByWeekPlatform[wpk] = (countByWeekPlatform[wpk] ?? 0) + 1;
       }
 
       const plan = distributeStandby({
@@ -220,6 +236,7 @@ export function Agenda() {
         gapForEditorial: (slug) => editorialGapDays(slug ? edMap.get(slug)?.freq : undefined),
         lastByEditorial,
         countByDay,
+        countByWeekPlatform,
         prefs,
         from: new Date(),
       });
@@ -249,6 +266,7 @@ export function Agenda() {
       skip_weekends: cfg.skip_weekends,
       per_day_limit: cfg.per_day_limit,
       start_offset_days: cfg.start_offset_days,
+      platform_cadence: cfg.platform_cadence,
     };
     try {
       await updateSettings({ distribution_prefs: next });
@@ -258,6 +276,14 @@ export function Agenda() {
       console.error(e);
       toast.error('Erro ao salvar as preferências.');
     }
+  }
+
+  // Atualiza a cadência (posts/semana + horários) de uma plataforma no cfg.
+  function updateCadence(pl: Platform, patch: { per_week?: number; times?: string[] }) {
+    setCfg((c) => {
+      const cur = c.platform_cadence[pl] ?? { per_week: 0, times: [] };
+      return { ...c, platform_cadence: { ...c.platform_cadence, [pl]: { per_week: cur.per_week, times: cur.times, ...patch } } };
+    });
   }
 
   function togglePlatform(pl: Platform) {
@@ -276,9 +302,10 @@ export function Agenda() {
   }
 
   // ---- Chip de um post (arrastável) ----
-  function PostChip({ post, compact }: { post: UserPost; compact?: boolean }) {
+  function PostChip({ post, compact, big }: { post: UserPost; compact?: boolean; big?: boolean }) {
     const color = colorOf(post);
     const label = (post.carousel_text?.quote as string | undefined) || post.title || post.caption || 'Post';
+    const when = eventDate(post);
     return (
       <button
         type="button"
@@ -287,24 +314,104 @@ export function Agenda() {
         onDragEnd={() => { setDraggingId(null); setOverKey(null); }}
         onClick={() => setSelected(post)}
         className={cn(
-          'group flex w-full items-center gap-1.5 rounded-md border-l-[3px] px-1.5 py-1 text-left transition-opacity cursor-grab active:cursor-grabbing',
+          'group flex w-full gap-1.5 rounded-md border-l-[3px] px-1.5 py-1 text-left transition-opacity cursor-grab active:cursor-grabbing',
+          big ? 'items-start py-1.5' : 'items-center',
           draggingId === post.id && 'opacity-40',
         )}
         style={{ borderLeftColor: color, backgroundColor: `${color}1F` }}
         title={label}
       >
-        <PlatformIcon platform={post.platform} className="h-3 w-3 shrink-0" />
-        <span className={cn('truncate text-[11px] font-medium', compact ? 'max-w-[130px]' : '')}>
-          {eventDate(post) && !compact ? `${format(eventDate(post)!, 'HH:mm')} · ` : ''}{label}
-        </span>
+        <PlatformIcon platform={post.platform} className={cn('shrink-0', big ? 'h-3.5 w-3.5 mt-0.5' : 'h-3 w-3')} />
+        {big ? (
+          <span className="min-w-0 flex-1">
+            {when && <span className="mr-1 text-[11px] font-semibold text-muted-foreground">{format(when, 'HH:mm')}</span>}
+            <span className="text-[12px] font-medium leading-snug line-clamp-2">{label}</span>
+          </span>
+        ) : (
+          <span className={cn('truncate text-[11px] font-medium', compact ? 'max-w-[130px]' : '')}>
+            {when && !compact ? `${format(when, 'HH:mm')} · ` : ''}{label}
+          </span>
+        )}
         {post.virality_score != null && (
-          <span className="ml-auto shrink-0 text-[9px] text-muted-foreground">{post.virality_score}</span>
+          <span className={cn('shrink-0 text-muted-foreground', big ? 'text-[10px]' : 'ml-auto text-[9px]')}>{post.virality_score}</span>
         )}
       </button>
     );
   }
 
-  const monthLabel = format(cursor, "MMMM 'de' yyyy", { locale: ptBR });
+  // Rótulo e navegação dependem da visão (mês / semana / dia).
+  const headerLabel = view === 'month'
+    ? format(cursor, "MMMM 'de' yyyy", { locale: ptBR })
+    : view === 'week'
+      ? `${format(startOfWeek(cursor, { weekStartsOn: 0 }), 'd MMM', { locale: ptBR })} – ${format(endOfWeek(cursor, { weekStartsOn: 0 }), "d MMM yyyy", { locale: ptBR })}`
+      : format(cursor, "EEEE, d 'de' MMMM", { locale: ptBR });
+
+  const goToday = () => setCursor(new Date());
+  const goPrev = () => setCursor((c) =>
+    view === 'month' ? new Date(c.getFullYear(), c.getMonth() - 1, 1)
+      : view === 'week' ? addDays(c, -7) : addDays(c, -1));
+  const goNext = () => setCursor((c) =>
+    view === 'month' ? new Date(c.getFullYear(), c.getMonth() + 1, 1)
+      : view === 'week' ? addDays(c, 7) : addDays(c, 1));
+
+  // Reagendar (mudar data/hora) direto do popup do post. Fuso-safe + sem passado.
+  async function rescheduleSelected(value: string) {
+    if (!selected) return;
+    const iso = localInputToIso(value);
+    if (!iso) return;
+    if (new Date(iso).getTime() < Date.now()) { toast.error('Não dá pra agendar no passado.'); return; }
+    try {
+      await update(selected.id, { status: 'scheduled', scheduled_date: iso });
+      setSelected((s) => (s ? { ...s, scheduled_date: iso, status: 'scheduled' } : s));
+      toast.success('Reagendado.');
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro ao reagendar.');
+    }
+  }
+
+  // Célula de um dia (drop zone + cabeçalho + chips). Tamanho por visão.
+  function DayCell({ day }: { day: Date }) {
+    const k = dayKey(day);
+    const dayEvents = eventsByDay.get(k) ?? [];
+    const inMonth = view !== 'month' || isSameMonth(day, cursor);
+    const over = overKey === k;
+    const tall = view === 'week' ? 'min-h-[58vh]' : view === 'day' ? 'min-h-[62vh]' : 'min-h-[104px]';
+    return (
+      <div
+        className={cn(
+          'border-b border-r border-border p-1 flex flex-col gap-1 transition-colors', tall,
+          !inMonth && 'bg-muted/30',
+          over && 'bg-accent/10 ring-1 ring-inset ring-accent',
+        )}
+        onDragOver={(e) => { if (draggingId) e.preventDefault(); }}
+        onDragEnter={() => draggingId && setOverKey(k)}
+        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOverKey((x) => (x === k ? null : x)); }}
+        onDrop={(e) => {
+          e.preventDefault(); setOverKey(null);
+          const id = e.dataTransfer.getData('text/plain') || draggingId; setDraggingId(null);
+          if (id) void moveToDay(id, day);
+        }}
+      >
+        <div className={cn('flex items-center', view === 'month' ? 'justify-end' : 'justify-between')}>
+          {view !== 'month' && (
+            <span className="text-xs font-semibold capitalize text-muted-foreground">
+              {format(day, view === 'day' ? "EEEE" : 'EEE d', { locale: ptBR })}
+            </span>
+          )}
+          <span className={cn('inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[11px]',
+            isToday(day) ? 'bg-accent text-accent-foreground font-bold' : inMonth ? 'text-foreground' : 'text-muted-foreground')}>
+            {format(day, 'd')}
+          </span>
+        </div>
+        <div className={cn('space-y-1 overflow-y-auto', view === 'month' && 'flex-1')}>
+          {dayEvents.length === 0 && view !== 'month'
+            ? <p className="py-4 text-center text-[11px] text-muted-foreground">Sem posts</p>
+            : dayEvents.map((p) => <PostChip key={p.id} post={p} big={view !== 'month'} />)}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-7xl space-y-4 p-6 lg:p-8">
@@ -419,59 +526,39 @@ export function Agenda() {
 
         {/* Calendário */}
         <div className="rounded-lg border border-border overflow-hidden">
-          <div className="flex items-center justify-between border-b border-border bg-card/40 px-3 py-2">
-            <span className="font-display font-semibold capitalize">{monthLabel}</span>
-            <div className="flex items-center gap-1">
-              <Button variant="ghost" size="sm" onClick={() => setCursor(startOfMonth(new Date()))}>Hoje</Button>
-              <Button variant="ghost" size="icon" onClick={() => setCursor((c) => new Date(c.getFullYear(), c.getMonth() - 1, 1))}>
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <Button variant="ghost" size="icon" onClick={() => setCursor((c) => new Date(c.getFullYear(), c.getMonth() + 1, 1))}>
-                <ChevronRight className="h-4 w-4" />
-              </Button>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-card/40 px-3 py-2">
+            <span className="font-display font-semibold capitalize">{headerLabel}</span>
+            <div className="flex items-center gap-2">
+              <div className="flex overflow-hidden rounded-md border border-border">
+                {(['month', 'week', 'day'] as const).map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => setView(v)}
+                    className={cn('px-2.5 py-1 text-xs font-medium transition-colors',
+                      view === v ? 'bg-accent text-accent-foreground' : 'hover:bg-secondary')}
+                  >
+                    {v === 'month' ? 'Mês' : v === 'week' ? 'Semana' : 'Dia'}
+                  </button>
+                ))}
+              </div>
+              <Button variant="ghost" size="sm" onClick={goToday}>Hoje</Button>
+              <Button variant="ghost" size="icon" onClick={goPrev}><ChevronLeft className="h-4 w-4" /></Button>
+              <Button variant="ghost" size="icon" onClick={goNext}><ChevronRight className="h-4 w-4" /></Button>
             </div>
           </div>
 
-          <div className="grid grid-cols-7 border-b border-border bg-card/20 text-center text-[11px] font-semibold text-muted-foreground">
-            {WEEKDAYS.map((w) => <div key={w} className="py-1.5">{w}</div>)}
-          </div>
-
-          <div className="grid grid-cols-7">
-            {days.map((day) => {
-              const k = dayKey(day);
-              const dayEvents = eventsByDay.get(k) ?? [];
-              const inMonth = isSameMonth(day, cursor);
-              const over = overKey === k;
-              return (
-                <div
-                  key={k}
-                  className={cn(
-                    'min-h-[104px] border-b border-r border-border p-1 flex flex-col gap-1 transition-colors',
-                    !inMonth && 'bg-muted/30',
-                    over && 'bg-accent/10 ring-1 ring-inset ring-accent',
-                  )}
-                  onDragOver={(e) => { if (draggingId) e.preventDefault(); }}
-                  onDragEnter={() => draggingId && setOverKey(k)}
-                  onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOverKey((x) => (x === k ? null : x)); }}
-                  onDrop={(e) => {
-                    e.preventDefault(); setOverKey(null);
-                    const id = e.dataTransfer.getData('text/plain') || draggingId; setDraggingId(null);
-                    if (id) void moveToDay(id, day);
-                  }}
-                >
-                  <div className="flex justify-end">
-                    <span className={cn('inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px]',
-                      isToday(day) ? 'bg-accent text-accent-foreground font-bold' : inMonth ? 'text-foreground' : 'text-muted-foreground')}>
-                      {format(day, 'd')}
-                    </span>
-                  </div>
-                  <div className="space-y-1 overflow-y-auto">
-                    {dayEvents.map((p) => <PostChip key={p.id} post={p} />)}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          {view === 'day' ? (
+            <DayCell day={cursor} />
+          ) : (
+            <>
+              <div className="grid grid-cols-7 border-b border-border bg-card/20 text-center text-[11px] font-semibold text-muted-foreground">
+                {WEEKDAYS.map((w) => <div key={w} className="py-1.5">{w}</div>)}
+              </div>
+              <div className="grid grid-cols-7">
+                {days.map((day) => <DayCell key={dayKey(day)} day={day} />)}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -499,6 +586,18 @@ export function Agenda() {
                 </DialogHeader>
 
                 <div className="space-y-3 py-2 max-h-[50vh] overflow-y-auto">
+                  {when && (
+                    <div className="space-y-1 rounded-md border border-border p-2">
+                      <Label className="text-xs text-muted-foreground">Reagendar (data e hora)</Label>
+                      <Input
+                        type="datetime-local"
+                        className="h-8 text-xs"
+                        min={nowLocalInput()}
+                        value={isoToLocalInput(selected.scheduled_date)}
+                        onChange={(e) => void rescheduleSelected(e.target.value)}
+                      />
+                    </div>
+                  )}
                   {quote && (
                     <div>
                       <Label className="text-xs text-muted-foreground">Título / Frase</Label>
@@ -541,20 +640,64 @@ export function Agenda() {
 
           <div className="space-y-4 py-2 max-h-[60vh] overflow-y-auto">
             <div className="space-y-2">
-              <Label className="text-xs font-semibold">Melhor horário por rede</Label>
-              {PLATFORM_ORDER.map((pl) => (
-                <div key={pl} className="flex items-center gap-2">
-                  <span className="flex w-28 items-center gap-1.5 text-sm">
-                    <PlatformIcon platform={pl} className="h-3.5 w-3.5" /> {PLATFORM_LABELS[pl]}
-                  </span>
-                  <Input
-                    type="time"
-                    className="h-8"
-                    value={cfg.platform_times[pl] ?? cfg.default_time}
-                    onChange={(e) => setCfg((c) => ({ ...c, platform_times: { ...c.platform_times, [pl]: e.target.value } }))}
-                  />
-                </div>
-              ))}
+              <Label className="text-xs font-semibold">Cadência por rede</Label>
+              <p className="text-[11px] text-muted-foreground -mt-1">
+                Quantos posts por semana e em quais horários. A "IA distribui" respeita esse padrão (e alterna os horários).
+              </p>
+              {PLATFORM_ORDER.map((pl) => {
+                const cad = cfg.platform_cadence[pl] ?? { per_week: 0, times: [] };
+                return (
+                  <div key={pl} className="rounded-md border p-2.5 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-1.5 text-sm font-medium">
+                        <PlatformIcon platform={pl} className="h-3.5 w-3.5" /> {PLATFORM_LABELS[pl]}
+                      </span>
+                      <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Input
+                          type="number" min={0} max={14}
+                          className="h-7 w-14 text-center"
+                          value={cad.per_week}
+                          onChange={(e) => updateCadence(pl, { per_week: Math.max(0, Number(e.target.value) || 0) })}
+                        />
+                        por semana <span className="text-[10px]">(0 = sem limite)</span>
+                      </label>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[11px] text-muted-foreground">Horários (alternados)</Label>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {cad.times.map((t, i) => (
+                          <span key={i} className="inline-flex items-center gap-0.5 rounded-md border bg-secondary/40 pl-1">
+                            <Input
+                              type="time"
+                              className="h-7 w-[92px] border-0 bg-transparent px-1"
+                              value={t}
+                              onChange={(e) => {
+                                const times = [...cad.times]; times[i] = e.target.value;
+                                updateCadence(pl, { times });
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="px-1 text-muted-foreground hover:text-destructive"
+                              title="Remover horário"
+                              onClick={() => updateCadence(pl, { times: cad.times.filter((_, j) => j !== i) })}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                        <button
+                          type="button"
+                          className="rounded-md border border-dashed px-2 py-1 text-xs text-muted-foreground hover:border-accent hover:text-accent"
+                          onClick={() => updateCadence(pl, { times: [...cad.times, cad.times[cad.times.length - 1] ?? '12:00'] })}
+                        >
+                          + horário
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
             <div className="grid grid-cols-2 gap-3">

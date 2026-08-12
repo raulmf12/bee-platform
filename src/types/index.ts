@@ -77,6 +77,17 @@ export interface DistributionPrefs {
   per_day_limit?: number;
   // começa a agendar a partir de hoje + N dias.
   start_offset_days?: number;
+  // Cadência por plataforma: quantos posts por semana e horários alternados.
+  // É o "padrão" (ex: LinkedIn 2x/semana, horários 09:00 e 15:00) que a
+  // distribuição automática respeita.
+  platform_cadence?: Partial<Record<Platform, PlatformCadence>>;
+}
+
+export interface PlatformCadence {
+  // Máximo de posts por semana nessa plataforma. 0 = sem limite semanal.
+  per_week?: number;
+  // Horários 'HH:mm' que a distribuição alterna (rotaciona) entre os posts.
+  times?: string[];
 }
 
 // ---------------------------------------------------------------------------

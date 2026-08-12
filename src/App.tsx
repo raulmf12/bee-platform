@@ -24,6 +24,7 @@ import { Genesis } from '@/pages/genesis/Genesis';
 import { Directives } from '@/pages/directives/Directives';
 import { Aprendizado } from '@/pages/aprendizado/Aprendizado';
 import { Coach } from '@/pages/coach/Coach';
+import { Feedback } from '@/pages/feedback/Feedback';
 import { Personas } from '@/pages/personas/Personas';
 import { Agenda } from '@/pages/agenda/Agenda';
 
@@ -95,6 +96,7 @@ export default function App() {
           <Route path="templates" element={<Templates />} />
           <Route path="aprendizado" element={<Aprendizado />} />
           <Route path="coach" element={<Coach />} />
+          <Route path="feedback" element={<Feedback />} />
           <Route path="personas" element={<Personas />} />
           {/* O kanban virou o Dashboard — links antigos pra /posts caem la. */}
           <Route path="posts" element={<Navigate to="/" replace />} />

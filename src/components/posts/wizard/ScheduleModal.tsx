@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { format, addDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 
 interface ScheduleModalProps {
   open: boolean;
@@ -42,6 +43,10 @@ export function ScheduleModal({ open, onOpenChange, onConfirm, platform, allowPu
         const [hours, minutes] = time.split(':').map(Number);
         const finalDate = new Date(date);
         finalDate.setHours(hours, minutes, 0, 0);
+        if (finalDate.getTime() < Date.now()) {
+          toast.error('Não dá pra agendar no passado.');
+          return;
+        }
         await onConfirm(finalDate);
       }
       onOpenChange(false);

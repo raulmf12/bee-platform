@@ -36,6 +36,20 @@ interface SnippetInput {
   target_platform?: 'linkedin' | 'instagram';
 }
 
+// Recupera as strings do array "options" de um JSON truncado/malformado.
+// Descarta a última se estiver incompleta (sem aspas de fechamento).
+function salvageOptions(raw: string): string[] {
+  const idx = raw.indexOf('"options"');
+  const slice = idx >= 0 ? raw.slice(idx + '"options"'.length) : raw;
+  const out: string[] = [];
+  const re = /"((?:[^"\\]|\\.)*)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(slice)) !== null) {
+    try { out.push(JSON.parse(`"${m[1]}"`)); } catch { out.push(m[1]); }
+  }
+  return out.map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
 async function callGeminiOnce(apiKey: string, sys: string, usr: string, model: string) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   return await fetch(url, {
@@ -45,7 +59,7 @@ async function callGeminiOnce(apiKey: string, sys: string, usr: string, model: s
       systemInstruction: { parts: [{ text: sys }] },
       contents: [{ role: 'user', parts: [{ text: usr }] }],
       // Temperatura alta: as opções precisam ser DIFERENTES entre si.
-      generationConfig: { temperature: 0.95, maxOutputTokens: 1600, responseMimeType: 'application/json' },
+      generationConfig: { temperature: 0.95, maxOutputTokens: 4096, responseMimeType: 'application/json' },
     }),
   });
 }
@@ -129,17 +143,20 @@ Deno.serve(async (req: Request) => {
 
     const { text, usage, model_used } = await callGemini(apiKey, sys, usr);
 
-    let parsed: { options?: unknown };
+    const cleaned = text.trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+    let options: string[] = [];
     try {
-      parsed = JSON.parse(text.trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim());
+      const parsed = JSON.parse(cleaned) as { options?: unknown };
+      if (Array.isArray(parsed.options)) {
+        options = parsed.options.map((o) => String(o ?? '').trim()).filter((o) => o.length > 0);
+      }
     } catch {
-      return errorResponse('Resposta da IA em formato inválido', 502);
+      // JSON truncado (trecho grande + várias opções): recupera as strings do
+      // array "options" mesmo sem o fechamento, descartando a última incompleta.
+      options = salvageOptions(cleaned);
     }
-
-    const options = Array.isArray(parsed.options)
-      ? parsed.options.map((o) => String(o ?? '').trim()).filter((o) => o.length > 0).slice(0, count)
-      : [];
-    if (!options.length) return errorResponse('A IA não retornou opções', 502);
+    options = options.slice(0, count);
+    if (!options.length) return errorResponse('A IA não retornou opções (tente selecionar um trecho menor)', 502);
 
     logUsage({
       userId, provider: 'gemini', product: 'text', model: model_used,
