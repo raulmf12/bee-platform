@@ -745,11 +745,13 @@ async function callGeminiOnce(apiKey: string, sys: string, usr: string, model: s
   });
 }
 
-// O orcamento de saida cresce com o numero de variacoes: 4000 tokens davam
-// conta de 1 post, mas 5 captions de 4 paragrafos truncam no meio e o JSON
-// chega quebrado. ~1600 por variacao extra, com folga.
+// O orcamento de saida cresce com o numero de variacoes. Piso ALTO (7000) de
+// proposito: o gemini-3.x-flash "pensa" antes de responder e o pensamento conta
+// no maxOutputTokens; com 4000 o pensamento comia o orcamento e a legenda
+// truncava no meio de uma palavra (ex: "...descomprom"). ~1600 por variacao
+// extra pras 5 captions de blocos curtos caberem sem quebrar o JSON.
 function outputBudget(variations: number): number {
-  return Math.min(4000 + Math.max(0, variations - 1) * 1600, 16000);
+  return Math.min(7000 + Math.max(0, variations - 1) * 1600, 20000);
 }
 
 async function callGemini(

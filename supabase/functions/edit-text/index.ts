@@ -48,7 +48,11 @@ async function callGeminiOnce(apiKey: string, sys: string, usr: string, model: s
       systemInstruction: { parts: [{ text: sys }] },
       contents: [{ role: 'user', parts: [{ text: usr }] }],
       // Temperatura baixa: fidelidade ao texto original, mudança mínima.
-      generationConfig: { temperature: 0.3, maxOutputTokens: 2000, responseMimeType: 'application/json' },
+      // Saída em TEXTO PURO (não JSON): a legenda pode ter vários parágrafos e
+      // quebras de linha — embrulhar isso em JSON estourava os tokens e truncava
+      // (JSON inválido → 502). Texto puro é o próprio resultado, sem fragilidade.
+      // maxOutputTokens alto porque o modelo ECOA a legenda inteira + "pensa".
+      generationConfig: { temperature: 0.3, maxOutputTokens: 8000 },
     }),
   });
 }
@@ -110,7 +114,8 @@ Deno.serve(async (req: Request) => {
       '- NÃO reescreva, NÃO "melhore" por conta própria, NÃO troque sinônimos fora do que foi pedido, NÃO acrescente nada que não foi solicitado.',
       '- Se o pedido for pequeno (trocar uma palavra, cortar uma frase, mudar o final, ajustar o tom de um trecho), mexa só naquilo.',
       '- Mantenha o MESMO assunto e a coerência com o texto complementar, se informado. Nunca mude de tema.',
-      '- Devolva SÓ o texto final editado, sem aspas envolventes, sem comentários, sem markdown.',
+      '- Devolva SÓ o texto final editado — nada mais. Sem aspas envolventes, sem comentários, sem markdown, sem prefixos tipo "Texto:".',
+      '- Preserve as quebras de linha e os parágrafos em branco exatamente como no original (menos onde a instrução pedir pra mudar).',
     ].join('\n');
 
     const usr = [
@@ -128,19 +133,21 @@ Deno.serve(async (req: Request) => {
       'AJUSTE PEDIDO:',
       input.instruction.trim(),
       '',
-      'Devolva JSON puro (sem markdown): { "text": "<texto final editado>" }',
+      'Agora devolva SÓ o texto final editado (texto puro, sem aspas, sem markdown).',
     ].filter((l) => l !== '').join('\n');
 
     const { text, usage, model_used } = await callGemini(apiKey, sys, usr);
 
-    let parsed: { text?: string };
-    try {
-      parsed = JSON.parse(text.trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim());
-    } catch {
-      return errorResponse('Resposta da IA em formato inválido', 502);
+    // Saída em texto puro: limpa cercas de markdown e aspas que o modelo às vezes
+    // envolve, e um eventual prefixo "text:"/"Texto final:" que ele possa colar.
+    let edited = text.trim()
+      .replace(/^```[a-z]*\s*/i, '')
+      .replace(/```$/, '')
+      .trim();
+    edited = edited.replace(/^(?:"text"\s*:\s*|texto\s*(?:final)?\s*:\s*)/i, '').trim();
+    if ((edited.startsWith('"') && edited.endsWith('"')) || (edited.startsWith('“') && edited.endsWith('”'))) {
+      edited = edited.slice(1, -1).trim();
     }
-
-    const edited = String(parsed.text ?? '').trim();
     if (!edited) return errorResponse('A IA não retornou texto editado', 502);
 
     logUsage({

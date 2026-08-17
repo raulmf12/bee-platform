@@ -91,12 +91,15 @@ function isSameDay(iso: string, ref: Date): boolean {
     && d.getDate() === ref.getDate();
 }
 
-// BEE-DDMMAA-G{global}-D{dia}-V{lote}
-function buildCodigo(date: Date, global: number, day: number, v: number): string {
+// BEE-DDMMAA-G{global}-D{dia}
+// G{global} já é um número sequencial ÚNICO por post — é o identificador do post,
+// não uma "versão". (Removido o antigo -V{lote}: dava a impressão errada de que
+// cada post era a versão N de um mesmo post. Cada post é único e independente.)
+function buildCodigo(date: Date, global: number, day: number): string {
   const dd = String(date.getDate()).padStart(2, '0');
   const mm = String(date.getMonth() + 1).padStart(2, '0');
   const yy = String(date.getFullYear()).slice(-2);
-  return `BEE-${dd}${mm}${yy}-G${global}-D${day}-V${v}`;
+  return `BEE-${dd}${mm}${yy}-G${global}-D${day}`;
 }
 
 // Barra de potencial de viralização (verde ≥70 / amarelo ≥40 / vermelho).
@@ -228,6 +231,11 @@ export function NewPost() {
   }, [searchParams]);
 
   const activeItem = batch.find((it) => it.post.id === activeId) ?? null;
+
+  // Nome legível da editoria a partir do slug (cai no próprio slug se não achar).
+  function editorialName(slug: string): string {
+    return editorials.find((e) => e.slug === slug)?.name ?? slug;
+  }
 
   // Recria UM BatchItem a partir de um post salvo (tudo já persistido: texto,
   // legenda, fabric, editoria, e o status por campo em metadata).
@@ -520,7 +528,7 @@ export function NewPost() {
           virality_reason: fresh.reason,
         }]);
 
-        const codigo = buildCodigo(now, baseGlobal + i + 1, baseDay + i + 1, i + 1);
+        const codigo = buildCodigo(now, baseGlobal + i + 1, baseDay + i + 1);
         const { fabricJson, templateId } = await renderBeeQuote(sizeId, fresh.quote);
 
         const post = await create({
@@ -1650,12 +1658,19 @@ export function NewPost() {
                   onClick={() => { setActiveId(it.post.id); setState('REVIEW_ONE'); }}
                 >
                   <CardContent className="p-4 space-y-3">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-2">
                       <Badge variant="outline" className="font-mono text-[10px]">{it.codigo}</Badge>
                       <Badge variant="outline">{it.pick.platform}</Badge>
                     </div>
+                    <Badge className="bg-accent/15 text-accent hover:bg-accent/15 border-accent/30">
+                      {editorialName(it.pick.editorialSlug)}
+                    </Badge>
                     <p className="font-display text-sm font-medium leading-snug line-clamp-3">"{it.quote}"</p>
                     <ViralityBar score={it.score} />
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                      <span title="Edições feitas à mão neste post">✋ {it.manualEdits} à mão</span>
+                      <span title="Ajustes/regeneragões com IA neste post">🤖 {it.editRounds} com IA</span>
+                    </div>
                     <div className="flex items-center gap-2 pt-1">
                       {done
                         ? <Badge className="bg-emerald-600 text-white hover:bg-emerald-600"><Check className="h-3 w-3 mr-1" />Pronto pro design</Badge>
@@ -1673,12 +1688,21 @@ export function NewPost() {
       {state === 'REVIEW_ONE' && activeItem && (
         <div className="space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <Badge variant="outline" className="font-mono text-xs">{activeItem.codigo}</Badge>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className="font-mono text-xs">{activeItem.codigo}</Badge>
+              <Badge className="bg-accent/15 text-accent hover:bg-accent/15 border-accent/30">
+                {editorialName(activeItem.pick.editorialSlug)}
+              </Badge>
+              <span className="text-[11px] text-muted-foreground flex items-center gap-2">
+                <span title="Edições feitas à mão neste post">✋ {activeItem.manualEdits} à mão</span>
+                <span title="Ajustes/regeneragões com IA neste post">🤖 {activeItem.editRounds} com IA</span>
+              </span>
+            </div>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="outline" className="text-accent border-accent/40 hover:bg-accent/10" onClick={() => setChatOpen(true)}>
                 <MessageCircle className="h-4 w-4 mr-1" /> Assistente de geração de conteúdo
               </Button>
-              <Badge variant="outline">{activeItem.pick.platform} · {activeItem.pick.editorialSlug}</Badge>
+              <Badge variant="outline">{activeItem.pick.platform}</Badge>
             </div>
           </div>
 
