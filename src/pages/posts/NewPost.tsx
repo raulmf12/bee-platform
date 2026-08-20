@@ -31,6 +31,7 @@ import { renderBeeQuote } from '@/lib/templates/resolve';
 import { renderFabricToDataUrl } from '@/lib/templates/renderPost';
 import { getLayoutDimensions, type BeeQuoteSize } from '@/lib/templates/beeQuote';
 import { uploadAssetImage, uploadVideo } from '@/lib/storage';
+import { generateHiveImage } from '@/lib/hive/runVisual';
 import { toast } from 'sonner';
 import { v4 as uuid } from 'uuid';
 import { StaticCanvasPreview } from '@/components/posts/wizard/StaticCanvasPreview';
@@ -968,17 +969,33 @@ export function NewPost() {
     setScheduleOpen(false);
     setImageScheduleId(null);
     try {
-      const { width, height } = getLayoutDimensions(item.sizeId);
-      const dataUrl = await renderFabricToDataUrl(item.fabricJson, { width, height });
+      // Sistema visual da HIVE (M01): decide a variante -> compõe as camadas ->
+      // renderiza. Fallback pro template clássico se a Hive falhar — a geração
+      // nunca trava por causa da imagem.
       let renderedSlides: Record<string, string> | undefined;
-      if (dataUrl) {
-        const { publicUrl } = await uploadAssetImage({
+      let hiveSlide: object | undefined;
+      let hiveDecision: Record<string, unknown> | undefined;
+      try {
+        const hive = await generateHiveImage({
           userId: currentUser.id,
-          assetId: item.post.id,
-          dataUrl,
-          filename: 'render.png',
+          postId: item.post.id,
+          text: item.quote,
+          platform: item.post.platform as 'linkedin' | 'instagram',
+          editorialSlug: item.pick?.editorialSlug,
         });
-        renderedSlides = { slide1: publicUrl };
+        renderedSlides = { slide1: hive.publicUrl };
+        hiveSlide = hive.slide;
+        hiveDecision = hive.decision as Record<string, unknown>;
+      } catch (e) {
+        console.error('[Hive finalize] fallback pro template clássico', e);
+        const { width, height } = getLayoutDimensions(item.sizeId);
+        const dataUrl = await renderFabricToDataUrl(item.fabricJson, { width, height });
+        if (dataUrl) {
+          const { publicUrl } = await uploadAssetImage({
+            userId: currentUser.id, assetId: item.post.id, dataUrl, filename: 'render.png',
+          });
+          renderedSlides = { slide1: publicUrl };
+        }
       }
 
       // Medição da eficácia. Baseline = último texto da IA (item.aiQuote); final =
@@ -1001,6 +1018,8 @@ export function NewPost() {
         manual_edits: item.manualEdits,
         ...(date ? { scheduled_date: date.toISOString() } : {}),
         ...(renderedSlides ? { rendered_slides: renderedSlides } : {}),
+        ...(hiveSlide ? { carousel_fabric_json: [hiveSlide] } : {}),
+        ...(hiveDecision ? { visual_decision: hiveDecision, image_status: 'pending' as const } : {}),
       });
 
       toast.success(date ? `Post agendado! (${item.codigo})` : `Post em stand-by (${item.codigo})`);

@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { templateApi } from '@/lib/api';
 import { templateFields } from '@/lib/templates/hydrate';
 import { TemplateThumb } from '@/components/templates/TemplateThumb';
+import { HiveMatrix } from '@/components/hive/HiveMatrix';
 import type { PostTemplate } from '@/types';
 import { toast } from 'sonner';
 
@@ -92,6 +93,8 @@ export function Templates() {
           </Link>
         </Button>
       </header>
+
+      <HiveMatrix />
 
       {loading ? (
         <div className="py-16 text-center">

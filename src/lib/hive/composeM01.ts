@@ -156,6 +156,12 @@ export function composeM01(input: ComposeInput): ComposedSlide {
         balance: true,
         step: 3,
       });
+      // Evita "ponto final deslocado": se a última linha for só pontuação
+      // (ex: "." ou "?"), junta ela ao fim da linha anterior.
+      if (lines.length > 1 && /^[.,;:!?"')\]…]+$/.test(lines[lines.length - 1].trim())) {
+        lines[lines.length - 2] = lines[lines.length - 2] + lines[lines.length - 1];
+        lines.pop();
+      }
       const textHeight = lines.length * fontSize * LINE_HEIGHT;
       const cy = pctH(g.cy ?? 43);
       const top = Math.round(cy - textHeight / 2);
