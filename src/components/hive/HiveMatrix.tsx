@@ -73,9 +73,14 @@ export function HiveMatrix() {
             A mesma ideia, muitas formas de se manifestar. A Hive escolhe a matriz e a variação; a montagem é em camadas editáveis.
           </p>
         </div>
-        <Button asChild variant="outline" size="sm">
-          <Link to="/hive/preview">Abrir prévia / calibrar</Link>
-        </Button>
+        <div className="flex gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link to="/hive/assets">Biblioteca de imagens</Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/hive/preview">Abrir prévia</Link>
+          </Button>
+        </div>
       </header>
 
       {/* M01 — congelado: mostra as 5 variações renderizadas */}
