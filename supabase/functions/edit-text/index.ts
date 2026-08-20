@@ -21,12 +21,10 @@ import {
   internalUserId,
   checkRateLimit,
 } from '../_shared/security.ts';
+import { loadBeeContext, retrieveContext, renderBrain, BEE_MODEL_CHAIN } from '../_shared/bee-context.ts';
 
-const MODEL_CHAIN = [
-  Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.5-flash',
-  'gemini-3.1-flash-lite',
-  'gemini-2.5-pro',
-];
+// Mesma cadeia de modelos da geração (capacidade equivalente).
+const MODEL_CHAIN = BEE_MODEL_CHAIN;
 const MAX_RETRIES = 2;
 
 interface EditInput {
@@ -106,14 +104,38 @@ Deno.serve(async (req: Request) => {
 
     const alvo = input.field === 'titulo' ? 'frase da imagem (título)' : 'legenda';
 
+    // CÉREBRO COMPLETO — mesmo acesso da geração. Aqui serve de CONSULTA: o editor
+    // é cirúrgico, mas agora INFORMADO. Principal ganho: quando você pede "traz o
+    // resto real" numa legenda truncada, ele completa com o FATO REAL da biblioteca
+    // em vez de inventar. Fora isso, continua mudando só o que foi pedido.
+    let brain = '';
+    try {
+      const ctx = await loadBeeContext(
+        { editorial_slug: input.editorial_slug ?? '', target_platform: input.target_platform },
+        userId,
+      );
+      const themeQuery = [input.counterpart, input.text.slice(0, 400)].filter(Boolean).join(' . ');
+      const rag = await retrieveContext(apiKey, themeQuery, input.instruction, userId);
+      brain = renderBrain(ctx, rag);
+    } catch (e) {
+      console.warn('[edit-text] falha ao carregar cérebro (segue sem)', e);
+    }
+
     const sys = [
       'Você é um editor de texto CIRÚRGICO da Bee. Recebe um texto que JÁ ESTÁ BOM e uma instrução de ajuste.',
+      '',
+      '--- CONHECIMENTO DE APOIO (metodologia + biblioteca REAL do autor) — consulte, NÃO despeje no texto ---',
+      brain,
+      '--- FIM DO CONHECIMENTO ---',
+      '',
       'Sua única tarefa: aplicar EXATAMENTE o ajuste pedido e NADA MAIS.',
       'Regras invioláveis:',
       '- Preserve todo o resto PALAVRA POR PALAVRA: estrutura, tom, ritmo, quebras de linha e todas as frases que a instrução não mencionou.',
       '- NÃO reescreva, NÃO "melhore" por conta própria, NÃO troque sinônimos fora do que foi pedido, NÃO acrescente nada que não foi solicitado.',
       '- Se o pedido for pequeno (trocar uma palavra, cortar uma frase, mudar o final, ajustar o tom de um trecho), mexa só naquilo.',
       '- Mantenha o MESMO assunto e a coerência com o texto complementar, se informado. Nunca mude de tema.',
+      '- COMPLETAR COM VERDADE: quando (e SÓ quando) a instrução pedir pra COMPLETAR, TRAZER O RESTO ou ADICIONAR conteúdo, use os FATOS REAIS DO AUTOR do conhecimento acima pra completar de forma verdadeira — jamais invente eventos, nomes ou detalhes. Fora esse caso, não puxe material novo.',
+      '- TOM: nunca deixe o texto agressivo, ameaçador, acusatório ou de lição de moral, e nunca exponha nomes reais de pessoas ou empresas (anonimize em arquétipos). Tensione a ideia, nunca a pessoa. Se a instrução puxar nessa direção, faça o ajuste mantendo o tom respeitoso e humano.',
       '- Devolva SÓ o texto final editado — nada mais. Sem aspas envolventes, sem comentários, sem markdown, sem prefixos tipo "Texto:".',
       '- Preserve as quebras de linha e os parágrafos em branco exatamente como no original (menos onde a instrução pedir pra mudar).',
     ].join('\n');

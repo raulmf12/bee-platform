@@ -18,12 +18,10 @@ import {
   internalUserId,
   checkRateLimit,
 } from '../_shared/security.ts';
+import { loadBeeContext, retrieveContext, renderBrain, BEE_MODEL_CHAIN } from '../_shared/bee-context.ts';
 
-const MODEL_CHAIN = [
-  Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.5-flash',
-  'gemini-3.1-flash-lite',
-  'gemini-2.5-pro',
-];
+// Mesma cadeia de modelos da geração (capacidade equivalente).
+const MODEL_CHAIN = BEE_MODEL_CHAIN;
 const MAX_RETRIES = 2;
 
 interface SnippetInput {
@@ -113,11 +111,32 @@ Deno.serve(async (req: Request) => {
 
     const count = Math.max(2, Math.min(6, input.count ?? 5));
 
+    // CÉREBRO COMPLETO — mesmo acesso da geração (metodologia + biblioteca real).
+    // As alternativas do trecho passam a nascer com a voz e os fatos reais da Bee,
+    // não de improviso.
+    let brain = '';
+    try {
+      const ctx = await loadBeeContext(
+        { editorial_slug: input.editorial_slug ?? '', target_platform: input.target_platform },
+        userId,
+      );
+      const rag = await retrieveContext(apiKey, input.full_text.slice(0, 500), `${input.instruction ?? ''} ${input.snippet}`, userId);
+      brain = renderBrain(ctx, rag);
+    } catch (e) {
+      console.warn('[regenerate-snippet] falha ao carregar cérebro (segue sem)', e);
+    }
+
     const sys = [
       'Você é um editor da Bee que gera ALTERNATIVAS para um TRECHO específico dentro de um texto, SEM tocar no resto.',
+      '',
+      '--- CONHECIMENTO DE APOIO (metodologia + biblioteca REAL do autor) — consulte ---',
+      brain,
+      '--- FIM DO CONHECIMENTO ---',
+      '',
       `Gere exatamente ${count} opções, cada uma um SUBSTITUTO direto do trecho — encaixa no lugar dele mantendo a frase coerente com o texto ao redor.`,
       'Cada opção preserva o PAPEL do trecho (se é uma analogia, traga OUTRA analogia; se é um gancho, outro gancho) e o MESMO assunto.',
       'Mantenha a VOZ da Bee: olhar sistêmico, sem clichê corporativo, sem travessões (— ou -), sem emojis, sem hashtags.',
+      'Se o trecho toca um FATO (história, pessoa, empresa, decisão), baseie-se nos FATOS REAIS DO AUTOR acima — nunca invente; anonimize nomes próprios.',
       'As opções devem ser DIFERENTES entre si (imagens/ângulos distintos), não variações mínimas de palavra.',
       'Devolva APENAS o trecho substituto em cada opção — NUNCA o texto inteiro, nem aspas envolventes.',
     ].join('\n');

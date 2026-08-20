@@ -528,4 +528,29 @@ export const edge = {
     if (!res.ok) throw new Error(`mine-content HTTP ${res.status}: ${text.slice(0, 400)}`);
     return JSON.parse(text);
   },
+
+  // A IA (de verdade) monta o calendário: propõe dia + horário + JUSTIFICATIVA
+  // por post. Não grava — devolve o plano pro usuário revisar e aplicar.
+  async distributeSchedule(input: {
+    today_date: string;
+    horizon_days?: number;
+    standby: Array<{ id: string; platform: string; editorial_slug?: string; editorial_name?: string; title?: string; theme?: string; virality_score?: number }>;
+    occupied?: Array<{ date: string; platform: string; editorial_slug?: string }>;
+    prefs: {
+      skip_weekends?: boolean;
+      per_day_limit?: number;
+      start_offset_days?: number;
+      platform_cadence?: Record<string, { per_week: number; times: string[] }>;
+    };
+  }): Promise<{ success: boolean; plan: Array<{ post_id: string; date: string; time: string; reason: string }>; summary?: string; error?: string }> {
+    const headers = await authHeader();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/distribute-schedule`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(input),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`distribute-schedule HTTP ${res.status}: ${text.slice(0, 400)}`);
+    return JSON.parse(text) as { success: boolean; plan: Array<{ post_id: string; date: string; time: string; reason: string }>; summary?: string; error?: string };
+  },
 };

@@ -19,12 +19,10 @@ import {
   internalUserId,
   checkRateLimit,
 } from '../_shared/security.ts';
+import { loadBeeContext, retrieveContext, renderBrain, BEE_MODEL_CHAIN } from '../_shared/bee-context.ts';
 
-const MODEL_CHAIN = [
-  Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.5-flash',
-  'gemini-3.1-flash-lite',
-  'gemini-2.5-pro',
-];
+// Mesma cadeia de modelos da geração (capacidade equivalente).
+const MODEL_CHAIN = BEE_MODEL_CHAIN;
 
 interface ChatMsg { role: 'user' | 'assistant'; content: string }
 interface PostCtx {
@@ -140,14 +138,29 @@ Deno.serve(async (req: Request) => {
 
     const p = post ?? {};
     const platform = p.platform ?? 'linkedin';
-    const dirs = await fetchDirectives(platform, p.editorial_slug ?? '');
+
+    // CÉREBRO COMPLETO — o mesmo acesso da geração: metodologia + persona +
+    // avatares + editorial + arsenal + exemplos + diretrizes + biblioteca (RAG).
+    // Assim a parceira de correção sabe da sua história real, não conversa no vácuo.
+    let brain = '';
+    try {
+      const ctx = await loadBeeContext(
+        { editorial_slug: p.editorial_slug ?? '', target_platform: platform, target_avatar: (p.target_avatar as 'identificado' | 'incomodado' | 'ambos' | undefined) },
+        userId,
+      );
+      const lastUser = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+      const themeQuery = [ctx.editorial?.name, p.quote, (p.caption ?? '').slice(0, 400)].filter(Boolean).join(' . ');
+      const rag = await retrieveContext(apiKey, themeQuery, lastUser, userId);
+      brain = renderBrain(ctx, rag);
+    } catch (e) {
+      console.warn('[post-chat] falha ao carregar cérebro (segue sem)', e);
+    }
 
     const sys = [
       'Você é a parceira criativa da Bee Consulting — pensa JUNTO com o usuário sobre UM post específico (título e legenda).',
-      'Seu papel: trocar ideias, provocar ângulos, apontar o que pode ficar mais forte, sugerir analogias e ganchos. Colaborativa, direta e concisa — nada de textão.',
-      'Fale com o olhar SISTÊMICO da Bee: tensione o óbvio, evite clichê corporativo. Nos textos que propuser: sem travessões (— ou -), sem emojis, sem ALL CAPS.',
+      'Seu papel: trocar ideias, provocar ângulos, apontar o que pode ficar mais forte, sugerir analogias e ganchos, e AJUDAR A CORRIGIR o texto a fundo. Você tem acesso à metodologia completa e à biblioteca real do autor (abaixo) — use esse conhecimento de verdade, referencie os fatos reais, não fale no vácuo.',
       '',
-      voiceBlock(dirs),
+      brain,
       '',
       'O POST ATUAL EM EDIÇÃO:',
       `- Plataforma: ${platform}${p.editorial_slug ? ` · Editoria: ${p.editorial_slug}` : ''}`,
@@ -156,10 +169,10 @@ Deno.serve(async (req: Request) => {
       '',
       'FORMATO DE RESPOSTA — devolva SEMPRE JSON puro (sem markdown):',
       '{',
-      '  "reply": "<sua resposta de conversa, curta e útil>",',
+      '  "reply": "<sua resposta de conversa, útil e fundamentada>",',
       '  "suggestions": [ { "field": "titulo" | "legenda", "text": "<texto pronto pra aplicar>", "label": "<rótulo curto, ex: \'Gancho mais provocativo\'>" } ]',
       '}',
-      'Mantenha o "reply" CURTO e direto (no máximo ~3 frases).',
+      'Seja CONCISA por padrão, mas quando o usuário pedir análise, explicação ou ajuda pra corrigir a fundo, PODE se estender: explique seu raciocínio com a metodologia e ancore nos fatos reais da base. Não enrole — mas nunca seja rasa quando dá pra ajudar de verdade.',
       'REGRA CRÍTICA — quando o usuário pedir OPÇÕES / SUGESTÕES / VARIAÇÕES (ex: "me dá 3 opções", "sugira outra abertura", "muda só a primeira frase"): devolva CADA opção como um item de "suggestions". NUNCA descreva as opções apenas no texto do reply. Nesse caso o "reply" é só uma frase apresentando (ex: "Trouxe 3 versões, escolha:").',
       'Cada item de "suggestions" é o texto COMPLETO do campo (titulo OU legenda) já com a mudança aplicada e TODO O RESTO idêntico ao original. Ex: se pediram pra mudar só a 1ª frase da legenda, cada sugestão é a legenda inteira, mudando apenas a 1ª frase e mantendo o resto igual (inclusive as hashtags).',
       'Use "suggestions": [] apenas quando for conversa/ideia sem proposta concreta de texto. Nunca invente nomes reais de pessoas/empresas.',

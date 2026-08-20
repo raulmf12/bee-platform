@@ -31,6 +31,7 @@ import {
 import { usePostStore } from '@/store/postStore';
 import { useAuthStore } from '@/store/authStore';
 import { beeApi } from '@/lib/api';
+import { edge } from '@/lib/edge';
 import {
   DEFAULT_DISTRIBUTION, atTime, cadenceFor, distributeStandby, editorialGapDays,
   isoToLocalInput, localInputToIso, mergePrefs, nowLocalInput, weekKey, type MergedPrefs,
@@ -89,6 +90,10 @@ export function Agenda() {
   // Config da distribuição (diálogo)
   const [configOpen, setConfigOpen] = useState(false);
   const [cfg, setCfg] = useState<MergedPrefs>(DEFAULT_DISTRIBUTION);
+
+  // Plano proposto pela IA (revisão antes de aplicar). Cada linha traz o porquê.
+  const [plan, setPlan] = useState<{ summary?: string; rows: Array<{ post: UserPost; date: string; time: string; reason: string }> } | null>(null);
+  const [applying, setApplying] = useState(false);
 
   useEffect(() => {
     void load();
@@ -174,10 +179,22 @@ export function Agenda() {
     const existing = eventDate(post);
     // Mantém o horário se já tinha; senão usa o 1º horário da cadência da plataforma.
     const time = existing ? format(existing, 'HH:mm') : cadenceFor(prefs, post.platform).times[0];
-    const when = atTime(day, time);
+    let when = atTime(day, time);
+    // Se o horário herdado já passou NESTE dia (ex.: mover um post pra hoje de
+    // manhã, à tarde), não recusamos o arraste: empurramos pro próximo horário
+    // válido do dia. Assim dá pra mover direto de um dia pro outro sem precisar
+    // devolver pro stand-by primeiro. Só recusamos se o dia inteiro já passou.
     if (when.getTime() < Date.now()) {
-      toast.error('Não dá pra agendar no passado.');
-      return;
+      const slots = [...cadenceFor(prefs, post.platform).times, '12:00', '15:00', '18:00', '21:00'];
+      const next = slots
+        .map((t) => atTime(day, t))
+        .filter((d) => d.getTime() > Date.now())
+        .sort((a, b) => a.getTime() - b.getTime())[0];
+      if (!next) {
+        toast.error('Esse dia já passou. Escolha uma data futura.');
+        return;
+      }
+      when = next;
     }
     try {
       await update(postId, { status: 'scheduled', scheduled_date: when.toISOString() });
@@ -199,6 +216,38 @@ export function Agenda() {
     }
   }
 
+  // Distribuição LOCAL (regra determinística) — usada como fallback se a IA falhar.
+  function localDistribute(toPlace: UserPost[]): Array<{ postId: string; date: Date }> {
+    const ordered = [...toPlace].sort((a, b) => {
+      const sa = a.virality_score ?? -1;
+      const sb = b.virality_score ?? -1;
+      if (sb !== sa) return sb - sa;
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    });
+    const lastByEditorial: Record<string, Date> = {};
+    const countByDay: Record<string, number> = {};
+    const countByWeekPlatform: Record<string, number> = {};
+    for (const p of posts) {
+      const d = eventDate(p);
+      if (!d) continue;
+      const slug = editorialOf(p) ?? '__none__';
+      if (!lastByEditorial[slug] || d > lastByEditorial[slug]) lastByEditorial[slug] = d;
+      const k = dayKey(d);
+      countByDay[k] = (countByDay[k] ?? 0) + 1;
+      const wpk = `${weekKey(d)}|${p.platform}`;
+      countByWeekPlatform[wpk] = (countByWeekPlatform[wpk] ?? 0) + 1;
+    }
+    return distributeStandby({
+      standby: ordered.map((p) => ({ id: p.id, platform: p.platform, editorialSlug: editorialOf(p) })),
+      gapForEditorial: (slug) => editorialGapDays(slug ? edMap.get(slug)?.freq : undefined),
+      lastByEditorial, countByDay, countByWeekPlatform, prefs, from: new Date(),
+    });
+  }
+
+  type PlanRow = { post: UserPost; date: string; time: string; reason: string };
+
+  // "IA distribui": a IA de verdade PROPÕE o calendário (dia + hora + porquê).
+  // Não grava — abre o modal de revisão pra você aprovar/ajustar antes de aplicar.
   async function handleAutoDistribute() {
     const toPlace = posts.filter((p) => p.status === 'approved' && !p.scheduled_date && isVisible(p));
     if (toPlace.length === 0) {
@@ -207,50 +256,85 @@ export function Agenda() {
     }
     setDistributing(true);
     try {
-      // Prioridade: melhor nota primeiro; empate pelo mais antigo.
-      const ordered = [...toPlace].sort((a, b) => {
-        const sa = a.virality_score ?? -1;
-        const sb = b.virality_score ?? -1;
-        if (sb !== sa) return sb - sa;
-        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      const occupied = posts
+        .map((p) => ({ p, d: eventDate(p) }))
+        .filter((x) => x.d)
+        .map((x) => ({ date: dayKey(x.d!), platform: x.p.platform, editorial_slug: editorialOf(x.p) }));
+
+      const res = await edge.distributeSchedule({
+        today_date: format(new Date(), 'yyyy-MM-dd'),
+        standby: toPlace.map((p) => ({
+          id: p.id,
+          platform: p.platform,
+          editorial_slug: editorialOf(p),
+          editorial_name: edMap.get(editorialOf(p) ?? '')?.name,
+          title: (p.carousel_text?.quote as string | undefined) || p.title || p.caption || undefined,
+          virality_score: p.virality_score ?? undefined,
+        })),
+        occupied,
+        prefs: {
+          skip_weekends: prefs.skip_weekends,
+          per_day_limit: prefs.per_day_limit,
+          start_offset_days: prefs.start_offset_days,
+          platform_cadence: prefs.platform_cadence as Record<string, { per_week: number; times: string[] }>,
+        },
       });
 
-      // Estado do que já está no calendário (respeita ritmo, limite por dia e
-      // a cadência semanal por plataforma).
-      const lastByEditorial: Record<string, Date> = {};
-      const countByDay: Record<string, number> = {};
-      const countByWeekPlatform: Record<string, number> = {};
-      for (const p of posts) {
-        const d = eventDate(p);
-        if (!d) continue;
-        const slug = editorialOf(p) ?? '__none__';
-        if (!lastByEditorial[slug] || d > lastByEditorial[slug]) lastByEditorial[slug] = d;
-        const k = dayKey(d);
-        countByDay[k] = (countByDay[k] ?? 0) + 1;
-        const wpk = `${weekKey(d)}|${p.platform}`;
-        countByWeekPlatform[wpk] = (countByWeekPlatform[wpk] ?? 0) + 1;
-      }
+      const byId = new Map(toPlace.map((p) => [p.id, p]));
+      const rows = res.plan
+        .map((r): PlanRow | null => {
+          const post = byId.get(r.post_id);
+          return post ? { post, date: r.date, time: r.time, reason: r.reason } : null;
+        })
+        .filter((x): x is PlanRow => x !== null)
+        .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
 
-      const plan = distributeStandby({
-        standby: ordered.map((p) => ({ id: p.id, platform: p.platform, editorialSlug: editorialOf(p) })),
-        gapForEditorial: (slug) => editorialGapDays(slug ? edMap.get(slug)?.freq : undefined),
-        lastByEditorial,
-        countByDay,
-        countByWeekPlatform,
-        prefs,
-        from: new Date(),
-      });
-
-      for (const { postId, date } of plan) {
-        await update(postId, { status: 'scheduled', scheduled_date: date.toISOString() });
-      }
-      toast.success(`A IA distribuiu ${plan.length} post(s) no calendário.`);
-      if (plan.length && plan[0].date) setCursor(startOfMonth(plan[0].date));
+      if (!rows.length) throw new Error('plano vazio');
+      setPlan({ summary: res.summary, rows });
     } catch (e) {
       console.error(e);
-      toast.error('Erro na distribuição automática.');
+      // Fallback: se a IA falhar, monta o plano pela regra local pra você revisar.
+      const local = localDistribute(toPlace);
+      const byId = new Map(toPlace.map((p) => [p.id, p]));
+      const rows = local
+        .map(({ postId, date }): PlanRow | null => {
+          const post = byId.get(postId);
+          return post ? { post, date: format(date, 'yyyy-MM-dd'), time: format(date, 'HH:mm'), reason: 'Regra local (IA indisponível)' } : null;
+        })
+        .filter((x): x is PlanRow => x !== null)
+        .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+      if (rows.length) {
+        setPlan({ summary: 'A IA não respondeu; usei a distribuição local. Revise e ajuste.', rows });
+        toast.warning('IA indisponível — usei a regra local. Revise antes de aplicar.');
+      } else {
+        toast.error('Erro na distribuição.');
+      }
     } finally {
       setDistributing(false);
+    }
+  }
+
+  // Aplica o plano revisado: grava cada post no dia/horário propostos.
+  async function applyPlan() {
+    if (!plan) return;
+    setApplying(true);
+    try {
+      let firstDate: Date | null = null;
+      for (const row of plan.rows) {
+        const [yy, mm, dd] = row.date.split('-').map(Number);
+        const when = atTime(new Date(yy, mm - 1, dd), row.time);
+        if (when.getTime() < Date.now()) continue; // segurança: nunca no passado
+        await update(row.post.id, { status: 'scheduled', scheduled_date: when.toISOString() });
+        if (!firstDate) firstDate = when;
+      }
+      toast.success(`${plan.rows.length} post(s) agendado(s).`);
+      if (firstDate) setCursor(startOfMonth(firstDate));
+      setPlan(null);
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro ao aplicar o plano.');
+    } finally {
+      setApplying(false);
     }
   }
 
@@ -729,6 +813,57 @@ export function Agenda() {
           <DialogFooter>
             <Button variant="ghost" onClick={() => setConfigOpen(false)}>Cancelar</Button>
             <Button variant="accent" onClick={() => void saveConfig()}>Salvar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Plano proposto pela IA — revisão antes de aplicar (curadoria humana). */}
+      <Dialog open={!!plan} onOpenChange={(o) => !o && !applying && setPlan(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-accent" /> Plano de distribuição da IA
+            </DialogTitle>
+            <DialogDescription>
+              {plan?.summary || 'Revise dia, horário e o porquê de cada post. Nada é agendado até você aplicar.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="max-h-[55vh] space-y-2 overflow-y-auto pr-1">
+            {plan?.rows.map((row) => {
+              const slug = editorialOf(row.post);
+              const ed = slug ? edMap.get(slug) : undefined;
+              const label = (row.post.carousel_text?.quote as string | undefined) || row.post.title || row.post.caption || 'Post';
+              const [yy, mm, dd] = row.date.split('-').map(Number);
+              const dayLabel = format(new Date(yy, mm - 1, dd), "EEE, d 'de' MMM", { locale: ptBR });
+              return (
+                <div key={row.post.id} className="rounded-lg border border-border p-2.5">
+                  <div className="flex items-center gap-2">
+                    <PlatformIcon platform={row.post.platform} className="h-3.5 w-3.5 shrink-0" />
+                    {ed && (
+                      <Badge variant="secondary" className="shrink-0" style={{ backgroundColor: `${ed.color}22`, color: ed.color }}>
+                        {ed.name}
+                      </Badge>
+                    )}
+                    <span className="ml-auto shrink-0 text-xs font-semibold capitalize text-foreground">
+                      {dayLabel} · {row.time}
+                    </span>
+                  </div>
+                  <p className="mt-1.5 line-clamp-2 text-[13px] font-medium leading-snug">{label}</p>
+                  {row.reason && (
+                    <p className="mt-1 text-[11px] italic text-muted-foreground">↳ {row.reason}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPlan(null)} disabled={applying}>Cancelar</Button>
+            <Button variant="accent" onClick={() => void applyPlan()} disabled={applying}>
+              {applying ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
+              Aplicar {plan ? `(${plan.rows.length})` : ''}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

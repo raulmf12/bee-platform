@@ -286,34 +286,65 @@ async function bumpUsage(arsenalId: string | undefined, exampleIds: (string | un
   try { await Promise.all(calls); } catch { /* noop */ }
 }
 
-async function retrieveContext(apiKey: string, query: string, userId: string): Promise<string> {
-  if (!query || query.length < 5) return '';
+type RagHit = { content: string; similarity: number; document_title: string };
+
+async function matchChunks(apiKey: string, query: string, userId: string, topK: number): Promise<RagHit[]> {
+  const q = query?.trim();
+  if (!q || q.length < 5) return [];
   try {
-    const queryEmbedding = await embedText(apiKey, query, 'RETRIEVAL_QUERY');
+    const queryEmbedding = await embedText(apiKey, q, 'RETRIEVAL_QUERY');
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const res = await fetch(`${supabaseUrl}/rest/v1/rpc/match_knowledge`, {
       method: 'POST',
       headers: svcHeaders(),
       body: JSON.stringify({
         query_embedding: queryEmbedding,
-        match_count: RAG_TOP_K,
+        match_count: topK,
         match_threshold: RAG_THRESHOLD,
         filter_user_id: userId,
       }),
     });
     if (!res.ok) {
       console.warn('[rag] match failed', await res.text());
-      return '';
+      return [];
     }
-    const results = (await res.json()) as Array<{ content: string; similarity: number; document_title: string }>;
-    if (!results.length) return '';
-    return results
-      .map((r, i) => `[Trecho ${i + 1} | fonte: ${r.document_title} | sim: ${r.similarity.toFixed(2)}]\n${r.content}`)
-      .join('\n\n---\n\n');
+    return (await res.json()) as RagHit[];
   } catch (e) {
     console.warn('[rag] error', e);
-    return '';
+    return [];
   }
+}
+
+// Recupera os FATOS REAIS do autor da base de conhecimento (RAG).
+// Ponto crítico: quando há um briefing específico (ex.: "narre minha saída da
+// Korn/Ferry"), faz uma busca DEDICADA a ele. Antes o briefing era só 1/6 da
+// query temática (editorial + arsenal + avatar + ...), o vetor derivava pra
+// longe e a história real NÃO era recuperada — o modelo inventava. Agora o
+// pedido explícito é a busca primária; a query temática só complementa. Junta
+// as duas, priorizando o briefing, e deduplica por conteúdo.
+async function retrieveContext(
+  apiKey: string,
+  themeQuery: string,
+  briefing: string | undefined,
+  userId: string,
+): Promise<string> {
+  const brief = briefing?.trim();
+  const focused = brief && brief.length >= 5 ? await matchChunks(apiKey, brief, userId, RAG_TOP_K) : [];
+  const theme = await matchChunks(apiKey, themeQuery, userId, focused.length ? 4 : RAG_TOP_K);
+
+  const seen = new Set<string>();
+  const merged: RagHit[] = [];
+  for (const r of [...focused, ...theme]) {          // briefing primeiro
+    const key = r.content.slice(0, 120);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(r);
+    if (merged.length >= 10) break;
+  }
+  if (!merged.length) return '';
+  return merged
+    .map((r, i) => `[Trecho ${i + 1} | fonte: ${r.document_title} | sim: ${r.similarity.toFixed(2)}]\n${r.content}`)
+    .join('\n\n---\n\n');
 }
 
 function buildSystemPrompt(
@@ -468,9 +499,12 @@ function buildSystemPrompt(
     lines.push('');
   }
 
-  // ARSENAL
+  // ARSENAL — é ÂNGULO/TEMA, não fonte de fato. Os fatos verdadeiros vêm sempre
+  // dos FATOS REAIS (RAG/documentos do autor). Sem esse enquadramento, o modelo
+  // narrava a semente do arsenal como se fosse uma história real que aconteceu.
   if (ai) {
-    lines.push(`=== MATERIAL DO ARSENAL (use como ponto de partida) ===`);
+    lines.push(`=== ARSENAL: ÂNGULO / TEMA SUGERIDO (direção temática — NÃO é fonte de fatos) ===`);
+    lines.push('Isto é uma SUGESTÃO de tema/ângulo pra explorar — por si só NÃO é um fato verdadeiro nem uma história que aconteceu. Os fatos reais da narrativa vêm SEMPRE dos FATOS REAIS DO AUTOR (base de conhecimento). Se o ângulo abaixo não tiver respaldo nesses fatos reais, use-o apenas como direção de tema e NÃO narre os detalhes como se tivessem acontecido de verdade.');
     lines.push(`Tipo: ${ai.type}`);
     lines.push(`Titulo: ${ai.title}`);
     if (ai.summary) lines.push(`Resumo: ${ai.summary}`);
@@ -591,11 +625,14 @@ function buildSystemPrompt(
   lines.push('VARIE conforme o assunto: dois posts de temas diferentes NÃO podem terminar com o mesmo conjunto de hashtags. Total final: 5 a 8 hashtags, TODAS no fim, depois de uma linha em branco, numa única linha separada por espaço.');
   lines.push('');
 
-  // RAG
+  // RAG — os FATOS REAIS do autor. Não é pano de fundo: é a MATÉRIA-PRIMA da
+  // narrativa. Enquadrar assim (em vez de "trechos relevantes") faz o modelo
+  // ancorar a história nos fatos reais em vez de inventar.
   if (ragContext) {
-    lines.push('=== BASE DE CONHECIMENTO BEE (trechos relevantes ao tema) ===');
+    lines.push('=== FATOS REAIS DO AUTOR (base de conhecimento) — NARRE A PARTIR DAQUI ===');
+    lines.push('Estes trechos são a história e as vivências REAIS do autor, recuperadas da base dele. Quando o pedido for sobre uma história ou experiência específica, RECONSTRUA-A a partir DESTES fatos: pessoas, empresas, decisões, a sequência dos eventos e os sentimentos vêm daqui — não de invenção sua.');
     lines.push(ragContext);
-    lines.push('=== FIM DA BASE ===');
+    lines.push('=== FIM DOS FATOS REAIS ===');
     lines.push('');
   }
 
@@ -655,6 +692,11 @@ function buildSystemPrompt(
 
   // REGRAS DE SAIDA
   lines.push('=== REGRAS DE SAIDA ===');
+  // Anti-invenção: a espinha dorsal da confiança na Bee. O modelo NÃO fabrica
+  // biografia. Ou usa os FATOS REAIS recuperados, ou fica no geral e honesto.
+  lines.push('- CRÍTICO (Veracidade — regra máxima): NUNCA invente fatos biográficos: eventos, datas, números, cargos, empresas, lugares, diálogos ou cenas. Se o pedido for sobre uma história/experiência específica e ela estiver nos FATOS REAIS acima, narre SÓ a partir deles. Se um detalhe não estiver no material, NÃO preencha por conta própria — trabalhe apenas com o que é real. Sem fato real disponível, prefira falar de forma mais geral, conceitual e honesta a inventar uma cena. Inventar uma história que não aconteceu é o pior erro possível aqui.');
+  lines.push('- CRÍTICO (Tom): a Bee tensiona a IDEIA, jamais a PESSOA. NADA de tom agressivo, ameaçador, acusatório, arrogante, cínico ou de "palestrinha"/lição de moral. Não humilhe, não julgue, não provoque medo, não aponte o dedo. A firmeza vem da clareza e da verdade, com calor humano: convida a perceber, nunca intimida. Se um trecho soar duro ou como ataque, suavize antes de devolver.');
+  lines.push('- CRÍTICO (Exposição): nunca exponha pessoas ou empresas reais — nem no título, nem na legenda. Troque todo nome próprio por arquétipo (ver Anonimização). Nunca escreva um post que humilhe, ridicularize ou coloque alguém (real ou identificável) numa posição ruim. Na dúvida, generalize.');
   lines.push(`- "quote": frase da imagem. MAXIMO ${input.quote_max_chars ?? 200} chars. Use 1 dos 4 tipos de titulo.`);
   lines.push(`  CRÍTICO (Casing): Apenas a primeira letra da frase (e apos pontuacoes) deve ser maiuscula. NUNCA escreva a frase inteira em MAIUSCULAS (ALL CAPS).`);
   lines.push(`  CRÍTICO (Sentido): A frase deve carregar um sentido completo e encapsulado. Nao divida o mesmo raciocinio. A frase precisa ser auto-explicativa.`);
@@ -665,7 +707,7 @@ function buildSystemPrompt(
   // blocos curtos em vez de 3-4 parágrafos densos.
   lines.push('- "caption": escreva em BLOCOS CURTOS, UM POR IDEIA. Cada bloco tem 1 ou 2 frases (às vezes uma frase solta, quando ela tem peso). SEPARE cada bloco com UMA LINHA EM BRANCO (use \\n\\n no texto) pra dar respiro. Densidade > extensão: não encha linguiça, corte o que não for essencial.');
   lines.push('  NUNCA cole 3 ou mais frases no mesmo bloco. Alterne blocos de 1 e de 2 frases pra criar ritmo e leveza na leitura.');
-  lines.push('  CRÍTICO (Anonimizacao): NUNCA cite nomes reais de pessoas ou de empresas. Anonimize tudo usando arquétipos (ex: "uma grande multinacional", "um diretor", "uma empresa de tecnologia").');
+  lines.push('  CRÍTICO (Anonimizacao): mantenha os EVENTOS reais (eles vêm dos FATOS REAIS), mas troque nomes próprios de pessoas e empresas por arquétipos (ex: "uma grande multinacional", "um diretor", "uma consultoria global de executivos"). Anonimizar é trocar só o RÓTULO — jamais inventar ou alterar o que aconteceu.');
   lines.push('  CRÍTICO (Formatacao): PROIBIDO travessões (— ou -) na legenda. Sem bullets/listas.');
   lines.push('  Arco (espalhado nos blocos, NÃO em 4 parágrafos): abre com GANCHO (os primeiros ~49 chars têm que prender, cabem no "ver mais") → tensão/aprofundamento → virada sistêmica com a analogia → fechamento que reverbera.');
   lines.push('  CRÍTICO (Fechamento): VARIE o fecho entre posts. NÃO use "Vê?" como padrão (está repetitivo) — alterne entre uma pergunta de implicação, uma afirmação curta que assenta a ideia, ou um convite à reflexão. No máximo raríssimas vezes um "Vê?"; por padrão, NÃO use.');
@@ -947,15 +989,16 @@ Deno.serve(async (req: Request) => {
     // Carrega post de referencia se vier (adaptacao cross-platform)
     const referencePost = input.reference_post_id ? await fetchReferencePost(input.reference_post_id) : null;
 
-    const ragQuery = [
+    // Query TEMÁTICA (grounding geral). O briefing NÃO entra aqui — ele tem
+    // busca própria e dedicada dentro de retrieveContext, senão fica diluído.
+    const themeQuery = [
       ctx.editorial.name,
       ctx.arsenalItem?.title,
       ctx.arsenalItem?.summary,
       ctx.avatars[0]?.sofrimento,
-      input.briefing,
       referencePost?.carousel_text?.quote,
     ].filter(Boolean).join(' . ');
-    const ragContext = await retrieveContext(apiKey, ragQuery, userId);
+    const ragContext = await retrieveContext(apiKey, themeQuery, input.briefing, userId);
 
     const sys = buildSystemPrompt(ctx, ragContext, input, referencePost, pastArsenalPosts);
     const usr = buildUserPrompt(input, ctx.arsenalItem);
