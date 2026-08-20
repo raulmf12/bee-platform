@@ -18,7 +18,7 @@ import { ptBR } from 'date-fns/locale';
 import type { LucideIcon } from 'lucide-react';
 import {
   CalendarClock, Check, ChevronLeft, ChevronRight, Edit3, Facebook, Filter, Instagram,
-  Linkedin, Loader2, Music2, PauseCircle, Settings2, Sparkles, Youtube,
+  Linkedin, Loader2, Music2, PauseCircle, Settings2, Sparkles, Wand2, Youtube,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -33,8 +33,9 @@ import { useAuthStore } from '@/store/authStore';
 import { beeApi } from '@/lib/api';
 import { edge } from '@/lib/edge';
 import {
-  DEFAULT_DISTRIBUTION, atTime, cadenceFor, distributeStandby, editorialGapDays,
-  isoToLocalInput, localInputToIso, mergePrefs, nowLocalInput, weekKey, type MergedPrefs,
+  DEFAULT_DISTRIBUTION, atTime, cadenceFor, distributeGuided, distributeStandby,
+  editorialGapDays, guideFor, isoToLocalInput, localInputToIso, mergePrefs, nowLocalInput, weekKey,
+  type GuidedPlatformCfg, type MergedPrefs,
 } from '@/lib/schedule';
 import {
   PLATFORM_COLORS, PLATFORM_LABELS, type BeeEditorial, type DistributionPrefs,
@@ -46,6 +47,13 @@ import { toast } from 'sonner';
 const NEUTRAL = '#94A3B8';
 const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 const PLATFORM_ORDER: Platform[] = ['linkedin', 'instagram', 'facebook', 'tiktok', 'youtube'];
+
+// Grade de horários (visões semana/dia) — estilo Google Agenda.
+const GRID_START = 6;   // 06h
+const GRID_END = 22;    // 22h
+const SLOT_MIN = 30;    // snap de 30 em 30 min
+const SLOT_H = 28;      // altura em px de cada slot de 30min
+const SLOTS = ((GRID_END - GRID_START) * 60) / SLOT_MIN;
 
 const PLATFORM_ICON: Record<Platform, LucideIcon> = {
   linkedin: Linkedin,
@@ -91,9 +99,17 @@ export function Agenda() {
   const [configOpen, setConfigOpen] = useState(false);
   const [cfg, setCfg] = useState<MergedPrefs>(DEFAULT_DISTRIBUTION);
 
-  // Plano proposto pela IA (revisão antes de aplicar). Cada linha traz o porquê.
+  // Plano proposto (revisão antes de aplicar). Cai aqui tanto o modo IA quanto o
+  // semi-automático. Cada linha traz o porquê.
   const [plan, setPlan] = useState<{ summary?: string; rows: Array<{ post: UserPost; date: string; time: string; reason: string }> } | null>(null);
   const [applying, setApplying] = useState(false);
+
+  // Assistente semi-automático (guiado): pergunta frequência/dias/horários por
+  // plataforma e monta o plano. wizCfg guarda as escolhas por plataforma.
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizPlatforms, setWizPlatforms] = useState<Platform[]>([]);
+  const [wizIdx, setWizIdx] = useState(0);
+  const [wizCfg, setWizCfg] = useState<Partial<Record<Platform, GuidedPlatformCfg>>>({});
 
   useEffect(() => {
     void load();
@@ -195,6 +211,26 @@ export function Agenda() {
         return;
       }
       when = next;
+    }
+    try {
+      await update(postId, { status: 'scheduled', scheduled_date: when.toISOString() });
+      toast.success(`Agendado pra ${format(when, "d 'de' MMM 'às' HH:mm", { locale: ptBR })}`);
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro ao agendar.');
+    }
+  }
+
+  // Move um post pra um DIA + HORÁRIO específico (grade semana/dia). Mesmo guard
+  // de passado do moveToDay. Reaproveita atTime (fuso-safe).
+  async function moveToDayTime(postId: string, day: Date, hour: number, minute: number) {
+    const post = posts.find((p) => p.id === postId);
+    if (!post) return;
+    const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    const when = atTime(day, time);
+    if (when.getTime() < Date.now()) {
+      toast.error('Não dá pra agendar no passado.');
+      return;
     }
     try {
       await update(postId, { status: 'scheduled', scheduled_date: when.toISOString() });
@@ -338,6 +374,97 @@ export function Agenda() {
     }
   }
 
+  // ---- Assistente semi-automático ----
+  function openWizard() {
+    const plats = Array.from(new Set(standby.map((p) => p.platform)));
+    if (!plats.length) { toast.info('Nada em stand-by pra distribuir.'); return; }
+    const cfg: Partial<Record<Platform, GuidedPlatformCfg>> = {};
+    for (const pl of plats) {
+      const g = guideFor(prefs, pl);
+      cfg[pl] = {
+        per_week: g.defaultPerWeek,
+        weekdays: g.weekdays.filter((d) => d.recommended).map((d) => d.dow),
+        times: g.times.filter((t) => t.recommended).map((t) => t.time),
+      };
+    }
+    setWizPlatforms(plats);
+    setWizCfg(cfg);
+    setWizIdx(0);
+    setWizardOpen(true);
+  }
+
+  function patchWiz(pl: Platform, patch: Partial<GuidedPlatformCfg>) {
+    setWizCfg((c) => ({ ...c, [pl]: { ...(c[pl] ?? { per_week: 1, weekdays: [], times: [] }), ...patch } }));
+  }
+  function toggleWizDay(pl: Platform, dow: number) {
+    const cur = wizCfg[pl] ?? { per_week: 1, weekdays: [], times: [] };
+    patchWiz(pl, { weekdays: cur.weekdays.includes(dow) ? cur.weekdays.filter((d) => d !== dow) : [...cur.weekdays, dow] });
+  }
+  function toggleWizTime(pl: Platform, time: string) {
+    const cur = wizCfg[pl] ?? { per_week: 1, weekdays: [], times: [] };
+    patchWiz(pl, { times: cur.times.includes(time) ? cur.times.filter((t) => t !== time) : [...cur.times, time] });
+  }
+
+  function generateGuidedPlan() {
+    const toPlace = standby;
+    if (!toPlace.length) { setWizardOpen(false); return; }
+
+    const ordered = [...toPlace].sort((a, b) => {
+      const sa = a.virality_score ?? -1;
+      const sb = b.virality_score ?? -1;
+      if (sb !== sa) return sb - sa;
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    });
+
+    const lastByEditorial: Record<string, Date> = {};
+    const countByDay: Record<string, number> = {};
+    const countByWeekPlatform: Record<string, number> = {};
+    for (const p of posts) {
+      const d = eventDate(p);
+      if (!d) continue;
+      const slug = editorialOf(p) ?? '__none__';
+      if (!lastByEditorial[slug] || d > lastByEditorial[slug]) lastByEditorial[slug] = d;
+      countByDay[dayKey(d)] = (countByDay[dayKey(d)] ?? 0) + 1;
+      countByWeekPlatform[`${weekKey(d)}|${p.platform}`] = (countByWeekPlatform[`${weekKey(d)}|${p.platform}`] ?? 0) + 1;
+    }
+
+    const result = distributeGuided({
+      standby: ordered.map((p) => ({ id: p.id, platform: p.platform, editorialSlug: editorialOf(p) })),
+      perPlatform: wizCfg,
+      gapForEditorial: (slug) => editorialGapDays(slug ? edMap.get(slug)?.freq : undefined),
+      lastByEditorial, countByDay, countByWeekPlatform,
+      perDayLimit: prefs.per_day_limit,
+      from: new Date(),
+      startOffsetDays: prefs.start_offset_days,
+    });
+
+    const byId = new Map(toPlace.map((p) => [p.id, p]));
+    const rows = result
+      .map(({ postId, date }) => {
+        const post = byId.get(postId);
+        if (!post) return null;
+        // "Porquê" qualitativo: junta o motivo do dia + do horário (do guia).
+        const g = guideFor(prefs, post.platform);
+        const dSug = g.weekdays.find((d) => d.dow === date.getDay());
+        const tSug = g.times.find((t) => t.time === format(date, 'HH:mm'));
+        const reason = [dSug?.reason, tSug?.reason].filter(Boolean).join(' · ') || 'Semi-automático';
+        return { post, date: format(date, 'yyyy-MM-dd'), time: format(date, 'HH:mm'), reason };
+      })
+      .filter((x): x is { post: UserPost; date: string; time: string; reason: string } => x !== null)
+      .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+
+    setWizardOpen(false);
+    if (!rows.length) {
+      toast.error('Nenhum post coube nos dias/horários escolhidos. Selecione mais dias ou horários.');
+      return;
+    }
+    const missing = toPlace.length - rows.length;
+    setPlan({
+      summary: `Semi-automático${missing > 0 ? ` · ${missing} post(s) não couberam nos dias escolhidos (revise ou rode de novo com mais dias)` : ''}`,
+      rows,
+    });
+  }
+
   function openConfig() {
     setCfg(mergePrefs(settings?.distribution_prefs));
     setConfigOpen(true);
@@ -454,6 +581,107 @@ export function Agenda() {
     }
   }
 
+  // Bloco de um post posicionado pelo HORÁRIO na grade (arrastável verticalmente).
+  function EventBlock({ post }: { post: UserPost }) {
+    const when = eventDate(post);
+    if (!when) return null;
+    const color = colorOf(post);
+    const label = (post.carousel_text?.quote as string | undefined) || post.title || post.caption || 'Post';
+    const mins = (when.getHours() - GRID_START) * 60 + when.getMinutes();
+    const top = Math.max(0, Math.min(SLOTS * SLOT_H - 38, (mins / SLOT_MIN) * SLOT_H));
+    return (
+      <button
+        type="button"
+        draggable
+        onDragStart={(e) => { e.dataTransfer.setData('text/plain', post.id); e.dataTransfer.effectAllowed = 'move'; setDraggingId(post.id); }}
+        onDragEnd={() => { setDraggingId(null); setOverKey(null); }}
+        onClick={() => setSelected(post)}
+        className={cn(
+          'absolute left-0.5 right-0.5 z-10 overflow-hidden rounded-md border-l-[3px] px-1.5 py-0.5 text-left cursor-grab active:cursor-grabbing',
+          draggingId === post.id && 'opacity-40',
+        )}
+        style={{ top, height: 38, borderLeftColor: color, backgroundColor: `${color}22` }}
+        title={label}
+      >
+        <span className="flex items-center gap-1">
+          <PlatformIcon platform={post.platform} className="h-3 w-3 shrink-0" />
+          <span className="text-[10px] font-semibold text-muted-foreground">{format(when, 'HH:mm')}</span>
+        </span>
+        <span className="block truncate text-[11px] font-medium leading-tight">{label}</span>
+      </button>
+    );
+  }
+
+  // Coluna de um dia na grade: 32 slots de 30min (drop zones) + os posts posicionados.
+  function TimeColumn({ day }: { day: Date }) {
+    const evs = eventsByDay.get(dayKey(day)) ?? [];
+    return (
+      <div className="relative border-l border-border first:border-l-0" style={{ height: SLOTS * SLOT_H }}>
+        {Array.from({ length: SLOTS }).map((_, i) => {
+          const hour = GRID_START + Math.floor(i / 2);
+          const minute = (i % 2) * 30;
+          const ck = `${dayKey(day)}|${i}`;
+          return (
+            <div
+              key={i}
+              className={cn('border-b', minute === 0 ? 'border-border/70' : 'border-border/25', overKey === ck && 'bg-accent/20')}
+              style={{ height: SLOT_H }}
+              onDragOver={(e) => { if (draggingId) e.preventDefault(); }}
+              onDragEnter={() => draggingId && setOverKey(ck)}
+              onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOverKey((x) => (x === ck ? null : x)); }}
+              onDrop={(e) => {
+                e.preventDefault(); setOverKey(null);
+                const id = e.dataTransfer.getData('text/plain') || draggingId; setDraggingId(null);
+                if (id) void moveToDayTime(id, day, hour, minute);
+              }}
+            />
+          );
+        })}
+        {evs.map((p) => <EventBlock key={p.id} post={p} />)}
+      </div>
+    );
+  }
+
+  // Grade de horas (semana = 7 colunas, dia = 1). Gutter de horas à esquerda.
+  function TimeGrid({ daysToShow }: { daysToShow: Date[] }) {
+    const cols = daysToShow.length;
+    const gridCols = { gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` };
+    return (
+      <div>
+        <div className="flex border-b border-border bg-card/20">
+          <div className="w-12 shrink-0" />
+          <div className="grid flex-1" style={gridCols}>
+            {daysToShow.map((day) => (
+              <button
+                key={dayKey(day)}
+                type="button"
+                onClick={() => { setCursor(day); setView('day'); }}
+                className={cn('border-l border-border py-1.5 text-center text-[11px] font-semibold capitalize first:border-l-0',
+                  isToday(day) ? 'text-accent' : 'text-muted-foreground')}
+              >
+                {format(day, cols === 1 ? "EEEE, d 'de' MMMM" : 'EEE d', { locale: ptBR })}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="flex max-h-[64vh] overflow-y-auto">
+          <div className="w-12 shrink-0" style={{ height: SLOTS * SLOT_H }}>
+            {Array.from({ length: GRID_END - GRID_START }).map((_, h) => (
+              <div key={h} className="relative" style={{ height: SLOT_H * 2 }}>
+                <span className="absolute right-1.5 -top-1.5 text-[10px] text-muted-foreground">
+                  {String(GRID_START + h).padStart(2, '0')}h
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="grid flex-1" style={gridCols}>
+            {daysToShow.map((day) => <TimeColumn key={dayKey(day)} day={day} />)}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Célula de um dia (drop zone + cabeçalho + chips). Tamanho por visão.
   function DayCell({ day }: { day: Date }) {
     const k = dayKey(day);
@@ -511,6 +739,9 @@ export function Agenda() {
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" onClick={openConfig}>
             <Settings2 className="h-4 w-4 mr-1" /> Configurar
+          </Button>
+          <Button variant="outline" size="sm" onClick={openWizard}>
+            <Wand2 className="h-4 w-4 mr-1" /> Semi-auto
           </Button>
           <Button variant="accent" size="sm" onClick={() => void handleAutoDistribute()} disabled={distributing}>
             {distributing ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1" />}
@@ -631,9 +862,7 @@ export function Agenda() {
             </div>
           </div>
 
-          {view === 'day' ? (
-            <DayCell day={cursor} />
-          ) : (
+          {view === 'month' ? (
             <>
               <div className="grid grid-cols-7 border-b border-border bg-card/20 text-center text-[11px] font-semibold text-muted-foreground">
                 {WEEKDAYS.map((w) => <div key={w} className="py-1.5">{w}</div>)}
@@ -642,6 +871,10 @@ export function Agenda() {
                 {days.map((day) => <DayCell key={dayKey(day)} day={day} />)}
               </div>
             </>
+          ) : (
+            // Semana e dia: grade de horas com arrasto vertical (muda o horário)
+            // e, na semana, arrasto entre colunas (muda o dia).
+            <TimeGrid daysToShow={days} />
           )}
         </div>
       </div>
@@ -669,7 +902,35 @@ export function Agenda() {
                   </DialogDescription>
                 </DialogHeader>
 
-                <div className="space-y-3 py-2 max-h-[50vh] overflow-y-auto">
+                <div className="space-y-3 py-2 max-h-[60vh] overflow-y-auto">
+                  {/* Post FINAL: a imagem renderizada (rendered_slides). Cai pra
+                      imagem de IA gerada, e só então pro texto, se não houver. */}
+                  {(() => {
+                    const imgs = Object.values(selected.rendered_slides ?? {}).filter(Boolean);
+                    const shown = imgs.length ? imgs : Object.values(selected.generated_images ?? {}).filter(Boolean);
+                    if (!shown.length) {
+                      return (
+                        <p className="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
+                          Este post ainda não tem imagem final renderizada. Abra em “Editar” pra gerar.
+                        </p>
+                      );
+                    }
+                    return (
+                      <div className={cn('flex gap-2', shown.length > 1 ? 'overflow-x-auto pb-1 snap-x' : '')}>
+                        {shown.map((url, i) => (
+                          <img
+                            key={i}
+                            src={url}
+                            alt={`Slide ${i + 1}`}
+                            className={cn(
+                              'rounded-md border border-border object-contain snap-center',
+                              shown.length > 1 ? 'h-auto max-h-[52vh] w-auto shrink-0' : 'mx-auto max-h-[52vh] w-full',
+                            )}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })()}
                   {when && (
                     <div className="space-y-1 rounded-md border border-border p-2">
                       <Label className="text-xs text-muted-foreground">Reagendar (data e hora)</Label>
@@ -865,6 +1126,104 @@ export function Agenda() {
               Aplicar {plan ? `(${plan.rows.length})` : ''}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Assistente semi-automático — frequência/dias/horários por plataforma */}
+      <Dialog open={wizardOpen} onOpenChange={setWizardOpen}>
+        <DialogContent className="sm:max-w-lg">
+          {(() => {
+            const pl = wizPlatforms[wizIdx];
+            if (!pl) return null;
+            const cfg = wizCfg[pl] ?? { per_week: 1, weekdays: [], times: [] };
+            const g = guideFor(prefs, pl);
+            const daysSorted = [...g.weekdays].sort((a, b) => (a.dow === 0 ? 7 : a.dow) - (b.dow === 0 ? 7 : b.dow));
+            const isLast = wizIdx >= wizPlatforms.length - 1;
+            const canAdvance = cfg.weekdays.length > 0 && cfg.times.length > 0;
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <Wand2 className="h-5 w-5 text-accent" /> Distribuição semi-automática
+                  </DialogTitle>
+                  <DialogDescription>
+                    Plataforma {wizIdx + 1} de {wizPlatforms.length}: <b className="capitalize">{PLATFORM_LABELS[pl] ?? pl}</b>. Escolha frequência, dias e horários. As dicas são de boa prática geral — ainda não são seus dados reais.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="max-h-[58vh] space-y-4 overflow-y-auto pr-1">
+                  <div>
+                    <p className="mb-1.5 text-sm font-semibold">Quantos posts por semana?</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[1, 2, 3, 4, 5].map((n) => (
+                        <Button key={n} type="button" size="sm" variant={cfg.per_week === n ? 'accent' : 'outline'}
+                          onClick={() => patchWiz(pl, { per_week: n })}>
+                          {n}x
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="mb-1.5 text-sm font-semibold">Dias da semana</p>
+                    <div className="space-y-1">
+                      {daysSorted.map((d) => {
+                        const on = cfg.weekdays.includes(d.dow);
+                        return (
+                          <button key={d.dow} type="button" onClick={() => toggleWizDay(pl, d.dow)}
+                            className={cn('flex w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-left transition-colors',
+                              on ? 'border-accent bg-accent/10' : 'border-border hover:bg-muted/50')}>
+                            <span className={cn('flex h-4 w-4 shrink-0 items-center justify-center rounded border', on ? 'border-accent bg-accent text-accent-foreground' : 'border-muted-foreground/40')}>
+                              {on && <Check className="h-3 w-3" />}
+                            </span>
+                            <span className="w-9 shrink-0 text-sm font-medium">{d.label}</span>
+                            <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">{d.reason}</span>
+                            {d.recommended && <Badge variant="secondary" className="shrink-0 text-[10px]">sugerido</Badge>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="mb-1.5 text-sm font-semibold">Horários</p>
+                    <div className="space-y-1">
+                      {g.times.map((t) => {
+                        const on = cfg.times.includes(t.time);
+                        return (
+                          <button key={t.time} type="button" onClick={() => toggleWizTime(pl, t.time)}
+                            className={cn('flex w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-left transition-colors',
+                              on ? 'border-accent bg-accent/10' : 'border-border hover:bg-muted/50')}>
+                            <span className={cn('flex h-4 w-4 shrink-0 items-center justify-center rounded border', on ? 'border-accent bg-accent text-accent-foreground' : 'border-muted-foreground/40')}>
+                              {on && <Check className="h-3 w-3" />}
+                            </span>
+                            <span className="w-12 shrink-0 text-sm font-medium">{t.label}</span>
+                            <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">{t.reason}</span>
+                            {t.recommended && <Badge variant="secondary" className="shrink-0 text-[10px]">sugerido</Badge>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                <DialogFooter className="flex-row items-center justify-between sm:justify-between">
+                  <Button variant="ghost" onClick={() => setWizIdx((i) => Math.max(0, i - 1))} disabled={wizIdx === 0}>
+                    Voltar
+                  </Button>
+                  {isLast ? (
+                    <Button variant="accent" onClick={generateGuidedPlan} disabled={!canAdvance}>
+                      <Check className="h-4 w-4 mr-1" /> Gerar plano
+                    </Button>
+                  ) : (
+                    <Button variant="accent" onClick={() => setWizIdx((i) => i + 1)} disabled={!canAdvance}>
+                      Próxima
+                    </Button>
+                  )}
+                </DialogFooter>
+              </>
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </div>

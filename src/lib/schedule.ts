@@ -169,6 +169,142 @@ export interface DistributionResult {
 
 const dayKey = (d: Date): string => startOfDay(d).toISOString().slice(0, 10);
 
+// ---------------------------------------------------------------------------
+// MODO SEMI-AUTOMÁTICO (guiado) — o assistente pergunta frequência, dias e
+// horários por plataforma; estas são as SUGESTÕES de boa prática que ele mostra.
+//
+// IMPORTANTE (honestidade): os "porquês" são QUALITATIVOS e de boa prática geral
+// — NÃO são o dado real de audiência do usuário (que ainda não medimos). Nada de
+// "% de acessos" inventado. Fase 2: medir o desempenho real e passar a sugerir
+// com base nos dados do próprio usuário.
+// ---------------------------------------------------------------------------
+export interface DaySuggestion { dow: number; label: string; reason: string; recommended: boolean }
+export interface TimeSuggestion { time: string; label: string; reason: string; recommended: boolean }
+export interface PlatformGuide { defaultPerWeek: number; weekdays: DaySuggestion[]; times: TimeSuggestion[] }
+
+export const PLATFORM_GUIDE: Partial<Record<Platform, PlatformGuide>> = {
+  linkedin: {
+    defaultPerWeek: 2,
+    weekdays: [
+      { dow: 1, label: 'Seg', reason: 'Começo de semana, agenda cheia de intenção', recommended: false },
+      { dow: 2, label: 'Ter', reason: 'Público profissional bem atento', recommended: true },
+      { dow: 3, label: 'Qua', reason: 'Meio de semana, bom pra pauta de gestão', recommended: true },
+      { dow: 4, label: 'Qui', reason: 'Ainda forte, aguenta conteúdo mais denso', recommended: true },
+      { dow: 5, label: 'Sex', reason: 'Cai à tarde; de manhã vai bem com algo mais leve', recommended: false },
+      { dow: 6, label: 'Sáb', reason: 'Baixa atividade profissional', recommended: false },
+      { dow: 0, label: 'Dom', reason: 'Alcance profissional menor no fim de semana', recommended: false },
+    ],
+    times: [
+      { time: '08:00', label: '08h', reason: 'Início do expediente, primeira olhada no feed', recommended: true },
+      { time: '12:00', label: '12h', reason: 'Pausa do almoço', recommended: true },
+      { time: '17:30', label: '17h30', reason: 'Fim de expediente, um respiro antes de sair', recommended: false },
+    ],
+  },
+  instagram: {
+    defaultPerWeek: 3,
+    weekdays: [
+      { dow: 1, label: 'Seg', reason: 'Retomada da semana', recommended: false },
+      { dow: 2, label: 'Ter', reason: 'Dia útil comum', recommended: false },
+      { dow: 3, label: 'Qua', reason: 'Meio de semana costuma render bem', recommended: true },
+      { dow: 4, label: 'Qui', reason: 'Bom engajamento antes do fim de semana', recommended: true },
+      { dow: 5, label: 'Sex', reason: 'Sexta engaja bem com conteúdo mais leve', recommended: true },
+      { dow: 6, label: 'Sáb', reason: 'Fim de semana o público tem mais tempo', recommended: false },
+      { dow: 0, label: 'Dom', reason: 'Domingo à noite costuma pegar bem', recommended: false },
+    ],
+    times: [
+      { time: '12:00', label: '12h', reason: 'Almoço, rolagem casual', recommended: true },
+      { time: '18:30', label: '18h30', reason: 'Fim de tarde, pico de uso pessoal', recommended: true },
+      { time: '20:00', label: '20h', reason: 'Noite, tempo livre', recommended: false },
+    ],
+  },
+};
+
+// Guia genérico pra plataformas sem curadoria específica (usa a cadência padrão).
+export function guideFor(prefs: MergedPrefs, platform: Platform): PlatformGuide {
+  const g = PLATFORM_GUIDE[platform];
+  if (g) return g;
+  const cad = cadenceFor(prefs, platform);
+  return {
+    defaultPerWeek: cad.per_week || 2,
+    weekdays: [1, 2, 3, 4, 5, 6, 0].map((dow) => ({
+      dow,
+      label: ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'][dow],
+      reason: 'Dia útil',
+      recommended: dow >= 1 && dow <= 5,
+    })),
+    times: (cad.times.length ? cad.times : ['09:00']).map((t, i) => ({ time: t, label: t.replace(':00', 'h'), reason: 'Horário da cadência', recommended: i === 0 })),
+  };
+}
+
+export interface GuidedPlatformCfg { per_week: number; weekdays: number[]; times: string[] }
+
+export interface GuidedInput {
+  // JÁ na ordem de prioridade (melhor nota primeiro).
+  standby: Array<{ id: string; platform: Platform; editorialSlug?: string }>;
+  perPlatform: Partial<Record<Platform, GuidedPlatformCfg>>;
+  gapForEditorial: (slug?: string) => number;
+  lastByEditorial: Record<string, Date>;
+  countByDay: Record<string, number>;
+  countByWeekPlatform: Record<string, number>;
+  perDayLimit: number;
+  from: Date;
+  startOffsetDays?: number;
+  horizonDays?: number;
+}
+
+// Distribui respeitando as escolhas do assistente: só nos DIAS DA SEMANA
+// escolhidos por plataforma, nos HORÁRIOS escolhidos, dentro da frequência
+// semanal, mantendo o ritmo (gap) por editoria e o limite por dia.
+export function distributeGuided(input: GuidedInput): DistributionResult[] {
+  const result: DistributionResult[] = [];
+  const queue = [...input.standby];
+  const lastByEd: Record<string, Date> = { ...input.lastByEditorial };
+  const perDay: Record<string, number> = { ...input.countByDay };
+  const perWeekPlat: Record<string, number> = { ...input.countByWeekPlatform };
+  const timeIdx: Partial<Record<Platform, number>> = {};
+
+  const base = startOfDay(input.from);
+  const startOffset = Math.max(0, input.startOffsetDays ?? 1);
+  const horizon = input.horizonDays ?? 180;
+
+  for (let offset = startOffset; offset <= startOffset + horizon; offset++) {
+    if (queue.length === 0) break;
+    const day = new Date(base);
+    day.setDate(day.getDate() + offset);
+    const dow = getDay(day);
+    const key = dayKey(day);
+    const wk = weekKey(day);
+    let assignedToday = perDay[key] ?? 0;
+
+    while (assignedToday < input.perDayLimit && queue.length > 0) {
+      const idx = queue.findIndex((p) => {
+        const cfg = input.perPlatform[p.platform];
+        if (!cfg || !cfg.weekdays.includes(dow)) return false;
+        if (cfg.per_week > 0 && (perWeekPlat[`${wk}|${p.platform}`] ?? 0) >= cfg.per_week) return false;
+        const slug = p.editorialSlug ?? '__none__';
+        const last = lastByEd[slug];
+        return !last || differenceInCalendarDays(day, last) >= input.gapForEditorial(p.editorialSlug);
+      });
+      if (idx === -1) break;
+
+      const [post] = queue.splice(idx, 1);
+      const cfg = input.perPlatform[post.platform]!;
+      const times = cfg.times.length ? cfg.times : ['09:00'];
+      const ti = timeIdx[post.platform] ?? 0;
+      const time = times[ti % times.length];
+      timeIdx[post.platform] = ti + 1;
+
+      result.push({ postId: post.id, date: atTime(day, time) });
+      lastByEd[post.editorialSlug ?? '__none__'] = day;
+      perWeekPlat[`${wk}|${post.platform}`] = (perWeekPlat[`${wk}|${post.platform}`] ?? 0) + 1;
+      assignedToday++;
+    }
+    perDay[key] = assignedToday;
+  }
+
+  return result;
+}
+
 // Espalha os posts em stand-by pelos próximos dias respeitando:
 // pular fim de semana, limite por dia e o ritmo (gap) de cada editoria.
 export function distributeStandby(input: DistributionInput): DistributionResult[] {
