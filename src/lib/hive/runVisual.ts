@@ -52,6 +52,7 @@ export async function generateHiveImage(params: {
     recipe,
     colors: design.colors,
     spiralUrl: design.spiralUrl,
+    assets: design.assets,
     text,
     highlight: allowHl ? { target: decision.highlight!.target } : null,
     canvas: CANVAS,

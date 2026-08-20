@@ -38,6 +38,7 @@ export function HivePreview() {
             recipe,
             colors: design.colors,
             spiralUrl: design.spiralUrl,
+            assets: design.assets,
             text: text.trim() || 'Sua frase aqui',
             highlight: allowHl ? { target: highlight.trim() } : null,
             canvas: CANVAS,

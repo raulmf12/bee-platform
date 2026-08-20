@@ -28,6 +28,7 @@ export interface M01Recipe {
   limites?: Record<string, unknown>;
   layer_stack: DesignLayer[];
 }
+export interface DesignAsset { url: string; width?: number; height?: number }
 export interface ComposeInput {
   recipe: M01Recipe;
   colors: Record<string, string>;   // slug -> hex (ex: {azul_mp:'#1C2E4A', ...})
@@ -35,6 +36,16 @@ export interface ComposeInput {
   text: string;                      // texto aprovado
   highlight?: { target: string } | null;
   canvas: { w: number; h: number }; // ex: {w:1080,h:1350} (feed IG/LinkedIn)
+  assets?: { photos?: DesignAsset[]; textures?: DesignAsset[] }; // fotos p/ D, texturas p/ E
+}
+
+// Escolhe um asset do pool de forma determinística pelo texto (varia por post,
+// estável no mesmo texto).
+function pickAsset(pool: DesignAsset[] | undefined, seed: string): DesignAsset | undefined {
+  if (!pool || pool.length === 0) return undefined;
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
+  return pool[Math.abs(h) % pool.length];
 }
 
 // Aliases p/ slugs pseudo que ficaram nos recipes (ex: "creme_ou_branco").
@@ -66,7 +77,7 @@ function highlightStyles(lines: string[], target: string, fill: string): Record<
 export interface ComposedSlide { version: string; background: string; objects: object[] }
 
 export function composeM01(input: ComposeInput): ComposedSlide {
-  const { recipe, colors, spiralUrl, text, highlight, canvas } = input;
+  const { recipe, colors, spiralUrl, text, highlight, canvas, assets } = input;
   const W = canvas.w, H = canvas.h;
   const pctW = (p: unknown) => (num(p) / 100) * W;
   const pctH = (p: unknown) => (num(p) / 100) * H;
@@ -85,6 +96,37 @@ export function composeM01(input: ComposeInput): ComposedSlide {
 
   for (const layer of recipe.layer_stack) {
     const g = (layer.geometry ?? {}) as Record<string, unknown>;
+
+    if (layer.role === 'photo') {
+      // Foto real da biblioteca (D — Campo). Full-bleed cobrindo o canvas.
+      const asset = pickAsset(assets?.photos, text);
+      if (asset?.url) {
+        const aw = asset.width ?? W, ah = asset.height ?? H;
+        const scale = Math.max(W / aw, H / ah);
+        objects.push({
+          type: 'Image', version: '6.0.0', src: asset.url, crossOrigin: 'anonymous',
+          left: Math.round((W - aw * scale) / 2), top: Math.round((H - ah * scale) / 2),
+          scaleX: scale, scaleY: scale, selectable: false, name: 'photo',
+        });
+      }
+      // se não houver foto, o fundo placeholder (navy) já foi definido acima.
+      continue;
+    }
+
+    if (layer.role === 'texture') {
+      // Textura real da biblioteca (E — Matéria). Sombra orgânica sutil.
+      const asset = pickAsset(assets?.textures, text);
+      if (asset?.url) {
+        const aw = asset.width ?? W, ah = asset.height ?? H;
+        const scale = Math.max(W / aw, H / ah);
+        objects.push({
+          type: 'Image', version: '6.0.0', src: asset.url, crossOrigin: 'anonymous',
+          left: Math.round((W - aw * scale) / 2), top: Math.round((H - ah * scale) / 2),
+          scaleX: scale, scaleY: scale, opacity: 0.42, selectable: false, name: 'texture',
+        });
+      }
+      continue;
+    }
 
     if (layer.role === 'readability_overlay') {
       // Véu de legibilidade em DEGRADÊ (transparente no topo -> escuro na base).
@@ -209,7 +251,7 @@ export function composeM01(input: ComposeInput): ComposedSlide {
       continue;
     }
 
-    // photo / texture: entram assets reais depois (v1 usa fundo placeholder acima).
+    // (photo/texture já tratados acima; sem asset, o fundo placeholder cobre.)
   }
 
   return { version: '6.0.0', background, objects };

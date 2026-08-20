@@ -45,7 +45,7 @@ export function HiveMatrix() {
             const s = SAMPLES[recipe.id] ?? { text: 'Uma ideia. Muito silêncio.' };
             const allowHl = Boolean(recipe.limites?.destaque_permitido) && s.hl;
             const slide = composeM01({
-              recipe, colors: design.colors, spiralUrl: design.spiralUrl,
+              recipe, colors: design.colors, spiralUrl: design.spiralUrl, assets: design.assets,
               text: s.text, highlight: allowHl ? { target: s.hl! } : null,
               canvas: { w: 1080, h: 1350 },
             });
