@@ -83,7 +83,7 @@ UPDATE public.design_variacoes SET layer_stack = '[
 UPDATE public.design_variacoes SET layer_stack = '[
   {"role":"photo","required":true,"source":{"asset_query":"ref:asset_requirements.photo"},"geometry":{"x":0,"y":0,"w":100,"h":100,"fit":"cover"}},
   {"role":"readability_overlay","required":false,"source":{"token":"azul_mp","condition":"apenas se necessario a legibilidade"},"geometry":{"x":0,"y":0,"w":100,"h":100,"opacity_range":[0,35],"gradient":"bottom"}},
-  {"role":"headline","required":true,"source":{"text":"visual_text","token_color":"creme","font":"arbutus_slab"},"geometry":{"x":9,"cy":60,"w":55,"align":"left","anchor":"left_optical"}},
+  {"role":"headline","required":true,"source":{"text":"visual_text","token_color":"creme","font":"arbutus_slab"},"geometry":{"x":9,"cy":60,"w":64,"align":"left","anchor":"left_optical"}},
   {"role":"semantic_highlight","required":false,"source":{"token_color":"laranja","mode":"inline_words","min":1,"max":5}},
   {"role":"bee_spiral_official","required":false,"source":{"asset":"espiral_oficial"},"geometry":{"cx":50,"cy":86,"w":9}}
 ]'::jsonb WHERE id = 'M01-D';
@@ -92,7 +92,7 @@ UPDATE public.design_variacoes SET layer_stack = '[
 UPDATE public.design_variacoes SET layer_stack = '[
   {"role":"background","required":true,"source":{"token":"creme"}},
   {"role":"texture","required":false,"source":{"asset_query":"ref:asset_requirements.texture"},"geometry":{"x":52,"y":0,"w":48,"h":100,"opacity_range":[5,15],"anchor":"right"}},
-  {"role":"headline","required":true,"source":{"text":"visual_text","token_color":"azul_mp","font":"arbutus_slab"},"geometry":{"x":9,"cy":40,"w":58,"align":"left","anchor":"left_optical"}},
+  {"role":"headline","required":true,"source":{"text":"visual_text","token_color":"azul_mp","font":"arbutus_slab"},"geometry":{"x":9,"cy":40,"w":64,"align":"left","anchor":"left_optical"}},
   {"role":"semantic_highlight","required":false,"source":{"token_color":"laranja","mode":"inline_words","min":1,"max":5}},
   {"role":"structural_graphic","required":false,"source":{"kind":"linha","token_color":"laranja"},"geometry":{"cx":50,"cy":62,"w":6,"orientation":"horizontal"}},
   {"role":"bee_spiral_official","required":false,"source":{"asset":"espiral_oficial"},"geometry":{"cx":50,"cy":74,"w":10}}
