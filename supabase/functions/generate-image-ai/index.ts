@@ -14,8 +14,14 @@ import {
   checkRateLimit,
 } from '../_shared/security.ts';
 
-// Nano Banana Pro (Gemini 3 imagem). Mais recente da familia em 2026.
-const MODEL = Deno.env.get('GEMINI_IMAGE_MODEL') ?? 'gemini-3-pro-image-preview';
+// Endpoint Imagen (:predict). O modelo Gemini de imagem NÃO roda aqui (dá 404
+// "not supported for predict"), então usamos modelos Imagen, com fallback caso
+// um não esteja liberado pra a chave do usuário.
+const MODEL_CHAIN = [
+  Deno.env.get('GEMINI_IMAGE_MODEL') ?? 'imagen-3.0-generate-002',
+  'imagen-4.0-generate-001',
+  'imagen-3.0-generate-001',
+];
 
 interface ImageInput {
   prompt: string;
@@ -60,30 +66,32 @@ Deno.serve(async (req: Request) => {
       ? `${input.prompt}. Style: ${input.style_hint}`
       : input.prompt;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:predict?key=${apiKey}`;
     const body = {
       instances: [{ prompt: finalPrompt }],
       parameters: { aspectRatio: normalizedAspect, sampleCount: 1 },
     };
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      return errorResponse(`Imagen API HTTP ${res.status}`, 500, errText.slice(0, 500));
+    let b64 = '';
+    let usedModel = '';
+    let lastErr = '';
+    for (const model of MODEL_CHAIN) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:predict?key=${apiKey}`;
+      const res = await fetch(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        lastErr = `[${model}] HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`;
+        // 404/400 = modelo indisponível pra esta chave -> tenta o próximo.
+        if (res.status === 404 || res.status === 400) continue;
+        break;
+      }
+      const json = await res.json();
+      b64 = json.predictions?.[0]?.bytesBase64Encoded ?? json.predictions?.[0]?.imageBase64 ?? '';
+      if (b64) { usedModel = model; break; }
+      lastErr = `[${model}] sem imagem no retorno`;
     }
 
-    const json = await res.json();
-    const b64 =
-      json.predictions?.[0]?.bytesBase64Encoded ??
-      json.predictions?.[0]?.imageBase64 ??
-      '';
-
-    if (!b64) return errorResponse('Imagen API nao devolveu imagem', 500, json);
+    if (!b64) return errorResponse('Nenhum modelo Imagen disponível gerou a imagem', 502, lastErr);
 
     const output: ImageOutput = { image_base64: b64, mime_type: 'image/png' };
 
@@ -91,7 +99,7 @@ Deno.serve(async (req: Request) => {
       userId,
       provider: 'gemini',
       product: 'image',
-      model: MODEL,
+      model: usedModel,
       metadata: { prompt: finalPrompt.slice(0, 200), aspect: normalizedAspect },
     });
 
