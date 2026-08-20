@@ -553,4 +553,36 @@ export const edge = {
     if (!res.ok) throw new Error(`distribute-schedule HTTP ${res.status}: ${text.slice(0, 400)}`);
     return JSON.parse(text) as { success: boolean; plan: Array<{ post_id: string; date: string; time: string; reason: string }>; summary?: string; error?: string };
   },
+
+  // Motor de decisão visual da Hive (M01): recebe o texto aprovado, decide a
+  // variante (score + diversidade), o destaque, e devolve a decisão com reason.
+  async hiveDecide(input: {
+    text: string;
+    platform?: 'linkedin' | 'instagram';
+    editorial_slug?: string;
+    target_avatar?: string;
+    post_id?: string;
+    history_variants?: string[];
+  }): Promise<{
+    success: boolean;
+    decision: {
+      mode: string; variant: string; variant_confidence: number;
+      highlight: { target: string; reason: string } | null;
+      brand: Record<string, unknown>;
+      asset_strategy: { type: string; photo_required: boolean };
+      explanation: Record<string, unknown>;
+      text_check: { chars: number; limit: number; needs_editorial_review: boolean };
+      [k: string]: unknown;
+    };
+    model_used?: string;
+    error?: string;
+  }> {
+    const headers = await authHeader();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/hive-decide`, {
+      method: 'POST', headers, body: JSON.stringify(input),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`hive-decide HTTP ${res.status}: ${text.slice(0, 400)}`);
+    return JSON.parse(text);
+  },
 };

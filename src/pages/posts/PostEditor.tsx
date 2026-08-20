@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, CheckCircle2, ExternalLink, Loader2, Save, Send, UploadCloud } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ExternalLink, Loader2, Save, Send, UploadCloud, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -26,6 +26,7 @@ import { edge } from '@/lib/edge';
 import { aiApi, almaApi, severidadeOf } from '@/lib/api';
 import { isoToLocalInput, localInputToIso, nowLocalInput } from '@/lib/schedule';
 import { extractSlotText } from '@/lib/templates/extract';
+import { generateHiveImage } from '@/lib/hive/runVisual';
 import { PostCoach } from '@/components/ai/PostCoach';
 import { toast } from 'sonner';
 
@@ -62,6 +63,7 @@ export function PostEditor() {
   const [publishing, setPublishing] = useState(false);
   const [postingLive, setPostingLive] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [hiveBusy, setHiveBusy] = useState(false);
   const [variation, setVariation] = useState<AiVariation | null>(null);
   const [textDirty, setTextDirty] = useState(false);
   const [canvasDirty, setCanvasDirty] = useState(false);
@@ -247,6 +249,43 @@ export function PostEditor() {
     }
   }
 
+  // Gera a imagem do post pela HIVE (M01): decide a variante -> compõe as
+  // camadas -> renderiza -> sobe -> grava no post e carrega no editor pra ajuste.
+  async function runHive() {
+    if (!post || !currentUser) return;
+    const frase = (post.carousel_text?.quote as string | undefined)?.trim() || title.trim();
+    if (!frase) { toast.error('Sem frase pra compor a imagem.'); return; }
+    setHiveBusy(true);
+    try {
+      const { slide, dataUrl, publicUrl, decision } = await generateHiveImage({
+        userId: currentUser.id,
+        postId: post.id,
+        text: frase,
+        platform: post.platform as 'linkedin' | 'instagram',
+        editorialSlug: post.metadata?.editorial_slug as string | undefined,
+      });
+      await update(post.id, {
+        carousel_fabric_json: [slide],
+        rendered_slides: { slide1: publicUrl },
+        visual_decision: decision,
+        image_status: 'pending',
+      });
+      setFabricJson(slide);
+      setImageDataUrl(dataUrl);
+      lastUploadedHash.current = null;
+      const reason = (decision.explanation?.variant_reason as string) || '';
+      toast.success(`Hive escolheu ${decision.variant}${reason ? ` · ${reason}` : ''}`);
+      if (decision.text_check?.needs_editorial_review) {
+        toast.warning('A frase passou do limite ideal — vale revisar o texto.');
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error(`Erro na Hive: ${(e as Error).message}`);
+    } finally {
+      setHiveBusy(false);
+    }
+  }
+
   async function exportAndPublish() {
     if (!post || !imageDataUrl || !currentUser) {
       toast.error('Renderiza o canvas antes (edita qualquer elemento).');
@@ -363,6 +402,12 @@ export function PostEditor() {
               ))}
             </SelectContent>
           </Select>
+          {post.format !== ('video' as typeof post.format) && (
+            <Button variant="outline" size="sm" onClick={() => void runHive()} disabled={hiveBusy} title="Gerar a imagem com a Hive (M01)">
+              {hiveBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+              Hive
+            </Button>
+          )}
           {post.format !== ('video' as typeof post.format) && (
             <Button variant="outline" size="sm" onClick={() => void exportAndPublish()} disabled={publishing}>
               {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}

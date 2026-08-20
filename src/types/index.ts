@@ -206,6 +206,12 @@ export interface UserPost {
   carousel_fabric_json?: object[];    // array de slides Fabric.js hidratados
   generated_images?: Record<string, string>;  // { slide1: 'url' }
   rendered_slides?: Record<string, string>;   // URLs finais do Storage
+  // Hive — sistema visual (máquina de estados + explicabilidade)
+  editorial_locked?: boolean;
+  text_approved?: boolean;
+  image_status?: 'pending' | 'approved' | 'revision' | 'rejected';
+  image_approved?: boolean;
+  visual_decision?: Record<string, unknown>;   // decisão do motor (modo/variante/scores/reasons)
   caption?: string;
   status: PostStatus;
   // Nomenclatura unica: BEE-DDMMAA-G{global}-D{dia}-V{lote}
