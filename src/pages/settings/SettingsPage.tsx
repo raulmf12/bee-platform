@@ -16,6 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { useAuthStore } from '@/store/authStore';
 import { beeApi, knowledgeApi } from '@/lib/api';
+import { edge } from '@/lib/edge';
 import { db } from '@/lib/db';
 import { toast } from 'sonner';
 
@@ -51,7 +52,52 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [testingLi, setTestingLi] = useState(false);
   const [testingIg, setTestingIg] = useState(false);
+  const [connectingIg, setConnectingIg] = useState(false);
   const [stats, setStats] = useState<BeeStats | null>(null);
+
+  // --- Conectar Instagram (Login com Facebook) ---
+  const FB_APP_ID = import.meta.env.VITE_FACEBOOK_APP_ID as string | undefined;
+  const igRedirectUri = typeof window !== 'undefined' ? `${window.location.origin}/configuracoes` : '';
+  const igExpiresAt = settings?.instagram_token_expires_at;
+
+  function startInstagramOAuth() {
+    if (!FB_APP_ID) { toast.error('Configure VITE_FACEBOOK_APP_ID no ambiente do app antes de conectar.'); return; }
+    const state = Math.random().toString(36).slice(2);
+    sessionStorage.setItem('ig_oauth_state', state);
+    const scope = 'instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement,business_management';
+    window.location.href =
+      `https://www.facebook.com/v21.0/dialog/oauth?client_id=${FB_APP_ID}` +
+      `&redirect_uri=${encodeURIComponent(igRedirectUri)}&state=${state}&response_type=code&scope=${encodeURIComponent(scope)}`;
+  }
+
+  // Retorno do OAuth (?code&state) -> troca por token longo e salva.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code'); const state = params.get('state');
+    const saved = sessionStorage.getItem('ig_oauth_state');
+    if (!code || !state || state !== saved) return;
+    sessionStorage.removeItem('ig_oauth_state');
+    (async () => {
+      setConnectingIg(true);
+      try {
+        const res = await edge.connectInstagram({ code, redirect_uri: igRedirectUri });
+        await updateSettings({
+          instagram_access_token: res.access_token,
+          instagram_business_account_id: res.instagram_business_account_id,
+          instagram_token_expires_at: res.expires_at,
+        });
+        setIgAccessToken(res.access_token);
+        setIgBusinessId(res.instagram_business_account_id);
+        toast.success(`Instagram conectado${res.username ? ` · @${res.username}` : ''}`);
+      } catch (e) {
+        toast.error(`Falha ao conectar: ${(e as Error).message.slice(0, 200)}`);
+      } finally {
+        setConnectingIg(false);
+        window.history.replaceState({}, '', '/configuracoes');
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     setName(currentUser?.name ?? '');
@@ -431,6 +477,30 @@ export function SettingsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              {/* Conectar com 1 clique (Login com Facebook) */}
+              <div className="rounded-lg border border-border bg-card/40 p-3 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm">
+                    <div className="font-semibold">Conectar com Facebook</div>
+                    <div className="text-[11px] text-muted-foreground">Pega o token e o ID sozinho — e renova automático (a cada ~50 dias).</div>
+                  </div>
+                  <Button size="sm" variant="accent" onClick={startInstagramOAuth} disabled={connectingIg || !FB_APP_ID}>
+                    {connectingIg ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
+                    {settings?.instagram_access_token ? 'Reconectar Instagram' : 'Conectar Instagram'}
+                  </Button>
+                </div>
+                {settings?.instagram_access_token && (
+                  <div className="flex items-center gap-1.5 text-[11px] text-emerald-600">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Conectado
+                    {igExpiresAt ? ` · token válido até ${new Date(igExpiresAt).toLocaleDateString('pt-BR')}` : ''}
+                  </div>
+                )}
+                {!FB_APP_ID && (
+                  <p className="text-[11px] text-amber-600">Defina <code>VITE_FACEBOOK_APP_ID</code> no ambiente e registre <code>{igRedirectUri}</code> como Valid OAuth Redirect URI no app da Meta.</p>
+                )}
+              </div>
+
+              <p className="text-[11px] text-muted-foreground">Ou preencha manualmente:</p>
               <div className="space-y-2">
                 <Label htmlFor="ig-token">Access Token</Label>
                 <Input id="ig-token" type="password" value={igAccessToken} onChange={(e) => setIgAccessToken(e.target.value)} placeholder="EAAxxxxx..." />

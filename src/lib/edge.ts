@@ -351,6 +351,26 @@ export const edge = {
     return JSON.parse(text);
   },
 
+  // Botão "Conectar Instagram": troca o code do Login com Facebook por um token
+  // de longa duração e devolve o IG business id (o App Secret fica no servidor).
+  async connectInstagram(input: { code: string; redirect_uri: string }): Promise<{
+    success: boolean;
+    access_token: string;
+    instagram_business_account_id: string;
+    username: string;
+    expires_at: string;
+    page_name?: string;
+    error?: string;
+  }> {
+    const headers = await authHeader();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/instagram-connect`, {
+      method: 'POST', headers, body: JSON.stringify(input),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`instagram-connect HTTP ${res.status}: ${text.slice(0, 300)}`);
+    return JSON.parse(text);
+  },
+
   async searchImages(input: {
     query: string;
     count?: number;

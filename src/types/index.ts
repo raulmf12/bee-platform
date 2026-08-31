@@ -58,6 +58,7 @@ export interface UserSettings {
   linkedin_author_urn?: string;
   instagram_access_token?: string;
   instagram_business_account_id?: string;
+  instagram_token_expires_at?: string;
   use_ai_images?: boolean;
   default_template_id?: string;
   content_analysis?: Record<string, unknown>;
