@@ -63,20 +63,24 @@ Deno.serve(async (req: Request) => {
       return errorResponse(`Falha ao listar Páginas: ${pagesData.error?.message ?? JSON.stringify(pagesData).slice(0, 300)}`, 400);
     }
     const pages: Array<{ id: string; name: string; instagram_business_account?: { id: string; username?: string } }> = pagesData.data ?? [];
-    const withIg = pages.find((p) => p.instagram_business_account?.id);
-    if (!withIg) {
+    const accounts = pages
+      .filter((p) => p.instagram_business_account?.id)
+      .map((p) => ({
+        instagram_business_account_id: p.instagram_business_account!.id,
+        username: p.instagram_business_account!.username ?? '',
+        page_name: p.name,
+      }));
+    if (accounts.length === 0) {
       return errorResponse('Nenhuma Página com conta do Instagram comercial vinculada. Vincule o Instagram (Business/Creator) a uma Página do Facebook e tente de novo.', 400);
     }
-    const igId = withIg.instagram_business_account!.id;
-    const username = withIg.instagram_business_account!.username ?? '';
 
+    // Devolve TODOS os perfis vinculados + o token (o mesmo token longo do usuário
+    // publica em qualquer um deles). O front deixa escolher qual usar/alternar.
     return jsonResponse({
       success: true,
       access_token: longToken,
-      instagram_business_account_id: igId,
-      username,
       expires_at: expiresAt,
-      page_name: withIg.name,
+      accounts,
     });
   } catch (e) {
     console.error('[instagram-connect]', e);

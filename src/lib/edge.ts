@@ -356,10 +356,8 @@ export const edge = {
   async connectInstagram(input: { code: string; redirect_uri: string }): Promise<{
     success: boolean;
     access_token: string;
-    instagram_business_account_id: string;
-    username: string;
     expires_at: string;
-    page_name?: string;
+    accounts: Array<{ instagram_business_account_id: string; username: string; page_name: string }>;
     error?: string;
   }> {
     const headers = await authHeader();

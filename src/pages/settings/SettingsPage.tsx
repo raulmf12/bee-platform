@@ -54,6 +54,10 @@ export function SettingsPage() {
   const [testingIg, setTestingIg] = useState(false);
   const [connectingIg, setConnectingIg] = useState(false);
   const [stats, setStats] = useState<BeeStats | null>(null);
+  // Perfis IG vinculados + token pendente (quando há mais de um, o usuário escolhe).
+  type IgAccount = { instagram_business_account_id: string; username: string; page_name: string };
+  const [igAccounts, setIgAccounts] = useState<IgAccount[]>([]);
+  const [igPending, setIgPending] = useState<{ access_token: string; expires_at: string } | null>(null);
 
   // --- Conectar Instagram (Login com Facebook) ---
   // App ID do Facebook é PÚBLICO (vai na URL do OAuth). Default embutido pra o
@@ -72,6 +76,18 @@ export function SettingsPage() {
       `&redirect_uri=${encodeURIComponent(igRedirectUri)}&state=${state}&response_type=code&scope=${encodeURIComponent(scope)}`;
   }
 
+  // Salva o perfil IG escolhido (token longo + business id + validade).
+  async function saveIgAccount(acc: IgAccount, token: string, expiresAt: string) {
+    await updateSettings({
+      instagram_access_token: token,
+      instagram_business_account_id: acc.instagram_business_account_id,
+      instagram_token_expires_at: expiresAt,
+    });
+    setIgAccessToken(token);
+    setIgBusinessId(acc.instagram_business_account_id);
+    toast.success(`Instagram conectado · @${acc.username || acc.page_name}`);
+  }
+
   // Retorno do OAuth (?code&state) -> troca por token longo e salva.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -83,14 +99,14 @@ export function SettingsPage() {
       setConnectingIg(true);
       try {
         const res = await edge.connectInstagram({ code, redirect_uri: igRedirectUri });
-        await updateSettings({
-          instagram_access_token: res.access_token,
-          instagram_business_account_id: res.instagram_business_account_id,
-          instagram_token_expires_at: res.expires_at,
-        });
-        setIgAccessToken(res.access_token);
-        setIgBusinessId(res.instagram_business_account_id);
-        toast.success(`Instagram conectado${res.username ? ` · @${res.username}` : ''}`);
+        const accounts = res.accounts ?? [];
+        setIgAccounts(accounts);
+        setIgPending({ access_token: res.access_token, expires_at: res.expires_at });
+        if (accounts.length === 1) {
+          await saveIgAccount(accounts[0], res.access_token, res.expires_at);
+        } else {
+          toast.success(`${accounts.length} perfis encontrados — escolha qual usar.`);
+        }
       } catch (e) {
         toast.error(`Falha ao conectar: ${(e as Error).message.slice(0, 200)}`);
       } finally {
@@ -495,6 +511,27 @@ export function SettingsPage() {
                   <div className="flex items-center gap-1.5 text-[11px] text-emerald-600">
                     <CheckCircle2 className="h-3.5 w-3.5" /> Conectado
                     {igExpiresAt ? ` · token válido até ${new Date(igExpiresAt).toLocaleDateString('pt-BR')}` : ''}
+                  </div>
+                )}
+                {igAccounts.length > 1 && igPending && (
+                  <div className="mt-1 space-y-1.5">
+                    <div className="text-[11px] font-medium text-muted-foreground">Escolha o perfil pra publicar:</div>
+                    <div className="grid gap-1.5">
+                      {igAccounts.map((a) => {
+                        const active = igBusinessId === a.instagram_business_account_id;
+                        return (
+                          <button
+                            key={a.instagram_business_account_id}
+                            onClick={() => void saveIgAccount(a, igPending.access_token, igPending.expires_at)}
+                            className={`flex items-center justify-between rounded-md border px-2.5 py-1.5 text-left text-xs ${active ? 'border-accent bg-accent/10' : 'border-border hover:bg-secondary/40'}`}
+                          >
+                            <span>@{a.username || a.page_name} <span className="text-muted-foreground">· {a.page_name}</span></span>
+                            {active ? <CheckCircle2 className="h-3.5 w-3.5 text-accent" /> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">Clique pra alternar o perfil ativo. (Publica no perfil marcado.)</p>
                   </div>
                 )}
                 {!FB_APP_ID && (
