@@ -29,6 +29,9 @@ import { Personas } from '@/pages/personas/Personas';
 import { Agenda } from '@/pages/agenda/Agenda';
 import { HivePreview } from '@/pages/hive/HivePreview';
 import { HiveAssets } from '@/pages/hive/HiveAssets';
+import { HiveMarcos } from '@/pages/hive/HiveMarcos';
+import { HiveConvite } from '@/pages/hive/HiveConvite';
+import { Custos } from '@/pages/custos/Custos';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { currentUser, settings, initialized } = useAuthStore();
@@ -106,6 +109,9 @@ export default function App() {
           <Route path="agenda" element={<Agenda />} />
           <Route path="hive/preview" element={<HivePreview />} />
           <Route path="hive/assets" element={<HiveAssets />} />
+          <Route path="hive/marcos" element={<HiveMarcos />} />
+          <Route path="hive/convite" element={<HiveConvite />} />
+          <Route path="custos" element={<Custos />} />
           {/* Vídeo virou parte do wizard (NewPost). Rota antiga redireciona. */}
           <Route path="posts/novo-video" element={<Navigate to="/posts/novo" replace />} />
           <Route path="podcasts" element={<Podcasts />} />

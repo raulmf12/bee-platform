@@ -46,7 +46,7 @@ export async function uploadDesignAsset(blob: Blob): Promise<{ path: string; pub
 }
 
 export async function saveDesignAsset(row: {
-  kind: 'photo' | 'texture';
+  kind: 'photo' | 'texture' | string;
   title: string;
   url: string;
   storage_path: string;
@@ -56,13 +56,17 @@ export async function saveDesignAsset(row: {
   origin?: string;
   semantic?: Record<string, unknown>;
   tags?: string[];
-}): Promise<void> {
-  const { error } = await supabase.from('design_assets').insert({
+  person_slug?: string;
+  source_image_id?: string;
+}): Promise<string> {
+  const { data, error } = await supabase.from('design_assets').insert({
     kind: row.kind, title: row.title, url: row.url, storage_path: row.storage_path,
     mime_type: row.mime_type, width: row.width, height: row.height,
     origin: row.origin ?? 'generated', semantic: row.semantic ?? {}, tags: row.tags ?? [], is_active: true,
-  });
+    person_slug: row.person_slug ?? null, source_image_id: row.source_image_id ?? null,
+  }).select('id').single();
   if (error) throw error;
+  return (data?.id as string) ?? '';
 }
 
 export async function listDesignAssets(): Promise<DesignAssetRow[]> {
@@ -73,6 +77,48 @@ export async function listDesignAssets(): Promise<DesignAssetRow[]> {
     .order('created_at', { ascending: false });
   if (error) throw error;
   return (data ?? []) as DesignAssetRow[];
+}
+
+export interface MarcosPhotoRow extends DesignAssetRow {
+  semantic: Record<string, unknown>;
+}
+
+// Fotos REAIS do Marcos — o topo da hierarquia de imagem da M02.
+export async function listMarcosPhotos(): Promise<MarcosPhotoRow[]> {
+  const { data, error } = await supabase
+    .from('design_assets')
+    .select('id,kind,title,url,storage_path,origin,tags,is_active,semantic')
+    .eq('kind', 'photo')
+    .eq('person_slug', 'marcos')
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as MarcosPhotoRow[];
+}
+
+// Sobe uma foto real do Marcos (o proprio arquivo do usuario) e registra as tags
+// semanticas que deixam o motor da Hive ESCOLHER (nao sortear).
+export async function saveMarcosPhoto(row: {
+  title: string;
+  url: string;
+  storage_path: string;
+  mime_type?: string;
+  width?: number;
+  height?: number;
+  origin?: 'real' | 'real_adapted';
+  semantic: Record<string, unknown>;
+  tags?: string[];
+}): Promise<string> {
+  const id = await saveDesignAsset({
+    kind: 'photo', title: row.title, url: row.url, storage_path: row.storage_path,
+    mime_type: row.mime_type, width: row.width, height: row.height,
+    origin: row.origin ?? 'real', semantic: row.semantic, tags: row.tags ?? [], person_slug: 'marcos',
+  });
+  // Foto real e a ancestral de si mesma (source_image_id = proprio id) — deriva­coes
+  // futuras (real_adapted) apontam pra ca, e a diversidade conta por fonte.
+  if (id && (row.origin ?? 'real') === 'real') {
+    await supabase.from('design_assets').update({ source_image_id: id }).eq('id', id);
+  }
+  return id;
 }
 
 export async function deleteDesignAsset(id: string, storagePath: string | null): Promise<void> {

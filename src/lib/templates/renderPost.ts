@@ -20,11 +20,17 @@ const PERSONA_OUT_WIDTH = 640;
 // width/height são as dimensões REAIS do canvas; multiplier escala a saída (1 = full-res).
 export async function renderFabricToDataUrl(
   fabricJson: object,
-  opts: { width: number; height: number; multiplier?: number },
+  opts: { width: number; height: number; multiplier?: number; format?: 'png' | 'jpeg'; quality?: number },
 ): Promise<string | null> {
   try {
     // A frase do Bee Quote é Playfair — sem ela a medição/render sai torto.
-    await ensureFontsLoaded([{ family: 'Playfair Display', weight: 'bold' }]);
+    // Inter é o apoio (M03) e Playfair 500 entra em títulos leves; garante ambas.
+    await ensureFontsLoaded([
+      { family: 'Playfair Display', weight: 'bold' },
+      { family: 'Playfair Display', weight: '500' },
+      { family: 'Inter', weight: '400' },
+      { family: 'Inter', weight: '600' },
+    ]);
     const el = document.createElement('canvas');
     const bg = (fabricJson as { background?: string }).background ?? '#FFFFFF';
     const c = new fabric.StaticCanvas(el, {
@@ -35,7 +41,10 @@ export async function renderFabricToDataUrl(
     try {
       await c.loadFromJSON(fabricJson);
       c.renderAll();
-      return c.toDataURL({ format: 'png', quality: 0.92, multiplier: opts.multiplier ?? 1 });
+      // JPEG (menor + exigido pelo Instagram) quando pedido; PNG por padrão.
+      // JPEG não tem alfa — pinta o fundo do slide antes pra não sair preto.
+      const format = opts.format ?? 'png';
+      return c.toDataURL({ format, quality: opts.quality ?? (format === 'jpeg' ? 0.9 : 0.92), multiplier: opts.multiplier ?? 1 });
     } finally {
       void c.dispose();
     }

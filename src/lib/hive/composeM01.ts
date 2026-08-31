@@ -24,6 +24,7 @@ export interface DesignLayer {
 }
 export interface M01Recipe {
   id: string;
+  manifestacao_id?: string;          // 'M01' | 'M02' — dispatcher escolhe o compositor
   nome: string;
   limites?: Record<string, unknown>;
   layer_stack: DesignLayer[];

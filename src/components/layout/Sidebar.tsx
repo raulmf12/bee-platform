@@ -25,7 +25,8 @@ import {
   Library,
   Database,
   ScrollText,
-  UserCircle
+  UserCircle,
+  DollarSign
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BeeLogo } from '@/components/shared/BeeLogo';
@@ -83,6 +84,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/personas', label: 'Simular público', icon: Users },
       { to: '/conhecimento', label: 'Conhecimento', icon: Database },
       { to: '/curadoria', label: 'Curadoria', icon: Sparkles },
+      { to: '/custos', label: 'Custos de API', icon: DollarSign },
     ]
   },
   {

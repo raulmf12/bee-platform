@@ -124,6 +124,35 @@ export async function getUserGeminiKey(userId: string): Promise<string | null> {
   return Deno.env.get('GEMINI_API_KEY') ?? null;
 }
 
+// Tabela de preços (USD). Mantém em sincronia com src/lib/pricing.ts.
+// Texto: por 1M tokens (in/out). Imagem: por imagem. Busca: por chamada.
+// Preços reais (ai.google.dev/gemini-api/docs/pricing, ago/2026). Sincronizar
+// com src/lib/pricing.ts. 3.x usa a mesma faixa do 2.5 equivalente.
+const PRICE: Record<string, { inPerM?: number; outPerM?: number; perImage?: number; perCall?: number }> = {
+  'gemini-2.5-flash': { inPerM: 0.30, outPerM: 2.50 },
+  'gemini-3.5-flash': { inPerM: 0.30, outPerM: 2.50 },
+  'gemini-2.5-flash-lite': { inPerM: 0.10, outPerM: 0.40 },
+  'gemini-3.1-flash-lite': { inPerM: 0.10, outPerM: 0.40 },
+  'gemini-2.5-pro': { inPerM: 1.25, outPerM: 10.0 },
+  'gemini-3.1-pro-preview': { inPerM: 1.25, outPerM: 10.0 },
+  'gemini-embedding-001': { inPerM: 0.15, outPerM: 0 },
+  'gemini-2.5-flash-image': { perImage: 0.039 },
+  'imagen-3.0-generate-002': { perImage: 0.04 },
+  'imagen-4.0-generate-001': { perImage: 0.04 },
+  'imagen-3.0-generate-001': { perImage: 0.04 },
+  serpapi: { perCall: 0.01 },
+};
+const DEFAULT_PRICE: Record<string, { inPerM?: number; outPerM?: number; perImage?: number; perCall?: number }> = {
+  text: { inPerM: 0.30, outPerM: 2.50 }, image: { perImage: 0.04 }, 'image-search': { perCall: 0.01 },
+};
+function estimateCost(input: { product: string; model?: string; tokens_input?: number; tokens_output?: number }): number {
+  const p = (input.model && PRICE[input.model]) || DEFAULT_PRICE[input.product] || {};
+  if (input.product === 'image' || p.perImage != null) return p.perImage ?? 0;
+  if (input.product === 'image-search' || p.perCall != null) return p.perCall ?? 0;
+  const ti = input.tokens_input ?? 0, to = input.tokens_output ?? 0;
+  return (ti / 1_000_000) * (p.inPerM ?? 0) + (to / 1_000_000) * (p.outPerM ?? 0);
+}
+
 // Log de uso (custo, tokens, etc) na tabela usage_events.
 export async function logUsage(input: {
   userId: string;
@@ -154,7 +183,10 @@ export async function logUsage(input: {
         model: input.model,
         tokens_input: input.tokens_input,
         tokens_output: input.tokens_output,
-        cost_usd: input.cost_usd,
+        cost_usd: input.cost_usd ?? estimateCost({
+          product: input.product, model: input.model,
+          tokens_input: input.tokens_input, tokens_output: input.tokens_output,
+        }),
         metadata: input.metadata ?? {},
       }),
     });

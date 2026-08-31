@@ -1,5 +1,8 @@
-// Carrega as receitas frozen do M01 + os tokens de cor + a espiral, do banco.
+// Carrega as receitas frozen da Hive + tokens de cor + espiral + assets, do banco.
 // Leitura via supabase client (RLS: authenticated pode ler as tabelas design_*).
+//
+// loadHiveDesign() traz TODAS as manifestacoes congeladas (M01 + M02) — o motor
+// pode escolher entre elas. loadM01Design() mantem o recorte M01 (labs/matriz).
 
 import { supabase } from '@/lib/supabase';
 import type { M01Recipe, DesignAsset } from './composeM01';
@@ -11,20 +14,11 @@ export interface DesignData {
   assets: { photos: DesignAsset[]; textures: DesignAsset[] };
 }
 
-export async function loadM01Design(): Promise<DesignData> {
-  const [varRes, tokRes, assetRes] = await Promise.all([
-    supabase
-      .from('design_variacoes')
-      .select('id,nome,limites,layer_stack')
-      .eq('manifestacao_id', 'M01')
-      .eq('status', 'frozen')
-      .eq('ativo', true)
-      .order('ordem', { ascending: true }),
+async function loadTokensAndAssets(): Promise<{ colors: Record<string, string>; spiralUrl: string; assets: DesignData['assets'] }> {
+  const [tokRes, assetRes] = await Promise.all([
     supabase.from('design_tokens').select('slug,kind,value'),
     supabase.from('design_assets').select('kind,url,width,height').eq('is_active', true).in('kind', ['photo', 'texture']),
   ]);
-
-  if (varRes.error) throw varRes.error;
   if (tokRes.error) throw tokRes.error;
   if (assetRes.error) throw assetRes.error;
 
@@ -43,7 +37,31 @@ export async function loadM01Design(): Promise<DesignData> {
     if (a.kind === 'photo') photos.push(asset);
     else if (a.kind === 'texture') textures.push(asset);
   }
+  return { colors, spiralUrl, assets: { photos, textures } };
+}
 
-  const variacoes = (varRes.data ?? []) as unknown as M01Recipe[];
-  return { variacoes, colors, spiralUrl, assets: { photos, textures } };
+async function loadVariacoes(manifestacaoId?: string): Promise<M01Recipe[]> {
+  let q = supabase
+    .from('design_variacoes')
+    .select('id,manifestacao_id,nome,limites,layer_stack')
+    .eq('status', 'frozen')
+    .eq('ativo', true)
+    .order('manifestacao_id', { ascending: true })
+    .order('ordem', { ascending: true });
+  if (manifestacaoId) q = q.eq('manifestacao_id', manifestacaoId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data ?? []) as unknown as M01Recipe[];
+}
+
+// Todas as manifestacoes congeladas (M01 + M02) — usado pelo motor/pipeline.
+export async function loadHiveDesign(): Promise<DesignData> {
+  const [variacoes, rest] = await Promise.all([loadVariacoes(), loadTokensAndAssets()]);
+  return { variacoes, ...rest };
+}
+
+// Recorte M01 (labs de calibracao e matriz da aba Templates).
+export async function loadM01Design(): Promise<DesignData> {
+  const [variacoes, rest] = await Promise.all([loadVariacoes('M01'), loadTokensAndAssets()]);
+  return { variacoes, ...rest };
 }

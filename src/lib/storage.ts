@@ -31,6 +31,28 @@ interface UploadParams {
   filename?: string;
 }
 
+// Converte um data URL (ex.: PNG do editor) em JPEG. O Instagram exige JPEG;
+// como JPEG não tem alfa, pinta um fundo branco antes (evita fundo preto).
+export function toJpegDataUrl(dataUrl: string, quality = 0.9): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        const ctx = c.getContext('2d');
+        if (!ctx) return resolve(dataUrl);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(img, 0, 0);
+        resolve(c.toDataURL('image/jpeg', quality));
+      } catch { resolve(dataUrl); }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
 export async function uploadAssetImage({
   userId,
   assetId,

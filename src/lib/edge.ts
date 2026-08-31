@@ -568,8 +568,21 @@ export const edge = {
     decision: {
       mode: string; variant: string; variant_confidence: number;
       highlight: { target: string; reason: string } | null;
+      subtitle?: string | null;
+      diagram?: { poleA?: string; poleB?: string } | null;
+      human_presence_adds_meaning?: boolean;
+      manifestations?: Record<string, number>;
       brand: Record<string, unknown>;
       asset_strategy: { type: string; photo_required: boolean };
+      // M02: foto escolhida na hierarquia (real/adaptada/gerada) ou instrução de geração.
+      asset?: {
+        id?: string; url: string; width?: number | null; height?: number | null;
+        origin?: string; espaco_texto?: string | null; texto_cor?: string | null; source_image_id?: string;
+      } | null;
+      image_generation?: {
+        needed: boolean; prompt: string; forbid?: string[];
+        must_have?: Record<string, unknown>; scene_hint?: string;
+      } | null;
       explanation: Record<string, unknown>;
       text_check: { chars: number; limit: number; needs_editorial_review: boolean };
       [k: string]: unknown;

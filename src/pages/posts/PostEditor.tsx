@@ -21,7 +21,7 @@ import { StatusBadge } from '@/components/shared/StatusBadge';
 import { PlatformBadge } from '@/components/shared/PlatformBadge';
 import { POST_STATUS_LABELS, type AiVariation, type PostStatus } from '@/types';
 import { useAuthStore } from '@/store/authStore';
-import { uploadAssetImage, hashDataUrl } from '@/lib/storage';
+import { uploadAssetImage, hashDataUrl, toJpegDataUrl } from '@/lib/storage';
 import { edge } from '@/lib/edge';
 import { aiApi, almaApi, severidadeOf } from '@/lib/api';
 import { isoToLocalInput, localInputToIso, nowLocalInput } from '@/lib/schedule';
@@ -64,6 +64,21 @@ export function PostEditor() {
   const [postingLive, setPostingLive] = useState(false);
   const [approving, setApproving] = useState(false);
   const [hiveBusy, setHiveBusy] = useState(false);
+  const [approvingImg, setApprovingImg] = useState(false);
+
+  // Portão de imagem: aprova a imagem gerada (obrigatório antes de publicar).
+  async function approveImage() {
+    if (!post) return;
+    setApprovingImg(true);
+    try {
+      await update(post.id, { image_approved: true, image_status: 'approved' });
+      toast.success('Imagem aprovada — liberada pra publicar.');
+    } catch {
+      toast.error('Falha ao aprovar a imagem.');
+    } finally {
+      setApprovingImg(false);
+    }
+  }
   const [variation, setVariation] = useState<AiVariation | null>(null);
   const [textDirty, setTextDirty] = useState(false);
   const [canvasDirty, setCanvasDirty] = useState(false);
@@ -249,8 +264,9 @@ export function PostEditor() {
     }
   }
 
-  // Gera a imagem do post pela HIVE (M01): decide a variante -> compõe as
-  // camadas -> renderiza -> sobe -> grava no post e carrega no editor pra ajuste.
+  // Gera a imagem do post pela HIVE: decide a manifestação (M01 frase / M02 rosto
+  // + pensamento) e a variante -> compõe as camadas (M02 usa foto real do Marcos,
+  // gera só no fallback) -> renderiza -> sobe -> grava no post e carrega no editor.
   async function runHive() {
     if (!post || !currentUser) return;
     const frase = (post.carousel_text?.quote as string | undefined)?.trim() || title.trim();
@@ -269,6 +285,7 @@ export function PostEditor() {
         rendered_slides: { slide1: publicUrl },
         visual_decision: decision,
         image_status: 'pending',
+        image_approved: false, // imagem nova volta a precisar de aprovação
       });
       setFabricJson(slide);
       setImageDataUrl(dataUrl);
@@ -297,11 +314,14 @@ export function PostEditor() {
       if (hash === lastUploadedHash.current && post.rendered_slides?.slide1) {
         toast.info('Sem mudancas no canvas desde a ultima exportacao.');
       } else {
+        // Instagram exige JPEG; converte antes de subir (LinkedIn segue PNG).
+        const isIg = post.platform === 'instagram';
+        const uploadUrl = isIg ? await toJpegDataUrl(imageDataUrl) : imageDataUrl;
         const { publicUrl } = await uploadAssetImage({
           userId: currentUser.id,
           assetId: post.id,
-          dataUrl: imageDataUrl,
-          filename: 'render.png',
+          dataUrl: uploadUrl,
+          filename: isIg ? 'render.jpg' : 'render.png',
         });
         lastUploadedHash.current = hash;
         await update(post.id, {
@@ -403,10 +423,26 @@ export function PostEditor() {
             </SelectContent>
           </Select>
           {post.format !== ('video' as typeof post.format) && (
-            <Button variant="outline" size="sm" onClick={() => void runHive()} disabled={hiveBusy} title="Gerar a imagem com a Hive (M01)">
+            <Button variant="outline" size="sm" onClick={() => void runHive()} disabled={hiveBusy} title="Gerar a imagem com a Hive (decide M01 frase ou M02 rosto + pensamento)">
               {hiveBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
               Hive
             </Button>
+          )}
+          {post.format !== ('video' as typeof post.format) && post.visual_decision && (
+            post.image_approved ? (
+              <span className="inline-flex items-center gap-1 rounded-md bg-emerald-600/15 px-2 py-1 text-xs font-medium text-emerald-600">
+                <CheckCircle2 className="h-3.5 w-3.5" /> Imagem aprovada
+              </span>
+            ) : (
+              <Button
+                variant="outline" size="sm" onClick={() => void approveImage()} disabled={approvingImg}
+                className="border-emerald-500 text-emerald-600 hover:bg-emerald-50"
+                title="Aprovar a imagem gerada — obrigatório antes de publicar (portão de imagem)"
+              >
+                {approvingImg ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                Aprovar imagem
+              </Button>
+            )
           )}
           {post.format !== ('video' as typeof post.format) && (
             <Button variant="outline" size="sm" onClick={() => void exportAndPublish()} disabled={publishing}>

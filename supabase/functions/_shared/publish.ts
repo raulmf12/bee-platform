@@ -23,6 +23,10 @@ export interface PublishablePost {
   rendered_slides: Record<string, string> | null;
   metadata: Record<string, unknown>;
   publish_attempts: number | null;
+  // Portão de imagem: posts com imagem gerada por IA (visual_decision) só
+  // publicam depois de image_approved=true.
+  visual_decision: unknown | null;
+  image_approved: boolean | null;
 }
 
 interface UserSettings {
@@ -36,7 +40,7 @@ export interface PublishResult { url: string; id: string; platform: string }
 
 async function loadPost(id: string): Promise<PublishablePost | null> {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/user_posts?id=eq.${id}&select=id,user_id,platform,format,caption,rendered_slides,metadata,publish_attempts&limit=1`,
+    `${SUPABASE_URL}/rest/v1/user_posts?id=eq.${id}&select=id,user_id,platform,format,caption,rendered_slides,metadata,publish_attempts,visual_decision,image_approved&limit=1`,
     { headers: svcHeaders() },
   );
   if (!res.ok) return null;
@@ -194,6 +198,12 @@ export async function publishOne(postId: string, userId: string): Promise<Publis
 
   const caption = post.caption ?? '';
   if (!caption.trim()) throw new Error('Post sem caption — adicione antes de publicar');
+
+  // PORTÃO DE IMAGEM: post com imagem gerada por IA (Hive) precisa da imagem
+  // aprovada antes de publicar. Posts sem visual_decision não são afetados.
+  if (post.format === 'image' && post.visual_decision && !post.image_approved) {
+    throw new Error('Aprove a imagem antes de publicar (portão de aprovação de imagem).');
+  }
 
   // Conta a tentativa antes de tentar.
   await updatePost(post.id, { publish_attempts: (post.publish_attempts ?? 0) + 1, publish_error: null });

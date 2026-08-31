@@ -10,7 +10,7 @@
 // Todos os fluxos compartilham o mesmo motor de Aprovar/Corrigir/Rejeitar +
 // learn-from-feedback + regeneração.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, ArrowRight, Check, Edit3, FileText, Film, Image as ImageIcon,
@@ -41,6 +41,7 @@ import { AiEditDialog } from '@/components/posts/wizard/AiEditDialog';
 import { SnippetRegenDialog } from '@/components/posts/wizard/SnippetRegenDialog';
 import { PostChatPanel } from '@/components/posts/wizard/PostChatPanel';
 import type { AiVariation, BeeEditorial, BeeAvatar, Platform, PostContent, TargetAvatar, UserPost, QaResult } from '@/types';
+import { POST_STATUS_LABELS } from '@/types';
 
 type WizardState =
   | 'FORMAT' | 'BATCH_CONFIG'
@@ -158,6 +159,8 @@ export function NewPost() {
   // Seleção manual (opcional). Vazio = a IA escolhe e varia sozinha.
   const [selPlatforms, setSelPlatforms] = useState<Platform[]>([]);
   const [selEditorials, setSelEditorials] = useState<string[]>([]);
+  // Reaproveitar: post da OUTRA plataforma usado como base pra adaptar (post único).
+  const [referencePost, setReferencePost] = useState<UserPost | null>(null);
   const [batch, setBatch] = useState<BatchItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [correctingField, setCorrectingField] = useState<'titulo' | 'legenda' | null>(null);
@@ -172,6 +175,24 @@ export function NewPost() {
     setSelPlatforms((p) => p.slice(0, Math.min(PLATFORMS.length, batchQuantity)));
     setSelEditorials((e) => e.slice(0, batchQuantity));
   }, [batchQuantity]);
+  // Reaproveitar só faz sentido em POST ÚNICO com UMA plataforma escolhida.
+  const reuseEligible = batchQuantity === 1 && selPlatforms.length === 1;
+  const targetPlatform: Platform | null = selPlatforms.length === 1 ? selPlatforms[0] : null;
+  const sourcePlatform: Platform | null = targetPlatform ? (targetPlatform === 'linkedin' ? 'instagram' : 'linkedin') : null;
+  useEffect(() => {
+    if (!reuseEligible) { setReferencePost(null); return; }
+    // se a plataforma-alvo virou a mesma da base, a base perde o sentido
+    setReferencePost((r) => (r && r.platform === targetPlatform ? null : r));
+  }, [reuseEligible, targetPlatform]);
+  // Posts da OUTRA plataforma, já prontos, pra reaproveitar (mais recentes primeiro).
+  const reusablePosts = useMemo(() => {
+    if (!sourcePlatform) return [] as UserPost[];
+    return [...posts]
+      .filter((p) => p.platform === sourcePlatform
+        && ['approved', 'scheduled', 'published'].includes(p.status)
+        && Boolean((p.carousel_text?.quote as string | undefined) ?? p.title))
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  }, [posts, sourcePlatform]);
   const [editingQuote, setEditingQuote] = useState(false);
   const [quoteDraft, setQuoteDraft] = useState('');
   const [savingQuote, setSavingQuote] = useState(false);
@@ -474,6 +495,8 @@ export function NewPost() {
         quote_max_chars: 200,
         variations: 1,
         briefing,
+        // Reaproveitar: adapta um post da OUTRA plataforma (só no post único).
+        reference_post_id: (batchQuantity === 1 && referencePost) ? referencePost.id : undefined,
       });
       const v = res.variations?.[0] ?? res;
 
@@ -589,6 +612,9 @@ export function NewPost() {
             review_stage: 'texto',
             titulo_status: 'pending',
             legenda_status: 'pending',
+            ...(batchQuantity === 1 && referencePost
+              ? { reused_from: referencePost.id, reused_from_platform: referencePost.platform }
+              : {}),
           },
         });
 
@@ -1001,7 +1027,7 @@ export function NewPost() {
       // serve IG e LinkedIn); se caiu no template clássico, usa as dims dele.
       const isHive = !!item.hiveDecision;
       const dims = isHive ? { width: 1080, height: 1350 } : getLayoutDimensions(item.sizeId);
-      const dataUrl = await renderFabricToDataUrl(item.fabricJson, dims);
+      const dataUrl = await renderFabricToDataUrl(item.fabricJson, { ...dims, format: 'jpeg' });
       let renderedSlides: Record<string, string> | undefined;
       if (dataUrl) {
         const { publicUrl } = await uploadAssetImage({
@@ -1479,7 +1505,8 @@ export function NewPost() {
 
       {/* BATCH_CONFIG: quantos posts + plataforma/editoria (opcional) */}
       {state === 'BATCH_CONFIG' && (
-        <div className="mt-8 space-y-4">
+        <div className="mt-8 grid gap-4 lg:grid-cols-[1fr_340px] lg:items-start">
+          <div className="space-y-4">
           {/* Quantidade */}
           <Card>
             <CardContent className="py-8 flex flex-col items-center gap-5 text-center">
@@ -1570,9 +1597,66 @@ export function NewPost() {
 
           <div className="flex justify-center pt-1">
             <Button variant="accent" size="lg" onClick={() => void handleStartImageBatch()}>
-              <Sparkles className="h-4 w-4 mr-2" /> Gerar {batchQuantity} {batchQuantity === 1 ? 'post' : 'posts'}
+              <Sparkles className="h-4 w-4 mr-2" />
+              {referencePost ? 'Adaptar post' : `Gerar ${batchQuantity} ${batchQuantity === 1 ? 'post' : 'posts'}`}
             </Button>
           </div>
+          </div>
+
+          {/* Reaproveitar: adaptar um post da OUTRA plataforma (post único) */}
+          <aside className="rounded-xl border border-border bg-card/40 p-4 lg:sticky lg:top-4">
+            <div className="mb-2 flex items-center gap-2">
+              <RefreshCw className="h-4 w-4 text-accent" />
+              <h4 className="font-semibold">Reaproveitar</h4>
+            </div>
+            {!reuseEligible ? (
+              <p className="text-xs text-muted-foreground">
+                Para adaptar um post de uma plataforma pra outra: escolha <b>1 post</b> e <b>1 plataforma</b> (Instagram ou LinkedIn) ao lado. A lista aqui traz os posts da <b>outra</b> plataforma pra usar como base.
+              </p>
+            ) : (
+              <>
+                <p className="mb-3 text-xs text-muted-foreground">
+                  Criar pra <b className="capitalize">{targetPlatform}</b> com base num post de <b className="capitalize">{sourcePlatform}</b>. A IA adapta o texto ao formato da plataforma.
+                </p>
+                {referencePost && (
+                  <div className="mb-3 rounded-lg border border-accent/40 bg-accent/5 p-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-accent">Base selecionada</span>
+                      <button className="text-[11px] text-muted-foreground hover:underline" onClick={() => setReferencePost(null)}>limpar</button>
+                    </div>
+                    <p className="mt-1 line-clamp-3 text-xs">{(referencePost.carousel_text?.quote as string | undefined) ?? referencePost.title}</p>
+                  </div>
+                )}
+                <div className="max-h-[52vh] space-y-2 overflow-y-auto pr-1">
+                  {reusablePosts.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">Nenhum post de <b className="capitalize">{sourcePlatform}</b> pronto (aprovado, agendado ou publicado) pra reaproveitar ainda.</p>
+                  ) : reusablePosts.map((p) => {
+                    const on = referencePost?.id === p.id;
+                    const quote = (p.carousel_text?.quote as string | undefined) ?? p.title ?? '';
+                    return (
+                      <button
+                        key={p.id}
+                        onClick={() => {
+                          setReferencePost(on ? null : p);
+                          // mantém o tema: pré-seleciona a linha editorial da base
+                          const slug = p.metadata?.editorial_slug as string | undefined;
+                          if (!on && slug && editorials.some((e) => e.slug === slug)) setSelEditorials([slug]);
+                        }}
+                        className={cn('w-full rounded-lg border p-2.5 text-left transition-colors',
+                          on ? 'border-accent bg-accent/10' : 'border-border hover:bg-secondary/40')}
+                      >
+                        <div className="mb-1 flex items-center gap-1.5">
+                          <Badge variant="secondary" className="text-[9px]">{POST_STATUS_LABELS[p.status]}</Badge>
+                          {p.metadata?.editorial_slug ? <span className="truncate text-[10px] text-muted-foreground">{String(p.metadata.editorial_slug)}</span> : null}
+                        </div>
+                        <p className="line-clamp-3 text-xs">{quote}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </aside>
         </div>
       )}
 
