@@ -56,7 +56,9 @@ export function SettingsPage() {
   const [stats, setStats] = useState<BeeStats | null>(null);
 
   // --- Conectar Instagram (Login com Facebook) ---
-  const FB_APP_ID = import.meta.env.VITE_FACEBOOK_APP_ID as string | undefined;
+  // App ID do Facebook é PÚBLICO (vai na URL do OAuth). Default embutido pra o
+  // deploy (Netlify) funcionar sem env var; pode sobrescrever com VITE_FACEBOOK_APP_ID.
+  const FB_APP_ID = (import.meta.env.VITE_FACEBOOK_APP_ID as string | undefined) || '2082883022288225';
   const igRedirectUri = typeof window !== 'undefined' ? `${window.location.origin}/configuracoes` : '';
   const igExpiresAt = settings?.instagram_token_expires_at;
 
