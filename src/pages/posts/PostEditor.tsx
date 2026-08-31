@@ -1,7 +1,7 @@
 // PostEditor — canvas Fabric.js + caption + status + export pro Storage.
 
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useLocation } from 'react-router-dom';
 import { ArrowLeft, CheckCircle2, ExternalLink, Loader2, Save, Send, UploadCloud, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -49,6 +49,7 @@ function derivePreset(platform: string, format: string, canvasSize?: string): st
 export function PostEditor() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const { posts, load, update } = usePostStore();
   const currentUser = useAuthStore((s) => s.currentUser);
 
@@ -394,7 +395,7 @@ export function PostEditor() {
     <div className="flex h-full flex-col">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-card/60 px-6 py-3 backdrop-blur">
         <div className="flex items-center gap-3 min-w-0">
-          <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
+          <Button variant="ghost" size="icon" onClick={() => { const from = (location.state as { from?: string } | null)?.from; if (from) navigate(from); else navigate(-1); }}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <Input

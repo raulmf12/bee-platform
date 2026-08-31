@@ -1077,13 +1077,15 @@ export function NewPost() {
   }
 
   // Edição manual: persiste as métricas atuais e abre o editor completo.
+  // Passa a rota de volta (retomar a fila focando este post) pra o "Voltar" do
+  // editor não cair num wizard vazio (o que parecia "sumir tudo").
   async function handleManualEditItem(item: BatchItem) {
     try {
       await postApi.update(item.post.id, { ai_edit_rounds: item.editRounds });
     } catch (e) {
       console.error(e);
     }
-    navigate(`/posts/${item.post.id}`);
+    navigate(`/posts/${item.post.id}`, { state: { from: `/posts/novo?retomar=1&post=${item.post.id}` } });
   }
 
   // ==========================================================================
