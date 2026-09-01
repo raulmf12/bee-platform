@@ -87,6 +87,13 @@ export function composeM01(input: ComposeInput): ComposedSlide {
   const objects: object[] = [];
   let background = '#EFE8DB';
 
+  // Base do texto (preenchida ao compor o headline) e topo da espiral — usados
+  // pra ancorar a linha estrutural no VÃO real entre eles (ver role 'linha').
+  let headlineBottom = 0;
+  const spiralL = recipe.layer_stack.find((l) => l.role === 'bee_spiral_official');
+  const spiralG = (spiralL?.geometry ?? {}) as Record<string, unknown>;
+  const spiralTop = spiralL ? pctH(spiralG.cy ?? 82) - pctW(spiralG.w ?? 10) / 2 : H;
+
   // Fundo: cor do token do layer background (ou placeholder navy p/ foto em D).
   const bgLayer = recipe.layer_stack.find((l) => l.role === 'background');
   if (bgLayer) {
@@ -171,11 +178,17 @@ export function composeM01(input: ComposeInput): ComposedSlide {
           });
         }
       } else {
-        // linha
+        // linha — vive no RESPIRO entre a base do texto e a espiral. Fixar cy
+        // (recipe) quebra quando o título tem 3 linhas: o texto desce e a linha
+        // colide com ele. Centramos a linha no vão real; só caímos no cy do
+        // recipe se não houver headline/espiral pra medir.
         const lw = pctW(g.w);
+        const cy = (headlineBottom > 0 && headlineBottom < spiralTop)
+          ? (headlineBottom + spiralTop) / 2
+          : pctH(g.cy);
         objects.push({
           type: 'Rect', version: '6.0.0',
-          left: Math.round(pctW(g.cx) - lw / 2), top: Math.round(pctH(g.cy)),
+          left: Math.round(pctW(g.cx) - lw / 2), top: Math.round(cy),
           width: Math.round(lw), height: 3, fill: color, selectable: false, name: 'line',
         });
       }
@@ -208,6 +221,7 @@ export function composeM01(input: ComposeInput): ComposedSlide {
       const textHeight = lines.length * fontSize * LINE_HEIGHT;
       const cy = pctH(g.cy ?? 43);
       const top = Math.round(cy - textHeight / 2);
+      headlineBottom = top + textHeight; // ancora a linha estrutural (ver 'linha')
       const left = align === 'center' ? Math.round((W - boxW) / 2) : Math.round(pctW(g.x ?? 9));
       const styles = highlight?.target ? highlightStyles(lines, highlight.target, laranja) : {};
       objects.push({
