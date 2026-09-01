@@ -32,7 +32,12 @@ import { toast } from 'sonner';
 
 // Mapeia plataforma+formato pro preset inicial mais adequado.
 // User pode trocar via Select da mini-toolbar do CanvasStudio.
-function derivePreset(platform: string, format: string, canvasSize?: string): string {
+function derivePreset(platform: string, format: string, canvasSize?: string, isHive?: boolean): string {
+  // Posts da HIVE (com visual_decision) são SEMPRE compostos em 1080x1350 (4:5),
+  // independente do canvas_size legado gravado no metadata. Abrir num preset de
+  // outro tamanho (ex: 'square' 1200x1200) cortaria/deslocaria a peça e o fundo
+  // full-bleed viraria branco nas bordas. Força portrait pra bater com o fabric.
+  if (isHive) return platform === 'instagram' ? 'instagram-portrait' : 'linkedin-portrait'; // 1080x1350
   // Se o post ja foi gerado num tamanho especifico (ex: wizard grava
   // metadata.canvas_size), honra-o — senao o canvas abriria num preset com
   // dimensoes diferentes das do fabric JSON ja hidratado.
@@ -528,7 +533,7 @@ export function PostEditor() {
             <CanvasStudio
               key={post.id}
               embedded
-              initialPreset={derivePreset(post.platform, post.format, post.metadata?.canvas_size as string | undefined)}
+              initialPreset={derivePreset(post.platform, post.format, post.metadata?.canvas_size as string | undefined, !!post.visual_decision)}
               initialFabricJson={fabricJson}
               onChange={({ fabricJson: fj, dataUrl }) => {
                 setFabricJson(fj);

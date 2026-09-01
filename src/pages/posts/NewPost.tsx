@@ -1080,8 +1080,42 @@ export function NewPost() {
   // Passa a rota de volta (retomar a fila focando este post) pra o "Voltar" do
   // editor não cair num wizard vazio (o que parecia "sumir tudo").
   async function handleManualEditItem(item: BatchItem) {
+    // A prévia da Hive compõe a peça REAL (M01/M02/M03) só na MEMÓRIA do item
+    // (efeito de prévia). Se abríssemos o editor sem persistir, ele carregaria o
+    // carousel_fabric_json ANTIGO (template clássico, fundo branco) e a peça da
+    // Hive "sumia" (o fundo azul virava branco). Aqui recompomos (decisão é
+    // cacheada por post → barato) e GRAVAMOS antes de navegar.
+    let fabricJson: object = item.fabricJson;
+    let decision = item.hiveDecision ?? null;
     try {
-      await postApi.update(item.post.id, { ai_edit_rounds: item.editRounds });
+      const composed = await composeItemSlide({
+        postId: item.post.id,
+        text: item.quote,
+        platform: item.post.platform === 'instagram' ? 'instagram' : 'linkedin',
+        editorialSlug: item.pick.editorialSlug,
+      });
+      fabricJson = composed.fabricJson;
+      decision = composed.decision;
+    } catch (e) {
+      console.error('[editar manual] Hive falhou; mantém o fabric atual do item', e);
+    }
+    try {
+      await postApi.update(item.post.id, {
+        ai_edit_rounds: item.editRounds,
+        carousel_fabric_json: [fabricJson],
+        // Peça da Hive: grava a decisão + marca a imagem como pendente de
+        // aprovação (mudou) e fixa o tamanho em portrait (Hive é sempre
+        // 1080x1350), pra o editor abrir batendo com o fabric. NÃO mexe no
+        // review_stage, pra o "Voltar" ainda achar o post na fila de textos.
+        ...(decision
+          ? {
+              visual_decision: decision,
+              image_status: 'pending' as const,
+              image_approved: false,
+              metadata: { ...(item.post.metadata ?? {}), canvas_size: 'portrait' },
+            }
+          : {}),
+      });
     } catch (e) {
       console.error(e);
     }
