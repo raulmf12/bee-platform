@@ -6,7 +6,8 @@ SELECT cron.schedule(
   $$
   SELECT net.http_post(
     url := 'https://djlorvdehedcupeykyes.supabase.co/functions/v1/instagram-refresh',
-    headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || coalesce(current_setting('app.service_role_key', true), '')),
+    -- lê a service_role key do Vault (ver 20260812000001_publish_scheduler_cron.sql).
+    headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'service_role_key')),
     body := '{}'::jsonb
   ) AS request_id;
   $$
