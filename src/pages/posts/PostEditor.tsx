@@ -161,6 +161,16 @@ export function PostEditor() {
 
   async function saveCanvas() {
     if (!post || !fabricJson) return;
+    // TRAVA ANTI-PERDA: nunca sobrescreve um post que TEM conteúdo com um canvas
+    // vazio. Se a hidratação falhar (editor "em branco"), o auto-save gravava o
+    // canvas vazio por cima do fabric bom e apagava a arte. Aqui recusamos.
+    const newObjs = (fabricJson as { objects?: unknown[] }).objects?.length ?? 0;
+    const storedObjs = (post.carousel_fabric_json?.[0] as { objects?: unknown[] } | undefined)?.objects?.length ?? 0;
+    if (newObjs === 0 && storedObjs > 0) {
+      console.warn(`[PostEditor] auto-save BLOQUEADO: canvas vazio sobre fabric com ${storedObjs} objeto(s) — hidratação falhou, não apaga a arte.`);
+      setCanvasDirty(false);
+      return;
+    }
     try {
       await update(post.id, {
         carousel_fabric_json: [fabricJson],
