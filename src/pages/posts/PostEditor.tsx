@@ -534,7 +534,12 @@ export function PostEditor() {
               key={post.id}
               embedded
               initialPreset={derivePreset(post.platform, post.format, post.metadata?.canvas_size as string | undefined, !!post.visual_decision)}
-              initialFabricJson={fabricJson}
+              // Nunca passa undefined na montagem: o state `fabricJson` só é
+              // preenchido por um effect DEPOIS do mount, e abrir o post direto
+              // de uma lista fazia o CanvasStudio montar sem conteúdo e perder a
+              // janela de hidratação (canvas transparente = editor "em branco").
+              // Cai no fabric persistido do post até o state chegar.
+              initialFabricJson={fabricJson ?? post.carousel_fabric_json?.[0]}
               onChange={({ fabricJson: fj, dataUrl }) => {
                 setFabricJson(fj);
                 setImageDataUrl(dataUrl);

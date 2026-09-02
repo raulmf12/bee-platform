@@ -426,8 +426,13 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
     mutatingRef.current = true;
     try {
       await c.loadFromJSON(json);
-      c.renderAll();
+    } catch (e) {
+      // Enliven pode falhar (ex: uma imagem não carrega). NÃO deixa o canvas
+      // em branco: os objetos que carregaram já estão no canvas — renderiza o
+      // que deu, em vez de abortar tudo.
+      console.warn('[useEditor] loadFromJSON parcial', e);
     } finally {
+      c.renderAll();
       mutatingRef.current = false;
     }
     pushHistory();
