@@ -156,8 +156,13 @@ export function attachSmartGuides(
   const onMoving = (e: { target?: fabric.Object }) => { if (e.target) compute(e.target, true); };
   const onScaling = (e: { target?: fabric.Object }) => { if (e.target) compute(e.target, false); };
 
+  // Só há guias enquanto um transform (drag/scale) está REALMENTE em curso.
+  // Sem isto, o desenho no after:render "gruda" na tela enquanto o objeto fica
+  // só selecionado (re-render da seleção repinta as guias antigas).
+  const transforming = () => Boolean((canvas as unknown as { _currentTransform?: unknown })._currentTransform);
+
   const draw = () => {
-    if (!active) return;
+    if (!active || !transforming()) return;
     const ctx = canvas.getContext();
     const zoom = Math.max(opts.getZoom(), 0.0001);
     const vpt = canvas.viewportTransform ?? [1, 0, 0, 1, 0, 0];
@@ -235,7 +240,10 @@ export function attachSmartGuides(
   canvas.on('object:moving', onMoving);
   canvas.on('object:scaling', onScaling);
   canvas.on('object:rotating', clear);
+  canvas.on('object:modified', clear);   // fim do arraste/escala — some as guias
+  canvas.on('mouse:down', clear);
   canvas.on('mouse:up', clear);
+  canvas.on('selection:updated', clear);
   canvas.on('selection:cleared', clear);
   canvas.on('after:render', draw);
 
@@ -243,7 +251,10 @@ export function attachSmartGuides(
     canvas.off('object:moving', onMoving);
     canvas.off('object:scaling', onScaling);
     canvas.off('object:rotating', clear);
+    canvas.off('object:modified', clear);
+    canvas.off('mouse:down', clear);
     canvas.off('mouse:up', clear);
+    canvas.off('selection:updated', clear);
     canvas.off('selection:cleared', clear);
     canvas.off('after:render', draw);
   };
