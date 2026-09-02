@@ -165,9 +165,13 @@ export function attachSmartGuides(
     if (!active || !transforming()) return;
     const ctx = canvas.getContext();
     const zoom = Math.max(opts.getZoom(), 0.0001);
+    // O contexto do Fabric já vem escalado por retina (devicePixelRatio); pra
+    // desenhar em coordenadas de CENA temos que reproduzir retina × viewport,
+    // senão as guias caem na metade da posição (canto superior esquerdo).
+    const ret = canvas.getRetinaScaling?.() ?? 1;
     const vpt = canvas.viewportTransform ?? [1, 0, 0, 1, 0, 0];
     ctx.save();
-    ctx.setTransform(vpt[0], vpt[1], vpt[2], vpt[3], vpt[4], vpt[5]);
+    ctx.setTransform(vpt[0] * ret, vpt[1] * ret, vpt[2] * ret, vpt[3] * ret, vpt[4] * ret, vpt[5] * ret);
     const lw = 1 / zoom;
 
     // linhas de alinhamento
