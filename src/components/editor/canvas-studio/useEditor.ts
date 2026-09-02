@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as fabric from 'fabric';
 import { FABRIC_CUSTOM_PROPS, type BeeSlotMeta } from '@/lib/templates/slots';
+import { attachSmartGuides } from './smartGuides';
 
 const HISTORY_LIMIT = 40;
 
@@ -64,6 +65,11 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
   // conteudo ia parar no canvas descartado e o visivel ficava vazio.
   const [canvasEpoch, setCanvasEpoch] = useState(0);
   const [zoom, setZoomState] = useState(1);
+  // Espelha o zoom num ref pra os smart guides lerem o valor atual (CSS transform)
+  // sem recriar handlers a cada mudança de zoom.
+  const zoomRef = useRef(1);
+  // Detach dos smart guides do canvas atual.
+  const detachGuidesRef = useRef<(() => void) | null>(null);
   // 'fit' = ajusta automaticamente ao container; numero = zoom manual fixo.
   const zoomModeRef = useRef<'fit' | 'manual'>('fit');
   const [tick, setTick] = useState(0);
@@ -72,6 +78,9 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
+
+  // Mantém o ref de zoom em dia pros smart guides.
+  useEffect(() => { zoomRef.current = zoom; }, [zoom]);
 
   // ---------- historico ----------
   const pushHistory = useCallback(() => {
@@ -107,6 +116,7 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
   // - el diferente   -> dispose anterior + cria novo
   const attach = useCallback((el: HTMLCanvasElement | null) => {
     if (!el) {
+      detachGuidesRef.current?.(); detachGuidesRef.current = null;
       if (fabricRef.current) {
         try { void fabricRef.current.dispose(); } catch (e) { console.warn('[useEditor] dispose', e); }
         fabricRef.current = null;
@@ -118,6 +128,7 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
     if (fabricRef.current && canvasElRef.current === el) return;
     // diferente elemento — dispose o antigo antes
     if (fabricRef.current) {
+      detachGuidesRef.current?.(); detachGuidesRef.current = null;
       try { void fabricRef.current.dispose(); } catch (e) { console.warn('[useEditor] dispose old', e); }
       fabricRef.current = null;
     }
@@ -149,6 +160,9 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
     c.on('object:modified', onChange_);
     c.on('text:changed', onChange_);
 
+    // Réguas/guias estilo Canva (alinhamento + snap + distâncias).
+    detachGuidesRef.current = attachSmartGuides(c, { getZoom: () => zoomRef.current });
+
     pushHistory();
     // Canvas novo em folha: avisa quem precisa (re)carregar conteudo nele.
     setCanvasEpoch((e) => e + 1);
@@ -158,6 +172,7 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
   useEffect(() => {
     return () => {
       if (notifyTimerRef.current) window.clearTimeout(notifyTimerRef.current);
+      detachGuidesRef.current?.(); detachGuidesRef.current = null;
       const c = fabricRef.current;
       if (c) {
         try { void c.dispose(); } catch (e) { console.warn('[useEditor unmount]', e); }
