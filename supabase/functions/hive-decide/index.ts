@@ -130,6 +130,65 @@ function assetMatches(asset: Asset, must: Record<string, unknown>): boolean {
   return true;
 }
 
+// Monta a decisao TRAVADA do LinkedIn: M01-A (base), sem destaque, sem imagem.
+// Le as limites reais do M01-A pra manter o text_check honesto com a base, mas
+// nao chama o modelo — a forma e fixa. Persiste no post se veio post_id.
+async function lockedLinkedinDecision(input: DecideInput, text: string, userId: string) {
+  const rows = await fetchRest<Array<{ limites?: Record<string, unknown> }>>(
+    `/design_variacoes?id=eq.M01-A&select=limites&limit=1`,
+  );
+  const lim = rows[0]?.limites ?? {};
+  const charsLimit = Number(lim.chars_limit ?? 150);
+  const needsReview = text.length > charsLimit;
+
+  const decision = {
+    content_id: input.post_id ?? null,
+    editorial_locked: true,
+    platform: 'linkedin',
+    mode: 'M01',
+    mode_confidence: 1,
+    variant: 'M01-A',
+    variant_confidence: 1,
+    locked: true,
+    lock_reason: 'LinkedIn usa sempre o M01 base (M01-A) — regra de plataforma.',
+    semantics: {},
+    manifestations: { M01: 1 },
+    human_presence_adds_meaning: false,
+    variant_scores: { 'M01-A': { semantic: 1, adjusted: 1, reason: 'trava de plataforma (LinkedIn)' } },
+    diversity: { window: 0, history: [], applied: false },
+    highlight: null,
+    subtitle: null,
+    diagram: null,
+    asset_strategy: { type: 'graphic', photo_required: false },
+    asset: null,
+    image_generation: null,
+    brand: {
+      font: 'arbutus_slab',
+      palette: 'bee_official',
+      spiral_asset: 'espiral_oficial',
+      spiral_usage: String(lim.spiral_default ?? 'optional'),
+      signature: Boolean(lim.signature_default),
+      bee_logo: false,
+    },
+    explanation: {
+      mode_reason: 'LinkedIn: forma fixa no M01 base (M01-A).',
+      variant_reason: 'Trava de plataforma — nao passa pelo motor.',
+      highlight_reason: null,
+      asset_reason: 'grafico (sem imagem)',
+      image_source: 'grafico/textura',
+    },
+    text_check: { chars: text.length, limit: charsLimit, needs_editorial_review: needsReview },
+  };
+
+  if (input.post_id) {
+    await patchRest(`/user_posts?id=eq.${input.post_id}&user_id=eq.${userId}`, {
+      visual_decision: decision,
+      image_status: 'pending',
+    });
+  }
+  return decision;
+}
+
 Deno.serve(async (req: Request) => {
   const cors = preflight(req);
   if (cors) return cors;
@@ -145,6 +204,16 @@ Deno.serve(async (req: Request) => {
     const input = (await req.json()) as DecideInput;
     const text = input.text?.trim();
     if (!text) return errorResponse('text obrigatorio', 400);
+
+    // --- TRAVA LINKEDIN: todo post do LinkedIn usa o M01 BASE (M01-A) exato. ---
+    // Regra de negocio (nao editorial): no LinkedIn a forma e FIXA — sem motor,
+    // sem variacao, sem destaque. So o Instagram varia. Curto-circuita ANTES do
+    // Gemini (deterministico e sem custo). Se um dia quiser voltar a variar,
+    // basta remover este bloco.
+    if (input.platform === 'linkedin') {
+      const locked = await lockedLinkedinDecision(input, text, userId);
+      return jsonResponse({ success: true, decision: locked, model_used: 'locked:M01-A' });
+    }
 
     const apiKey = await getUserGeminiKey(userId);
     if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
