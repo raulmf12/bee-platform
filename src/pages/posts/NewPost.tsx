@@ -26,7 +26,7 @@ import { usePostStore } from '@/store/postStore';
 import { useAuthStore } from '@/store/authStore';
 import { beeApi, aiApi, postApi } from '@/lib/api';
 import { isTextPending } from '@/lib/postReview';
-import { edge } from '@/lib/edge';
+import { edge, type HiveSeed } from '@/lib/edge';
 import { renderBeeQuote } from '@/lib/templates/resolve';
 import { renderFabricToDataUrl } from '@/lib/templates/renderPost';
 import { getLayoutDimensions, type BeeQuoteSize } from '@/lib/templates/beeQuote';
@@ -73,6 +73,7 @@ interface BatchItem {
   quote: string;                 // título atual (pode mudar ao rejeitar)
   caption: string;               // legenda atual
   hiveDecision?: Record<string, unknown>;  // decisão do motor visual (variante/scores/reasons)
+  hiveSeed?: HiveSeed;           // Instagram: template+forma escolhidos junto com o texto
   score: number | null;
   reason: string | null;
   codigo: string;
@@ -270,6 +271,7 @@ export function NewPost() {
           text: item.quote,
           platform: item.post.platform === 'instagram' ? 'instagram' : 'linkedin',
           editorialSlug: item.pick.editorialSlug,
+          seed: item.hiveSeed,
         });
         if (!cancelled) patchItem(item.post.id, { fabricJson, hiveDecision: decision });
       } catch (e) {
@@ -308,6 +310,7 @@ export function NewPost() {
       post: p, variation: baseline, fabricJson, templateId: p.template_id ?? undefined,
       quote, caption, score: p.virality_score ?? null, reason: p.virality_reason ?? null,
       codigo: p.codigo ?? '', sizeId,
+      hiveSeed: (meta.hive_seed as HiveSeed | undefined) ?? undefined,
       pick: {
         editorialSlug: (meta.editorial_slug as string) ?? '',
         platform: p.platform,
@@ -531,6 +534,8 @@ export function NewPost() {
       analogy: v.analogy_used as string | undefined,
       score: (v.virality_score ?? null) as number | null,
       reason: (v.virality_reason ?? null) as string | null,
+      // Instagram: template+forma escolhidos junto com o texto (undefined no LinkedIn).
+      hiveSeed: (v.hive_seed ?? undefined) as HiveSeed | undefined,
       qa: best!.qa,
     };
   }
@@ -612,6 +617,9 @@ export function NewPost() {
             review_stage: 'texto',
             titulo_status: 'pending',
             legenda_status: 'pending',
+            // Instagram: a FORMA escolhida junto com o texto — persiste pra
+            // sobreviver ao resume e alimentar o hive-decide em modo execucao.
+            ...(fresh.hiveSeed ? { hive_seed: fresh.hiveSeed } : {}),
             ...(batchQuantity === 1 && referencePost
               ? { reused_from: referencePost.id, reused_from_platform: referencePost.platform }
               : {}),
@@ -623,6 +631,7 @@ export function NewPost() {
         items.push({
           post, variation: row, fabricJson, templateId,
           quote: fresh.quote, caption: fresh.caption, score: fresh.score, reason: fresh.reason, codigo, sizeId,
+          hiveSeed: fresh.hiveSeed,
           pick: { editorialSlug: pick.editorial.slug, platform: pick.platform, targetAvatar: pick.targetAvatar },
           tituloStatus: 'pending', legendaStatus: 'pending', editRounds: 0,
           aiQuote: fresh.quote, aiCaption: fresh.caption, manualEdits: 0, qa: fresh.qa,
@@ -1093,6 +1102,7 @@ export function NewPost() {
         text: item.quote,
         platform: item.post.platform === 'instagram' ? 'instagram' : 'linkedin',
         editorialSlug: item.pick.editorialSlug,
+        seed: item.hiveSeed,
       });
       fabricJson = composed.fabricJson;
       decision = composed.decision;

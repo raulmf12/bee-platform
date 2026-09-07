@@ -38,6 +38,10 @@ export interface ComposeInput {
   highlight?: { target: string } | null;
   canvas: { w: number; h: number }; // ex: {w:1080,h:1350} (feed IG/LinkedIn)
   assets?: { photos?: DesignAsset[]; textures?: DesignAsset[] }; // fotos p/ D, texturas p/ E
+  // Posicionamento decidido APÓS ver a imagem (M01-D/E): a frase vai pra zona de
+  // maior espaço negativo (top/bottom) com a cor de melhor contraste, e o véu de
+  // legibilidade escurece essa mesma zona. Ver imageZone.analyzeTextZone.
+  layout?: { zone: 'top' | 'bottom'; textColor?: string } | null;
 }
 
 // Escolhe um asset do pool de forma determinística pelo texto (varia por post,
@@ -47,6 +51,19 @@ function pickAsset(pool: DesignAsset[] | undefined, seed: string): DesignAsset |
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
   return pool[Math.abs(h) % pool.length];
+}
+
+// URL do fundo que ESTE recipe usaria (foto p/ D, textura p/ E), pelo mesmo
+// hash-por-texto que o compositor usa. Exposto pra o caller analisar a zona de
+// texto ANTES de compor (ver imageZone.analyzeTextZone) — seleção single-source.
+export function pickM01BgUrl(
+  recipe: M01Recipe,
+  assets: { photos?: DesignAsset[]; textures?: DesignAsset[] } | undefined,
+  seed: string,
+): string | undefined {
+  if (recipe.layer_stack.some((l) => l.role === 'photo')) return pickAsset(assets?.photos, seed)?.url;
+  if (recipe.layer_stack.some((l) => l.role === 'texture')) return pickAsset(assets?.textures, seed)?.url;
+  return undefined;
 }
 
 // Aliases p/ slugs pseudo que ficaram nos recipes (ex: "creme_ou_branco").
@@ -78,7 +95,7 @@ function highlightStyles(lines: string[], target: string, fill: string): Record<
 export interface ComposedSlide { version: string; background: string; objects: object[] }
 
 export function composeM01(input: ComposeInput): ComposedSlide {
-  const { recipe, colors, spiralUrl, text, highlight, canvas, assets } = input;
+  const { recipe, colors, spiralUrl, text, highlight, canvas, assets, layout } = input;
   const W = canvas.w, H = canvas.h;
   const pctW = (p: unknown) => (num(p) / 100) * W;
   const pctH = (p: unknown) => (num(p) / 100) * H;
@@ -141,16 +158,19 @@ export function composeM01(input: ComposeInput): ComposedSlide {
       // Retângulo de meia altura criava uma "linha" dura no meio; o gradiente
       // cobre o canvas inteiro e some suavemente. É o tratamento certo quando
       // entrar a foto real por baixo.
+      // O degradê escurece a ZONA do texto (decidida após a imagem). Se o texto
+      // foi pro topo, escurece o topo; senão, a base (default histórico).
+      const darkenTop = layout?.zone === 'top';
+      const stops = darkenTop
+        ? [{ offset: 0, color: 'rgba(11,17,30,0.72)' }, { offset: 0.6, color: 'rgba(11,17,30,0)' }]
+        : [{ offset: 0.4, color: 'rgba(11,17,30,0)' }, { offset: 1, color: 'rgba(11,17,30,0.72)' }];
       objects.push({
         type: 'Rect', version: '6.0.0',
         left: 0, top: 0, width: W, height: H,
         fill: {
           type: 'linear',
           coords: { x1: 0, y1: 0, x2: 0, y2: H },
-          colorStops: [
-            { offset: 0.4, color: 'rgba(11,17,30,0)' },
-            { offset: 1, color: 'rgba(11,17,30,0.72)' },
-          ],
+          colorStops: stops,
         },
         selectable: false, name: 'overlay',
       });
@@ -198,7 +218,9 @@ export function composeM01(input: ComposeInput): ComposedSlide {
     if (layer.role === 'headline') {
       const boxW = Math.round(pctW(g.w ?? 64));
       const align = String(g.align ?? 'center');
-      const fill = resolveColor(colors, (layer.source as Record<string, unknown>)?.token_color as string | undefined, '#1C2E4A');
+      // Cor decidida pós-imagem (contraste com a zona) tem prioridade sobre o token.
+      const fill = layout?.textColor
+        ?? resolveColor(colors, (layer.source as Record<string, unknown>)?.token_color as string | undefined, '#1C2E4A');
       // Até 3 linhas: em caixas estreitas (D/E), forçar 2 linhas espremia a
       // fonte. Permitir 3 deixa o ajustador escolher um corpo MAIOR. Piso de
       // fonte mais alto evita texto minúsculo.
@@ -219,7 +241,11 @@ export function composeM01(input: ComposeInput): ComposedSlide {
         lines.pop();
       }
       const textHeight = lines.length * fontSize * LINE_HEIGHT;
-      const cy = pctH(g.cy ?? 43);
+      // Posicionamento pós-imagem (D/E): a frase vai pra zona de espaço negativo
+      // decidida após ver o fundo. Sem layout, mantém o cy desenhado no recipe.
+      const cy = layout
+        ? (layout.zone === 'top' ? pctH(26) : pctH(68))
+        : pctH(g.cy ?? 43);
       const top = Math.round(cy - textHeight / 2);
       headlineBottom = top + textHeight; // ancora a linha estrutural (ver 'linha')
       const left = align === 'center' ? Math.round((W - boxW) / 2) : Math.round(pctW(g.x ?? 9));

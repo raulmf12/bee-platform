@@ -8,9 +8,10 @@
 // dependeria de GERAR a imagem, a prévia mostra o layout com fundo placeholder —
 // a geração acontece ao finalizar (fluxo runVisual), pra não gerar por tecla.
 
-import { edge } from '@/lib/edge';
+import { edge, type HiveSeed } from '@/lib/edge';
 import { loadHiveDesign, type DesignData } from './loadDesign';
-import { composeM01, type ComposedSlide } from './composeM01';
+import { composeM01, pickM01BgUrl, type ComposedSlide } from './composeM01';
+import { analyzeTextZone } from './imageZone';
 import { composeM02 } from './composeM02';
 import { composeM03 } from './composeM03';
 import { resolveM02Asset, ensureM01Asset, clearMarcosGenCache, clearM01AssetCache, type DecisionAssetInfo } from './marcosImage';
@@ -36,6 +37,9 @@ export async function composeItemSlide(params: {
   text: string;
   platform?: 'linkedin' | 'instagram';
   editorialSlug?: string;
+  // Instagram: a FORMA ja escolhida na geracao (conteudo+template juntos). Quando
+  // vem, o hive-decide so executa (sem 2a IA). Sem seed = re-decisao completa.
+  seed?: HiveSeed;
 }): Promise<{ fabricJson: ComposedSlide; decision: Record<string, unknown> }> {
   const d = await design();
 
@@ -46,6 +50,7 @@ export async function composeItemSlide(params: {
       platform: params.platform,
       editorial_slug: params.editorialSlug,
       post_id: params.postId,
+      seed: params.seed,
     });
     dec = { variant: decision.variant, highlight: decision.highlight, full: decision as Record<string, unknown> };
     _decisions.set(params.postId, dec);
@@ -93,9 +98,13 @@ export async function composeItemSlide(params: {
       const a = await ensureM01Asset('texture', params.postId);
       if (a) assets = { ...d.assets, textures: [a] };
     }
+    // Posicionamento pós-imagem (D/E): analisa o fundo e leva o texto pra zona
+    // de espaço negativo. Sem fundo (A/B/C) → layout null (mantém o recipe).
+    const bgUrl = pickM01BgUrl(recipe, assets, params.text);
+    const layout = bgUrl ? await analyzeTextZone(bgUrl) : null;
     fabricJson = composeM01({
       recipe, colors: d.colors, spiralUrl: d.spiralUrl, assets,
-      text: params.text, highlight, canvas: { w: 1080, h: 1350 },
+      text: params.text, highlight, canvas: { w: 1080, h: 1350 }, layout,
     });
   }
 

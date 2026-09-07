@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useLocation } from 'react-router-dom';
-import { ArrowLeft, CheckCircle2, ExternalLink, Loader2, Save, Send, UploadCloud, Wand2 } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ExternalLink, Loader2, PauseCircle, Save, Send, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -27,7 +27,9 @@ import { aiApi, almaApi, severidadeOf } from '@/lib/api';
 import { isoToLocalInput, localInputToIso, nowLocalInput } from '@/lib/schedule';
 import { extractSlotText } from '@/lib/templates/extract';
 import { generateHiveImage } from '@/lib/hive/runVisual';
+import { bgGatePending } from '@/lib/hive/bgGate';
 import { PostCoach } from '@/components/ai/PostCoach';
+import type { HiveSeed } from '@/lib/edge';
 import { toast } from 'sonner';
 
 // Mapeia plataforma+formato pro preset inicial mais adequado.
@@ -66,25 +68,10 @@ export function PostEditor() {
   const [fabricJson, setFabricJson] = useState<object | undefined>(undefined);
   const [imageDataUrl, setImageDataUrl] = useState<string | undefined>(undefined);
   const [saving, setSaving] = useState(false);
-  const [publishing, setPublishing] = useState(false);
   const [postingLive, setPostingLive] = useState(false);
   const [approving, setApproving] = useState(false);
   const [hiveBusy, setHiveBusy] = useState(false);
-  const [approvingImg, setApprovingImg] = useState(false);
-
-  // Portão de imagem: aprova a imagem gerada (obrigatório antes de publicar).
-  async function approveImage() {
-    if (!post) return;
-    setApprovingImg(true);
-    try {
-      await update(post.id, { image_approved: true, image_status: 'approved' });
-      toast.success('Imagem aprovada — liberada pra publicar.');
-    } catch {
-      toast.error('Falha ao aprovar a imagem.');
-    } finally {
-      setApprovingImg(false);
-    }
-  }
+  const [bgBusy, setBgBusy] = useState(false);
   const [variation, setVariation] = useState<AiVariation | null>(null);
   const [textDirty, setTextDirty] = useState(false);
   const [canvasDirty, setCanvasDirty] = useState(false);
@@ -206,32 +193,128 @@ export function PostEditor() {
     }
   }
 
-  // APROVAR — o instrumento de medicao da eficacia da IA.
-  //
-  // Aprovar sem ter tocado no texto = a IA acertou. Aprovar depois de editar =
-  // errou, e o diff vira licao pro proximo post. O post vai pra "Aprovado" no
-  // kanban de qualquer jeito; o que muda e o que a IA aprende.
-  async function handleApprove() {
+  // Portão do fundo de IA (M01-D/E): aprova o fundo gerado — libera Stand-by/Publicar.
+  async function approveBg() {
+    if (!post) return;
+    setBgBusy(true);
+    try {
+      await update(post.id, { metadata: { ...(post.metadata ?? {}), bg_approved: true } });
+      toast.success('Fundo aprovado — liberado pra publicar.');
+    } catch {
+      toast.error('Falha ao aprovar o fundo.');
+    } finally {
+      setBgBusy(false);
+    }
+  }
+
+  // Regenera o fundo de IA mantendo o MESMO template (variante). Continua
+  // pendente de aprovação depois — você aprova o fundo novo.
+  async function regenerateBg() {
+    if (!post || !currentUser) return;
+    const variant = (post.visual_decision as { variant?: string } | undefined)?.variant;
+    if (!variant) { toast.error('Sem variante decidida pra regenerar o fundo.'); return; }
+    const frase = (post.carousel_text?.quote as string | undefined)?.trim() || title.trim();
+    if (!frase) { toast.error('Sem frase pra compor.'); return; }
+    setBgBusy(true);
+    try {
+      const seed: HiveSeed = {
+        variant,
+        manifestation: variant.split('-')[0],
+        highlight: (post.visual_decision as { highlight?: HiveSeed['highlight'] } | undefined)?.highlight ?? null,
+        subtitle: null, poles: null, image_scene_hint: '',
+        human_presence_adds_meaning: false, mode_reason: '', variant_reason: 'regenerar fundo',
+      };
+      const { slide, dataUrl, publicUrl, decision } = await generateHiveImage({
+        userId: currentUser.id, postId: post.id, text: frase,
+        platform: post.platform as 'linkedin' | 'instagram',
+        editorialSlug: post.metadata?.editorial_slug as string | undefined,
+        seed, forceBg: true,
+      });
+      await update(post.id, {
+        carousel_fabric_json: [slide],
+        rendered_slides: { slide1: publicUrl },
+        visual_decision: decision,
+        image_status: 'pending',
+        metadata: { ...(post.metadata ?? {}), bg_approved: false },
+      });
+      setFabricJson(slide);
+      setImageDataUrl(dataUrl);
+      lastUploadedHash.current = null;
+      toast.success('Fundo regenerado — revise e aprove.');
+    } catch (e) {
+      console.error(e);
+      toast.error(`Erro ao regenerar o fundo: ${(e as Error).message}`);
+    } finally {
+      setBgBusy(false);
+    }
+  }
+
+  // Renderiza o canvas e sobe pro Storage no formato certo da plataforma
+  // (Instagram = JPEG, LinkedIn = PNG). Chamado AUTOMATICAMENTE ao clicar em
+  // Stand-by ou Publicar — não existe mais botão "Exportar". Dedup por hash:
+  // se o canvas não mudou desde a última exportação, reusa a URL já salva.
+  // Retorna a URL pública ou null se falhou.
+  async function exportImage(): Promise<string | null> {
+    if (!post) return null;
+    if (post.format === ('video' as typeof post.format)) return post.rendered_slides?.slide1 ?? null;
+    // PORTÃO DO FUNDO DE IA (M01-D/E): não deixa exportar/publicar até o fundo
+    // gerado por IA ser aprovado explicitamente. Ver bgGate.ts.
+    if (bgGatePending(post)) {
+      toast.error('Aprove o fundo de IA antes (barra no topo do editor).');
+      return null;
+    }
+    if (!imageDataUrl || !currentUser) {
+      toast.error('Renderiza o canvas antes (edita qualquer elemento).');
+      return null;
+    }
+    const hash = await hashDataUrl(imageDataUrl);
+    if (hash === lastUploadedHash.current && post.rendered_slides?.slide1) {
+      return post.rendered_slides.slide1; // sem mudanças desde a última exportação
+    }
+    const isIg = post.platform === 'instagram';
+    const uploadUrl = isIg ? await toJpegDataUrl(imageDataUrl) : imageDataUrl;
+    const { publicUrl } = await uploadAssetImage({
+      userId: currentUser.id,
+      assetId: post.id,
+      dataUrl: uploadUrl,
+      filename: isIg ? 'render.jpg' : 'render.png',
+    });
+    lastUploadedHash.current = hash;
+    // Exportar a imagem final = o humano aprovou o que está no canvas (o botão
+    // "Aprovar imagem" não existe mais). Satisfaz o portão de imagem do
+    // publish.ts para posts da Hive, valendo também pra publicação via cron.
+    await update(post.id, { rendered_slides: { slide1: publicUrl }, image_approved: true, image_status: 'approved' });
+    return publicUrl;
+  }
+
+  // STAND-BY — aprova o post SEM data: fica pronto no Kanban (aprovado) mas não
+  // agendado. Exporta a imagem automaticamente no formato certo. É também o
+  // instrumento de medição da eficácia da IA: aprovar sem tocar no texto = a IA
+  // acertou; aprovar depois de editar = errou, e o diff vira lição pro próximo.
+  async function handleStandby() {
     if (!post) return;
     setApproving(true);
     try {
-      // Posts de EXEMPLO nunca entram na medição/aprendizado da IA.
-      if ((post.metadata as { is_sample?: boolean })?.is_sample) {
-        await update(post.id, { status: 'approved' });
-        toast.success('Post de exemplo aprovado (não entra na medição da IA)');
-        return;
-      }
-      // Mede o que esta salvo, nao o que esta na tela: sem isso uma edicao
+      // Mede o que está salvo, não o que está na tela: sem isso uma edição
       // ainda no debounce do auto-save ficaria de fora do diff.
       if (textDirty) await saveText();
       if (canvasDirty) await saveCanvas();
+      // Auto-exporta a imagem no formato da plataforma (sem botão Exportar).
+      await exportImage();
+
+      // Posts de EXEMPLO nunca entram na medição/aprendizado da IA.
+      if ((post.metadata as { is_sample?: boolean })?.is_sample) {
+        await update(post.id, { status: 'approved', scheduled_date: null });
+        toast.success('Stand-by — aprovado sem data (post de exemplo, não entra na medição)');
+        return;
+      }
 
       const variation = await aiApi.variationForPost(post.id);
       if (!variation) {
-        // Post sem geracao pristina (feito antes da medicao existir, ou
-        // criado a mao). Aprova, mas nao inventa uma medicao.
-        await update(post.id, { status: 'approved' });
-        toast.success('Aprovado — este post não entra na medição (não foi gerado pela IA)');
+        // Post sem geração pristina (feito antes da medição existir, ou
+        // criado à mão). Aprova, mas não inventa uma medição.
+        await update(post.id, { status: 'approved', scheduled_date: null });
+        toast.success('Stand-by — aprovado sem data (não foi gerado pela IA, não entra na medição)');
         return;
       }
 
@@ -246,21 +329,21 @@ export function PostEditor() {
         // aí has_image liga e a imagem entra na medição do segmento.
       });
 
-      await update(post.id, { status: 'approved' });
+      await update(post.id, { status: 'approved', scheduled_date: null });
 
       // Régua graduada (item 2): ajuste cosmético não é erro cheio e não vira
       // lição — destilar de uma vírgula gasta uma chamada Gemini à toa.
       const sev = severidadeOf(review);
       if (sev === 'reescrita') {
-        toast.success('Aprovado — a IA vai aprender com a sua correção');
+        toast.success('Stand-by — a IA vai aprender com a sua correção');
         // Fire-and-forget: destilar a licao nao pode segurar a aprovacao.
         void edge.learnFromCorrection({ review_id: review.id }).catch((e) => {
           console.warn('[learn-from-correction]', e);
         });
       } else if (sev === 'ajuste') {
-        toast.success('Aprovado — só um ajuste fino, a IA quase acertou');
+        toast.success('Stand-by — só um ajuste fino, a IA quase acertou');
       } else {
-        toast.success('Aprovado sem alterações — a IA acertou 🎯');
+        toast.success('Stand-by — aprovado sem alterações, a IA acertou 🎯');
       }
 
       void almaApi.emitEvento({
@@ -274,7 +357,7 @@ export function PostEditor() {
       });
     } catch (e) {
       console.error(e);
-      toast.error(`Erro ao aprovar: ${(e as Error).message.slice(0, 140)}`);
+      toast.error(`Erro no stand-by: ${(e as Error).message.slice(0, 140)}`);
     } finally {
       setApproving(false);
     }
@@ -319,53 +402,15 @@ export function PostEditor() {
     }
   }
 
-  async function exportAndPublish() {
-    if (!post || !imageDataUrl || !currentUser) {
-      toast.error('Renderiza o canvas antes (edita qualquer elemento).');
-      return;
-    }
-    setPublishing(true);
-    try {
-      const hash = await hashDataUrl(imageDataUrl);
-      if (hash === lastUploadedHash.current && post.rendered_slides?.slide1) {
-        toast.info('Sem mudancas no canvas desde a ultima exportacao.');
-      } else {
-        // Instagram exige JPEG; converte antes de subir (LinkedIn segue PNG).
-        const isIg = post.platform === 'instagram';
-        const uploadUrl = isIg ? await toJpegDataUrl(imageDataUrl) : imageDataUrl;
-        const { publicUrl } = await uploadAssetImage({
-          userId: currentUser.id,
-          assetId: post.id,
-          dataUrl: uploadUrl,
-          filename: isIg ? 'render.jpg' : 'render.png',
-        });
-        lastUploadedHash.current = hash;
-        await update(post.id, {
-          rendered_slides: { slide1: publicUrl },
-        });
-        toast.success('Imagem renderizada e salva no Storage.');
-      }
-    } catch (e) {
-      console.error(e);
-      toast.error('Falha ao exportar: ' + (e as Error).message);
-    } finally {
-      setPublishing(false);
-    }
-  }
-
   async function handlePublishLive() {
     if (!post) return;
-    // Salvar texto pendente antes
+    // Salvar texto/canvas pendente antes (o export usa o canvas mais recente).
     if (textDirty) await saveText();
+    if (canvasDirty) await saveCanvas();
 
     const platformLabel = post.platform === 'instagram' ? 'Instagram' : 'LinkedIn';
     const isVideo = post.format === ('video' as typeof post.format);
 
-    // Pre-check: imagem renderizada ou video
-    if (!isVideo && !post.rendered_slides?.slide1) {
-      toast.error('Clique "Exportar" primeiro pra renderizar a imagem.');
-      return;
-    }
     if (!caption.trim()) {
       toast.error('Adicione uma caption antes de publicar.');
       return;
@@ -374,6 +419,12 @@ export function PostEditor() {
 
     setPostingLive(true);
     try {
+      // Auto-exporta a imagem no formato certo antes de publicar (não há mais
+      // botão Exportar). Vídeo já vem armazenado, não precisa render.
+      if (!isVideo) {
+        const url = await exportImage();
+        if (!url) { toast.error('Falha ao renderizar a imagem — verifique o canvas.'); return; }
+      }
       const result = await edge.publishPost({ post_id: post.id });
       toast.success(`Publicado no ${platformLabel}!`);
       await update(post.id, {
@@ -400,6 +451,32 @@ export function PostEditor() {
     } finally {
       setPostingLive(false);
     }
+  }
+
+  // Agendar RENDERIZA a imagem junto (senão o post agendado sai sem imagem e o
+  // publicador/cron falha na hora — foi o que sumiu um post agendado). Setar a
+  // data = exportar + agendar. Bloqueado pelo portão do fundo de IA (D/E) se pendente.
+  async function handleSchedule(value: string) {
+    if (!post) return;
+    if (!value) {
+      await update(post.id, {
+        scheduled_date: null,
+        status: post.status === 'scheduled' ? 'approved' : post.status,
+      });
+      toast.success('Agendamento removido');
+      return;
+    }
+    const iso = localInputToIso(value);
+    if (iso && new Date(iso).getTime() < Date.now()) {
+      toast.error('Não dá pra agendar no passado.');
+      return;
+    }
+    if (post.format !== ('video' as typeof post.format)) {
+      const url = await exportImage();
+      if (!url) return; // exportImage já avisou (fundo pendente ou canvas não pronto)
+    }
+    await update(post.id, { scheduled_date: iso, status: 'scheduled' });
+    toast.success('Agendado — imagem renderizada.');
   }
 
   const isDirty = textDirty || canvasDirty;
@@ -444,43 +521,21 @@ export function PostEditor() {
               Hive
             </Button>
           )}
-          {post.format !== ('video' as typeof post.format) && post.visual_decision && (
-            post.image_approved ? (
-              <span className="inline-flex items-center gap-1 rounded-md bg-emerald-600/15 px-2 py-1 text-xs font-medium text-emerald-600">
-                <CheckCircle2 className="h-3.5 w-3.5" /> Imagem aprovada
-              </span>
-            ) : (
-              <Button
-                variant="outline" size="sm" onClick={() => void approveImage()} disabled={approvingImg}
-                className="border-emerald-500 text-emerald-600 hover:bg-emerald-50"
-                title="Aprovar a imagem gerada — obrigatório antes de publicar (portão de imagem)"
-              >
-                {approvingImg ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                Aprovar imagem
-              </Button>
-            )
-          )}
-          {post.format !== ('video' as typeof post.format) && (
-            <Button variant="outline" size="sm" onClick={() => void exportAndPublish()} disabled={publishing}>
-              {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
-              Exportar
-            </Button>
-          )}
           <Button variant="accent" size="sm" onClick={() => void saveAll()} disabled={saving}>
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             {isDirty ? 'Salvar' : 'Salvo'}
           </Button>
-          {post.status === 'pending_approval' && (
+          {!isAlreadyPublished && (
             <Button
-              variant="default"
+              variant="outline"
               size="sm"
-              onClick={() => void handleApprove()}
+              onClick={() => void handleStandby()}
               disabled={approving}
-              className="bg-emerald-600 text-white hover:bg-emerald-700"
-              title="Aprovar e mover pra Aprovados no kanban"
+              className="border-emerald-500 text-emerald-600 hover:bg-emerald-50"
+              title="Aprovar sem data — exporta a imagem e deixa o post pronto no Kanban (aprovado, sem agendamento)"
             >
-              {approving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-              Aprovar
+              {approving ? <Loader2 className="h-4 w-4 animate-spin" /> : <PauseCircle className="h-4 w-4" />}
+              Stand-by
             </Button>
           )}
           {isAlreadyPublished ? (
@@ -502,11 +557,35 @@ export function PostEditor() {
               title={`Publicar no ${platformLabel} agora`}
             >
               {postingLive ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              Publicar no {platformLabel}
+              Publicar
             </Button>
           )}
         </div>
       </header>
+
+      {/* Portão do fundo de IA (M01-D Campo / M01-E Matéria): revisar antes de publicar. */}
+      {bgGatePending(post) && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/40 bg-amber-500/10 px-6 py-2.5">
+          <div className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400">
+            <Wand2 className="h-4 w-4 shrink-0" />
+            <span>
+              <b>Fundo gerado por IA</b> ({(post.visual_decision as { variant?: string })?.variant}) — revise antes de publicar. Aprove ou regenere.
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => void regenerateBg()} disabled={bgBusy}>
+              {bgBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+              Regenerar fundo
+            </Button>
+            <Button
+              variant="default" size="sm" onClick={() => void approveBg()} disabled={bgBusy}
+              className="bg-amber-600 text-white hover:bg-amber-700"
+            >
+              <CheckCircle2 className="h-4 w-4" /> Aprovar fundo
+            </Button>
+          </div>
+        </div>
+      )}
 
       {post.publish_error && (
         <div className="border-b border-destructive/30 bg-destructive/10 px-6 py-2 text-xs text-destructive">
@@ -615,23 +694,7 @@ export function PostEditor() {
                   type="datetime-local"
                   min={nowLocalInput()}
                   value={isoToLocalInput(post.scheduled_date)}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    if (value) {
-                      const iso = localInputToIso(value);
-                      if (iso && new Date(iso).getTime() < Date.now()) {
-                        toast.error('Não dá pra agendar no passado.');
-                        return;
-                      }
-                      void update(post.id, { scheduled_date: iso, status: 'scheduled' })
-                        .then(() => toast.success('Agendado'));
-                    } else {
-                      void update(post.id, {
-                        scheduled_date: null,
-                        status: post.status === 'scheduled' ? 'approved' : post.status,
-                      }).then(() => toast.success('Agendamento removido'));
-                    }
-                  }}
+                  onChange={(e) => void handleSchedule(e.target.value)}
                   className="text-xs"
                 />
                 <p className="text-[10px] text-muted-foreground">

@@ -196,19 +196,27 @@ export async function publishOne(postId: string, userId: string): Promise<Publis
   const settings = await loadSettings(userId);
   if (!settings) throw new Error('user_settings nao configurado');
 
-  const caption = post.caption ?? '';
-  if (!caption.trim()) throw new Error('Post sem caption — adicione antes de publicar');
-
-  // PORTÃO DE IMAGEM: post com imagem gerada por IA (Hive) precisa da imagem
-  // aprovada antes de publicar. Posts sem visual_decision não são afetados.
-  if (post.format === 'image' && post.visual_decision && !post.image_approved) {
-    throw new Error('Aprove a imagem antes de publicar (portão de aprovação de imagem).');
-  }
-
-  // Conta a tentativa antes de tentar.
+  // Conta a tentativa e limpa o erro anterior ANTES de qualquer checagem/portão.
+  // Assim QUALQUER falha (inclusive portão) grava publish_error e fica VISÍVEL.
+  // Antes os portões davam throw ANTES daqui: a falha sumia (attempts=0/erro=null)
+  // e, com a janela de graça de 2h do agendador, um post agendado que batia num
+  // portão nunca publicava e NÃO deixava rastro — perda silenciosa e permanente.
   await updatePost(post.id, { publish_attempts: (post.publish_attempts ?? 0) + 1, publish_error: null });
 
   try {
+    const caption = post.caption ?? '';
+    if (!caption.trim()) throw new Error('Post sem caption — adicione antes de publicar');
+
+    // PORTÃO DO FUNDO DE IA: M01-D (Campo) e M01-E (Matéria) usam fundo gerado por
+    // IA e exigem aprovação EXPLÍCITA do fundo (metadata.bg_approved). É o ÚNICO
+    // portão que resta: agendar/stand-by/publicar já implicam a aprovação geral
+    // (o portão geral de image_approved foi removido — barrava posts agendados
+    // que o humano já tinha revisado, causando a perda silenciosa acima).
+    const variant = (post.visual_decision as { variant?: string } | null)?.variant;
+    if ((variant === 'M01-D' || variant === 'M01-E') && post.metadata?.bg_approved !== true) {
+      throw new Error('Aprove o fundo de IA antes de publicar (portão do fundo — M01-D/E).');
+    }
+
     let result: PublishResult;
 
     if (post.platform === 'linkedin') {

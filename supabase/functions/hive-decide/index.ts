@@ -39,6 +39,22 @@ const MODEL_CHAIN = [
 ];
 const MAX_RETRIES = 2;
 
+// SEED = a decisao criativa que o generate-content ja tomou (template + destaque
+// + subtitulo/polos + cena) quando pensou conteudo E forma juntos. Quando vem,
+// o motor NAO chama o Gemini: so executa (valida a variante, resolve a foto do
+// Marcos na hierarquia, monta a decisao). O segundo "pensamento" de IA some.
+interface HiveSeed {
+  variant: string;
+  manifestation?: string;
+  highlight?: { target?: string; reason?: string } | null;
+  subtitle?: string | null;
+  poles?: { a?: string; b?: string } | null;
+  image_scene_hint?: string;
+  human_presence_adds_meaning?: boolean;
+  mode_reason?: string;
+  variant_reason?: string;
+}
+
 interface DecideInput {
   text: string;
   platform?: 'linkedin' | 'instagram';
@@ -46,6 +62,8 @@ interface DecideInput {
   target_avatar?: string;
   post_id?: string;
   history_variants?: string[];
+  // Quando presente, curto-circuita o Gemini: executa a variante ja escolhida.
+  seed?: HiveSeed;
 }
 
 interface Variacao {
@@ -215,8 +233,8 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: true, decision: locked, model_used: 'locked:M01-A' });
     }
 
-    const apiKey = await getUserGeminiKey(userId);
-    if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
+    // A chave Gemini so e exigida no caminho LLM (sem seed). No modo execucao
+    // (seed presente) o motor e deterministico e nao chama o modelo.
 
     // --- Carrega as REGRAS DA BASE: manifestacoes + variacoes congeladas ---
     // eslint-disable-next-line prefer-const
@@ -305,55 +323,7 @@ Deno.serve(async (req: Request) => {
     // Quantas fotos REAIS do Marcos existem (informa o modelo p/ A/B honestas).
     const realMarcosCount = photoAssets.filter((a) => ['real', 'real_adapted'].includes(a.origin) && String((a.semantic ?? {}).marcos_presente ?? '').toLowerCase() === 'sim').length;
 
-    // --- Prompt: o modelo LE as regras e pontua (nao inventa criterio) ---
-    const sys = [
-      'Voce e o MOTOR DE DECISAO VISUAL da Hive (Marcos Piccini / Bee).',
-      'Recebe um TEXTO JA APROVADO. REGRA ABSOLUTA: NUNCA reescreva, resuma, corrija ou altere o texto — voce so decide a FORMA visual.',
-      'Escolha entre as manifestacoes disponiveis e, dentro dela, a variacao. Comece pela hipotese M01 (a ideia se sustenta sozinha) e so va para M02 (Rosto + Pensamento) quando a PRESENCA HUMANA acrescentar significado que o texto sozinho nao tem — nunca so para variar o feed ou porque existe foto.',
-      'REGRA-MAE da M02: a foto NAO ilustra o texto; foto e pensamento formam UMA mensagem. Teste: se retirarmos a foto, alguma dimensao importante da mensagem desaparece? Se nao, nao e M02.',
-      'HONESTIDADE VISUAL: a realidade nao se fabrica. Marcos so aparece reconhecivel quando ha foto REAL dele; onde nao ha, prefira contexto (pessoa pequena/parcial/de costas) ou volte para M01.',
-      'O LARANJA e verbo, nao maquiagem: o destaque marca o PONTO DE VIRADA semantico (1 a 5 palavras REAIS do texto). Em variacoes com destaque_permitido=false, NAO ha destaque.',
-      'Devolva SEMPRE JSON puro (sem markdown).',
-    ].join('\n');
-
-    const maniLines = activeManiIds.map((id) => {
-      const m = maniById[id];
-      return m ? `- ${m.id} (${m.nome} · ${m.operacao}) | usar: ${JSON.stringify(m.quando_usar)} | NAO: ${JSON.stringify(m.quando_nao)}` : `- ${id}`;
-    });
-
-    const usr = [
-      `TEXTO APROVADO (nao altere):\n"""${text}"""`,
-      `plataforma: ${input.platform ?? 'instagram'}`,
-      `Fotos REAIS do Marcos disponiveis na biblioteca: ${realMarcosCount}. (Se 0, as variacoes que exigem Marcos reconhecivel — M02-A/M02-B — NAO devem vencer.)`,
-      '',
-      `DIMENSOES SEMANTICAS a pontuar de 0.0 a 1.0: ${dims.join(', ')}`,
-      '',
-      'MANIFESTACOES disponiveis:',
-      ...maniLines,
-      '',
-      'VARIACOES (pontue CADA uma de 0.0 a 1.0 conforme o quanto o texto pede aquela variacao; respeite os "evitar"):',
-      ...eligibleVars.map((v) =>
-        `- ${v.id} (${v.nome} · ${v.operacao}) | usar: ${JSON.stringify(v.quando_usar)} | evitar: ${JSON.stringify(v.quando_nao)} | regra: ${JSON.stringify(v.selection_rule)} | destaque_permitido: ${(v.limites?.destaque_permitido ?? false)}`,
-      ),
-      '',
-      'Responda em JSON:',
-      '{',
-      '  "semantics": { <cada dimensao acima>: 0.0-1.0 },',
-      '  "manifestations": { "M01": 0.0-1.0, "M02": 0.0-1.0 },',
-      '  "variants": { "<id>": {"score":0.0-1.0,"reason":"<curto>"}, ... para CADA variacao listada },',
-      '  "highlight": { "target": "<1-5 palavras reais do texto>", "reason": "<por que e a virada>" },',
-      '  "subtitle": "<OPCIONAL e so p/ M02: frase secundaria curta (ate 60 chars), um eco aforistico do proprio pensamento — SEM fatos, nomes ou datas novos; senao \\"\\">",',
-      '  "poles": {"a":"<so p/ M03-A: 1o polo, ate 14 chars, extraido do texto>","b":"<2o polo>"} ,',
-      '  "human_presence_adds_meaning": true|false,',
-      '  "image_scene_hint": "<so se a variacao vencedora for M02 e precisar gerar: descreva em 1 frase uma cena plausivel e honesta, coerente com a variacao; senao \"\">",',
-      '  "mode_reason": "<por que esta manifestacao/variacao>",',
-      '  "asset_reason": "<estrategia de materia visual e por que>"',
-      '}',
-      'Se nenhum destaque fizer sentido (ou a variacao vencedora nao permitir), use "highlight": null.',
-    ].join('\n');
-
-    const { text: raw, usage, model_used } = await callGemini(apiKey, sys, usr);
-    let parsed: {
+    type ParsedDecision = {
       semantics?: Record<string, number>;
       manifestations?: Record<string, number>;
       variants?: Record<string, { score?: number; reason?: string }>;
@@ -364,25 +334,117 @@ Deno.serve(async (req: Request) => {
       image_scene_hint?: string;
       mode_reason?: string; asset_reason?: string;
     };
-    try {
-      parsed = JSON.parse(raw.trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim());
-    } catch {
-      return errorResponse('Motor retornou JSON invalido. Tente de novo.', 502);
+    let parsed: ParsedDecision;
+    let semanticMax: number;
+    let withinTol: Variacao[];
+    const variantScores: Record<string, { semantic: number; adjusted: number; reason: string }> = {};
+    let winner: string;
+    let usage: { input?: number; output?: number } | undefined;
+    let model_used: string;
+
+    if (input.seed?.variant) {
+      // ===== MODO EXECUCAO: o generate-content ja escolheu a variante pensando
+      // conteudo E forma juntos. Nao chamamos o Gemini — so validamos e montamos.
+      const seed = input.seed;
+      const seedMani = String(seed.manifestation ?? seed.variant.split('-')[0] ?? '');
+      winner = eligibleVars.find((v) => v.id === seed.variant)?.id
+        // Fallback honesto: variante inelegivel (ex: M02-A sem foto real) -> melhor
+        // elegivel da mesma manifestacao; senao M01-A; senao a 1a elegivel.
+        ?? eligibleVars.find((v) => v.manifestacao_id === seedMani)?.id
+        ?? eligibleVars.find((v) => v.id === 'M01-A')?.id
+        ?? eligibleVars[0].id;
+      parsed = {
+        semantics: {},
+        manifestations: { [seedMani]: 1 },
+        variants: { [winner]: { score: 1, reason: seed.variant_reason ?? 'escolhida na geracao (conteudo+forma)' } },
+        highlight: seed.highlight ?? null,
+        subtitle: seed.subtitle ?? '',
+        poles: seed.poles ?? null,
+        human_presence_adds_meaning: seed.human_presence_adds_meaning ?? seedMani === 'M02',
+        image_scene_hint: seed.image_scene_hint ?? '',
+        mode_reason: seed.mode_reason ?? '',
+        asset_reason: '',
+      };
+      variantScores[winner] = { semantic: 1, adjusted: 1, reason: String(parsed.variants![winner].reason) };
+      semanticMax = 1;
+      withinTol = eligibleVars.filter((v) => v.id === winner);
+      usage = undefined;
+      model_used = `seed:${winner}`;
+    } else {
+      // ===== MODO LLM: re-decisao completa (botao "Hive" de re-roll manual) =====
+      const apiKey = await getUserGeminiKey(userId);
+      if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
+
+      // --- Prompt: o modelo LE as regras e pontua (nao inventa criterio) ---
+      const sys = [
+        'Voce e o MOTOR DE DECISAO VISUAL da Hive (Marcos Piccini / Bee).',
+        'Recebe um TEXTO JA APROVADO. REGRA ABSOLUTA: NUNCA reescreva, resuma, corrija ou altere o texto — voce so decide a FORMA visual.',
+        'Escolha entre as manifestacoes disponiveis e, dentro dela, a variacao. Comece pela hipotese M01 (a ideia se sustenta sozinha) e so va para M02 (Rosto + Pensamento) quando a PRESENCA HUMANA acrescentar significado que o texto sozinho nao tem — nunca so para variar o feed ou porque existe foto.',
+        'REGRA-MAE da M02: a foto NAO ilustra o texto; foto e pensamento formam UMA mensagem. Teste: se retirarmos a foto, alguma dimensao importante da mensagem desaparece? Se nao, nao e M02.',
+        'HONESTIDADE VISUAL: a realidade nao se fabrica. Marcos so aparece reconhecivel quando ha foto REAL dele; onde nao ha, prefira contexto (pessoa pequena/parcial/de costas) ou volte para M01.',
+        'O LARANJA e verbo, nao maquiagem: o destaque marca o PONTO DE VIRADA semantico (1 a 5 palavras REAIS do texto). Em variacoes com destaque_permitido=false, NAO ha destaque.',
+        'Devolva SEMPRE JSON puro (sem markdown).',
+      ].join('\n');
+
+      const maniLines = activeManiIds.map((id) => {
+        const m = maniById[id];
+        return m ? `- ${m.id} (${m.nome} · ${m.operacao}) | usar: ${JSON.stringify(m.quando_usar)} | NAO: ${JSON.stringify(m.quando_nao)}` : `- ${id}`;
+      });
+
+      const usr = [
+        `TEXTO APROVADO (nao altere):\n"""${text}"""`,
+        `plataforma: ${input.platform ?? 'instagram'}`,
+        `Fotos REAIS do Marcos disponiveis na biblioteca: ${realMarcosCount}. (Se 0, as variacoes que exigem Marcos reconhecivel — M02-A/M02-B — NAO devem vencer.)`,
+        '',
+        `DIMENSOES SEMANTICAS a pontuar de 0.0 a 1.0: ${dims.join(', ')}`,
+        '',
+        'MANIFESTACOES disponiveis:',
+        ...maniLines,
+        '',
+        'VARIACOES (pontue CADA uma de 0.0 a 1.0 conforme o quanto o texto pede aquela variacao; respeite os "evitar"):',
+        ...eligibleVars.map((v) =>
+          `- ${v.id} (${v.nome} · ${v.operacao}) | usar: ${JSON.stringify(v.quando_usar)} | evitar: ${JSON.stringify(v.quando_nao)} | regra: ${JSON.stringify(v.selection_rule)} | destaque_permitido: ${(v.limites?.destaque_permitido ?? false)}`,
+        ),
+        '',
+        'Responda em JSON:',
+        '{',
+        '  "semantics": { <cada dimensao acima>: 0.0-1.0 },',
+        '  "manifestations": { "M01": 0.0-1.0, "M02": 0.0-1.0 },',
+        '  "variants": { "<id>": {"score":0.0-1.0,"reason":"<curto>"}, ... para CADA variacao listada },',
+        '  "highlight": { "target": "<1-5 palavras reais do texto>", "reason": "<por que e a virada>" },',
+        '  "subtitle": "<OPCIONAL e so p/ M02: frase secundaria curta (ate 60 chars), um eco aforistico do proprio pensamento — SEM fatos, nomes ou datas novos; senao \\"\\">",',
+        '  "poles": {"a":"<so p/ M03-A: 1o polo, ate 14 chars, extraido do texto>","b":"<2o polo>"} ,',
+        '  "human_presence_adds_meaning": true|false,',
+        '  "image_scene_hint": "<so se a variacao vencedora for M02 e precisar gerar: descreva em 1 frase uma cena plausivel e honesta, coerente com a variacao; senao \"\">",',
+        '  "mode_reason": "<por que esta manifestacao/variacao>",',
+        '  "asset_reason": "<estrategia de materia visual e por que>"',
+        '}',
+        'Se nenhum destaque fizer sentido (ou a variacao vencedora nao permitir), use "highlight": null.',
+      ].join('\n');
+
+      const llm = await callGemini(apiKey, sys, usr);
+      usage = llm.usage;
+      model_used = llm.model_used;
+      try {
+        parsed = JSON.parse(llm.text.trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim());
+      } catch {
+        return errorResponse('Motor retornou JSON invalido. Tente de novo.', 502);
+      }
+
+      // --- Desempate por DIVERSIDADE (significado decide, diversidade desempata) ---
+      const scoreOf = (id: string) => Math.max(0, Math.min(1, Number(parsed.variants?.[id]?.score ?? 0)));
+      semanticMax = Math.max(...eligibleVars.map((v) => scoreOf(v.id)));
+      withinTol = eligibleVars.filter((v) => scoreOf(v.id) >= semanticMax - (diversity.tolerance ?? 0.08));
+      for (const v of eligibleVars) {
+        const semantic = scoreOf(v.id);
+        const adjusted = semantic - (diversity.penalty_per_recent_use ?? 0.12) * (recentCount[v.id] ?? 0);
+        variantScores[v.id] = { semantic, adjusted, reason: String(parsed.variants?.[v.id]?.reason ?? '') };
+      }
+      winner = withinTol
+        .map((v) => v.id)
+        .sort((a, b) => variantScores[b].adjusted - variantScores[a].adjusted)[0] ?? eligibleVars[0].id;
     }
 
-    // --- Desempate por DIVERSIDADE (significado decide, diversidade desempata) ---
-    const scoreOf = (id: string) => Math.max(0, Math.min(1, Number(parsed.variants?.[id]?.score ?? 0)));
-    const semanticMax = Math.max(...eligibleVars.map((v) => scoreOf(v.id)));
-    const withinTol = eligibleVars.filter((v) => scoreOf(v.id) >= semanticMax - (diversity.tolerance ?? 0.08));
-    const variantScores: Record<string, { semantic: number; adjusted: number; reason: string }> = {};
-    for (const v of eligibleVars) {
-      const semantic = scoreOf(v.id);
-      const adjusted = semantic - (diversity.penalty_per_recent_use ?? 0.12) * (recentCount[v.id] ?? 0);
-      variantScores[v.id] = { semantic, adjusted, reason: String(parsed.variants?.[v.id]?.reason ?? '') };
-    }
-    const winner = withinTol
-      .map((v) => v.id)
-      .sort((a, b) => variantScores[b].adjusted - variantScores[a].adjusted)[0] ?? eligibleVars[0].id;
     const winnerVar = eligibleVars.find((v) => v.id === winner)!;
     const lim = winnerVar.limites ?? {};
     const manifestacao = winnerVar.manifestacao_id;

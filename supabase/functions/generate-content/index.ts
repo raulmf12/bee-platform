@@ -59,6 +59,20 @@ interface GenerateInput {
   variations?: number;
 }
 
+// SEED da Hive: a decisao de FORMA que o modelo toma JUNTO com o conteudo (so
+// Instagram). O hive-decide recebe isso e executa sem re-pensar (sem 2a IA).
+interface HiveSeed {
+  variant: string;
+  manifestation: string;
+  highlight: { target?: string; reason?: string } | null;
+  subtitle: string | null;
+  poles: { a?: string; b?: string } | null;
+  image_scene_hint: string;
+  human_presence_adds_meaning: boolean;
+  mode_reason: string;
+  variant_reason: string;
+}
+
 interface GenerateVariation {
   quote: string;
   caption: string;
@@ -67,10 +81,47 @@ interface GenerateVariation {
   // Nota de potencial de viralizacao (0-100) + 1 linha de razao.
   virality_score?: number;
   virality_reason?: string;
+  // So Instagram: a forma escolhida junto com o conteudo (template + destaque…).
+  hive_seed?: HiveSeed;
 }
 
 interface GenerateOutput {
   variations: GenerateVariation[];
+}
+
+// --- Catalogo de templates visuais (Instagram): o modelo pensa forma+conteudo. ---
+interface HiveManifest { id: string; nome: string; operacao: string; auto_select?: boolean; quando_usar: unknown; quando_nao: unknown }
+interface HiveVariant {
+  id: string; manifestacao_id: string; nome: string; operacao: string;
+  quando_usar: unknown; quando_nao: unknown; selection_rule: Record<string, unknown>; limites: Record<string, unknown>;
+}
+interface TemplateCatalog {
+  manifests: HiveManifest[];
+  variants: HiveVariant[];
+  realMarcosCount: number;
+  recentVariants: string[];
+}
+
+// So Instagram: carrega o catalogo congelado + fotos reais do Marcos + historico
+// recente de variantes (pressao de diversidade). LinkedIn e travado no M01-A,
+// entao nao precisa — retorna null e o prompt segue o fluxo classico.
+async function loadTemplateCatalog(userId: string, platform: string | undefined): Promise<TemplateCatalog | null> {
+  if (platform !== 'instagram') return null;
+  const [manis, vars, photoAssets, recent] = await Promise.all([
+    fetchRest<HiveManifest[]>(`/design_manifestacoes?ativo=eq.true&select=id,nome,operacao,auto_select,quando_usar,quando_nao&order=ordem.asc`),
+    fetchRest<HiveVariant[]>(`/design_variacoes?status=eq.frozen&ativo=eq.true&select=id,manifestacao_id,nome,operacao,quando_usar,quando_nao,selection_rule,limites&order=manifestacao_id.asc,ordem.asc`),
+    fetchRest<Array<{ origin: string; semantic: Record<string, unknown> }>>(`/design_assets?is_active=eq.true&kind=eq.photo&select=origin,semantic`),
+    fetchRest<Array<{ visual_decision: { variant?: string } | null }>>(`/user_posts?user_id=eq.${userId}&visual_decision=not.is.null&select=visual_decision&order=created_at.desc&limit=8`),
+  ]);
+  // So manifestacoes auto-selecionaveis (M04 depende de dados de evento -> fora).
+  const autoIds = new Set(manis.filter((m) => m.auto_select !== false).map((m) => m.id));
+  const variants = vars.filter((v) => autoIds.has(v.manifestacao_id));
+  if (variants.length === 0) return null; // base sem template congelado: fluxo classico
+  const realMarcosCount = photoAssets.filter(
+    (a) => ['real', 'real_adapted'].includes(a.origin) && String((a.semantic ?? {}).marcos_presente ?? '').toLowerCase() === 'sim',
+  ).length;
+  const recentVariants = recent.map((r) => r.visual_decision?.variant ?? '').filter(Boolean);
+  return { manifests: manis.filter((m) => autoIds.has(m.id)), variants, realMarcosCount, recentVariants };
 }
 
 function svcHeaders(): HeadersInit {
@@ -347,12 +398,75 @@ async function retrieveContext(
     .join('\n\n---\n\n');
 }
 
+// Renderiza o catalogo de templates + as regras de escolha (so Instagram).
+// O modelo pensa a FORMA junto com o conteudo e escreve a frase JA moldada pro
+// template escolhido. Significado primeiro; diversidade pressiona; M02 so com
+// foto real (honestidade). Retorna [] quando nao ha catalogo (LinkedIn).
+function templateSectionLines(templates: TemplateCatalog | null): string[] {
+  if (!templates || templates.variants.length === 0) return [];
+  const lines: string[] = [];
+  const maniName: Record<string, string> = {};
+  for (const m of templates.manifests) maniName[m.id] = m.nome;
+
+  lines.push('=== TEMPLATES VISUAIS DO INSTAGRAM (pense a FORMA junto com o conteudo) ===');
+  lines.push('Neste post voce NAO escreve no vacuo: primeiro considere TODOS os templates abaixo, ESCOLHA UM, e escreva a frase da imagem JA moldada pra ele (dentro do limite de chars dele). A forma e o conteudo nascem juntos.');
+  lines.push('Como escolher (nesta ordem de prioridade):');
+  lines.push('  1. SIGNIFICADO PRIMEIRO: escolha o template que a IDEIA pede. Nunca force uma forma que trai o texto.');
+  lines.push('  2. M02 (Rosto + Pensamento) so quando a PRESENCA HUMANA acrescenta significado que a frase sozinha nao tem — foto e pensamento viram UMA mensagem (se tirar a foto, algo essencial some). Nao use M02 so pra variar.');
+  lines.push(`  3. HONESTIDADE VISUAL: existem ${templates.realMarcosCount} foto(s) REAIS do Marcos na biblioteca. As variacoes que exigem o rosto reconhecivel (ex: M02-A/M02-B) SO podem ser escolhidas se houver foto real. NUNCA se fabrica o rosto do Marcos.`);
+  if (templates.recentVariants.length) {
+    lines.push(`  4. VARIE O FEED: os posts recentes usaram, do mais novo ao mais antigo: ${templates.recentVariants.join(', ')}. De variedade — evite repetir o mesmo template da vez passada, DESDE QUE o significado permita.`);
+  } else {
+    lines.push('  4. VARIE O FEED: distribua entre os templates ao longo do tempo — nao caia sempre no mesmo.');
+  }
+  lines.push('');
+  lines.push('MANIFESTACOES:');
+  for (const m of templates.manifests) {
+    lines.push(`- ${m.id} (${m.nome} · ${m.operacao}) | usar: ${JSON.stringify(m.quando_usar)} | NAO: ${JSON.stringify(m.quando_nao)}`);
+  }
+  lines.push('');
+  lines.push('VARIACOES (escolha 1 — "template_id" e o id EXATO, ex: "M01-C"):');
+  for (const v of templates.variants) {
+    const lim = v.limites ?? {};
+    const max = Number(lim.chars_limit ?? 200);
+    const destaque = Boolean(lim.destaque_permitido);
+    const img = Boolean(lim.image_required);
+    lines.push(
+      `- ${v.id} (${v.nome} · ${v.operacao}) | usar: ${JSON.stringify(v.quando_usar)} | evitar: ${JSON.stringify(v.quando_nao)} | max_chars_frase: ${max} | destaque_permitido: ${destaque}${img ? ' | EXIGE foto real do Marcos' : ''}`,
+    );
+  }
+  lines.push('');
+  // ANTI-FIXACAO: o motor viciava em M01-B (Tensao). Corrige a tendencia.
+  lines.push('ATENCAO CONTRA O VICIO (nao caia sempre no M01-B/Tensao):');
+  lines.push('  - NAO rotule o texto como "tensao/paradoxo" por padrao. M01-B (Tensao) SO quando ha um PARADOXO real, uma oposicao conceitual forte ou uma ruptura explicita DENTRO da frase. Uma frase apenas afirmativa/reflexiva NAO e M01-B.');
+  lines.push('  - Na duvida entre A e B, escolha A (Essencial). O default e A, nao B.');
+  lines.push('  - Distribua DE VERDADE entre A, B, C, D e E ao longo dos posts — cada uma serve a um tipo de frase diferente (ver "usar"). Repetir o mesmo template e falha.');
+  lines.push('');
+  return lines;
+}
+
+// Descreve os campos de FORMA que cada variacao deve devolver (so Instagram).
+function formFieldsSpec(): string[] {
+  return [
+    '  Alem dos campos de texto, cada objeto DEVE trazer os campos da FORMA escolhida:',
+    '  - "template_id": id EXATO do template escolhido (ex: "M01-C", "M02-A", "M03-A").',
+    '  - "manifestation": "M01" | "M02" | "M03" (o prefixo do template).',
+    '  - "highlight": { "target": "<1 a 5 palavras REAIS da frase que marcam a virada>", "reason": "<curto>" } — ou null. So preencha se o template escolhido tiver destaque_permitido=true.',
+    '  - "subtitle": SO para M02 — frase secundaria curta (ate 60 chars), um eco aforistico do proprio pensamento, SEM fatos/nomes/datas novos. Senao "".',
+    '  - "poles": SO para M03-A — { "a": "<1o polo, ate 14 chars, tirado da frase>", "b": "<2o polo>" }. Senao null.',
+    '  - "image_scene_hint": SO se escolher M02 e NAO houver foto real que sirva — 1 frase de cena plausivel e honesta (pessoa parcial/de costas/pequena, luz natural). Senao "".',
+    '  - "human_presence_adds_meaning": true|false — a presenca humana acrescenta significado real?',
+    '  - "mode_reason": por que ESTA manifestacao. "variant_reason": por que ESTA variacao.',
+  ];
+}
+
 function buildSystemPrompt(
   ctx: Awaited<ReturnType<typeof loadBeeContext>>,
   ragContext: string,
   input: GenerateInput,
   referencePost: ReferencePost | null,
-  pastArsenalPosts: any[] = []
+  pastArsenalPosts: any[] = [],
+  templates: TemplateCatalog | null = null,
 ): string {
   const ed = ctx.editorial;
   const ai = ctx.arsenalItem;
@@ -690,6 +804,10 @@ function buildSystemPrompt(
     lines.push('');
   }
 
+  // TEMPLATES VISUAIS (so Instagram) — a FORMA pensada junto com o conteudo.
+  // Vem colado nas REGRAS DE SAIDA de proposito: e a ultima decisao antes de escrever.
+  for (const l of templateSectionLines(templates)) lines.push(l);
+
   // REGRAS DE SAIDA
   lines.push('=== REGRAS DE SAIDA ===');
   // Anti-invenção: a espinha dorsal da confiança na Bee. O modelo NÃO fabrica
@@ -697,7 +815,11 @@ function buildSystemPrompt(
   lines.push('- CRÍTICO (Veracidade — regra máxima): NUNCA invente fatos biográficos: eventos, datas, números, cargos, empresas, lugares, diálogos ou cenas. Se o pedido for sobre uma história/experiência específica e ela estiver nos FATOS REAIS acima, narre SÓ a partir deles. Se um detalhe não estiver no material, NÃO preencha por conta própria — trabalhe apenas com o que é real. Sem fato real disponível, prefira falar de forma mais geral, conceitual e honesta a inventar uma cena. Inventar uma história que não aconteceu é o pior erro possível aqui.');
   lines.push('- CRÍTICO (Tom): a Bee tensiona a IDEIA, jamais a PESSOA. NADA de tom agressivo, ameaçador, acusatório, arrogante, cínico ou de "palestrinha"/lição de moral. Não humilhe, não julgue, não provoque medo, não aponte o dedo. A firmeza vem da clareza e da verdade, com calor humano: convida a perceber, nunca intimida. Se um trecho soar duro ou como ataque, suavize antes de devolver.');
   lines.push('- CRÍTICO (Exposição): nunca exponha pessoas ou empresas reais — nem no título, nem na legenda. Troque todo nome próprio por arquétipo (ver Anonimização). Nunca escreva um post que humilhe, ridicularize ou coloque alguém (real ou identificável) numa posição ruim. Na dúvida, generalize.');
-  lines.push(`- "quote": frase da imagem. MAXIMO ${input.quote_max_chars ?? 200} chars. Use 1 dos 4 tipos de titulo.`);
+  if (templates) {
+    lines.push(`- "quote": frase da imagem. O LIMITE de chars e o "max_chars_frase" do TEMPLATE que voce escolher (ver TEMPLATES VISUAIS) — respeite-o. Nunca ultrapasse ${input.quote_max_chars ?? 200} chars em hipotese alguma. Use 1 dos 4 tipos de titulo.`);
+  } else {
+    lines.push(`- "quote": frase da imagem. MAXIMO ${input.quote_max_chars ?? 200} chars. Use 1 dos 4 tipos de titulo.`);
+  }
   lines.push(`  CRÍTICO (Casing): Apenas a primeira letra da frase (e apos pontuacoes) deve ser maiuscula. NUNCA escreva a frase inteira em MAIUSCULAS (ALL CAPS).`);
   lines.push(`  CRÍTICO (Sentido): A frase deve carregar um sentido completo e encapsulado. Nao divida o mesmo raciocinio. A frase precisa ser auto-explicativa.`);
   lines.push(`  Sem emojis, sem hashtags nas frases.`);
@@ -727,12 +849,18 @@ function buildSystemPrompt(
   lines.push('  Avalie: forca do gancho (primeiros 49 chars), tensao/contra-intuicao da virada, clareza do CTA, ressonancia com a dor do avatar. Seja honesto e calibrado — reserve 85+ so pra ganchos realmente fortes.');
   lines.push('- "virality_reason": UMA frase curta (max 90 chars) justificando a nota.');
 
+  const baseKeys = '"quote", "caption", "headline_type_used", "analogy_used", "virality_score", "virality_reason"';
+  const objKeys = templates
+    ? `{ ${baseKeys}, "template_id", "manifestation", "highlight", "subtitle", "poles", "image_scene_hint", "human_presence_adds_meaning", "mode_reason", "variant_reason" }`
+    : `{ ${baseKeys} }`;
+
   const n = variationCount(input);
   if (n > 1) {
     lines.push('');
     lines.push(`=== FORMATO: ${n} VARIACOES ===`);
     lines.push(`- Devolva um JSON com a chave "variations": um array de EXATAMENTE ${n} objetos.`);
-    lines.push('- Cada objeto: { "quote", "caption", "headline_type_used", "analogy_used", "virality_score", "virality_reason" }.');
+    lines.push(`- Cada objeto: ${objKeys}.`);
+    if (templates) for (const l of formFieldsSpec()) lines.push(l);
     // O ponto das variacoes e dar ESCOLHA. Cinco textos parecidos nao ensinam
     // nada sobre a preferencia do usuario — cada uma tem que atacar por um lado.
     lines.push(`- Cada variacao ataca por um ANGULO DIFERENTE. Varie o "headline_type_used" entre elas:`);
@@ -741,7 +869,8 @@ function buildSystemPrompt(
     lines.push('- Cada variacao recebe sua PROPRIA virality_score (elas devem diferir — reflita a forca real de cada uma).');
     lines.push('- Todas obedecem as mesmas REGRAS DE SAIDA acima.');
   } else {
-    lines.push('- Devolva um JSON com a chave "variations": um array de 1 objeto { "quote", "caption", "headline_type_used", "analogy_used", "virality_score", "virality_reason" }.');
+    lines.push(`- Devolva um JSON com a chave "variations": um array de 1 objeto ${objKeys}.`);
+    if (templates) for (const l of formFieldsSpec()) lines.push(l);
   }
 
   // AUTOCHECAGEM — Regra de Ouro / régua da comunicacao (Genesis)
@@ -900,6 +1029,40 @@ interface RawVariation {
   analogy_used?: string;
   virality_score?: number | string;
   virality_reason?: string;
+  // Campos da FORMA (so Instagram, quando o catalogo de templates foi enviado).
+  template_id?: string;
+  manifestation?: string;
+  highlight?: { target?: string; reason?: string } | null;
+  subtitle?: string | null;
+  poles?: { a?: string; b?: string } | null;
+  image_scene_hint?: string;
+  human_presence_adds_meaning?: boolean;
+  mode_reason?: string;
+  variant_reason?: string;
+}
+
+// Monta o hive_seed a partir dos campos crus de forma. So retorna algo quando o
+// modelo escolheu um template (Instagram) — no LinkedIn/fluxo classico fica undefined.
+function extractHiveSeed(v: RawVariation): HiveSeed | undefined {
+  const variant = typeof v.template_id === 'string' ? v.template_id.trim().toUpperCase() : '';
+  if (!variant) return undefined;
+  const hl = v.highlight && typeof v.highlight.target === 'string' && v.highlight.target.trim()
+    ? { target: v.highlight.target.trim(), reason: String(v.highlight.reason ?? '') }
+    : null;
+  const poles = v.poles && (v.poles.a || v.poles.b)
+    ? { a: String(v.poles.a ?? '').trim(), b: String(v.poles.b ?? '').trim() }
+    : null;
+  return {
+    variant,
+    manifestation: String(v.manifestation ?? variant.split('-')[0] ?? '').toUpperCase(),
+    highlight: hl,
+    subtitle: typeof v.subtitle === 'string' && v.subtitle.trim() ? v.subtitle.trim() : null,
+    poles,
+    image_scene_hint: typeof v.image_scene_hint === 'string' ? v.image_scene_hint.trim() : '',
+    human_presence_adds_meaning: Boolean(v.human_presence_adds_meaning),
+    mode_reason: String(v.mode_reason ?? ''),
+    variant_reason: String(v.variant_reason ?? ''),
+  };
 }
 
 // Aceita number ou string ("87"), clampa em 0..100. undefined se ausente/invalido.
@@ -922,6 +1085,7 @@ function normalizeVariation(v: RawVariation): GenerateVariation | null {
     analogy_used: v.analogy_used,
     virality_score: normalizeScore(v.virality_score),
     virality_reason: typeof v.virality_reason === 'string' ? v.virality_reason.trim() : undefined,
+    hive_seed: extractHiveSeed(v),
   };
 }
 
@@ -1007,7 +1171,11 @@ Deno.serve(async (req: Request) => {
     ].filter(Boolean).join(' . ');
     const ragContext = await retrieveContext(apiKey, themeQuery, input.briefing, userId);
 
-    const sys = buildSystemPrompt(ctx, ragContext, input, referencePost, pastArsenalPosts);
+    // Catalogo de templates visuais (so Instagram): faz o modelo pensar FORMA +
+    // conteudo juntos e escolher o template com variedade. LinkedIn: null (M01-A fixo).
+    const templates = await loadTemplateCatalog(userId, input.target_platform);
+
+    const sys = buildSystemPrompt(ctx, ragContext, input, referencePost, pastArsenalPosts, templates);
     const usr = buildUserPrompt(input, ctx.arsenalItem);
 
     const wanted = variationCount(input);

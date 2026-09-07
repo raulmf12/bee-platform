@@ -31,6 +31,8 @@ import { HivePreview } from '@/pages/hive/HivePreview';
 import { HiveAssets } from '@/pages/hive/HiveAssets';
 import { HiveMarcos } from '@/pages/hive/HiveMarcos';
 import { HiveConvite } from '@/pages/hive/HiveConvite';
+import { HiveTesteM02 } from '@/pages/hive/HiveTesteM02'; // TEMP: apagar depois
+import { HiveTesteM01 } from '@/pages/hive/HiveTesteM01'; // TEMP: apagar depois
 import { Custos } from '@/pages/custos/Custos';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -111,6 +113,8 @@ export default function App() {
           <Route path="hive/assets" element={<HiveAssets />} />
           <Route path="hive/marcos" element={<HiveMarcos />} />
           <Route path="hive/convite" element={<HiveConvite />} />
+          <Route path="hive/teste-m02" element={<HiveTesteM02 />} /> {/* TEMP: apagar depois */}
+          <Route path="hive/teste-m01" element={<HiveTesteM01 />} /> {/* TEMP: apagar depois */}
           <Route path="custos" element={<Custos />} />
           {/* Vídeo virou parte do wizard (NewPost). Rota antiga redireciona. */}
           <Route path="posts/novo-video" element={<Navigate to="/posts/novo" replace />} />

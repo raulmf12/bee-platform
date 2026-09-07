@@ -28,6 +28,20 @@ export interface GenerateContentInput {
   variations?: number;
 }
 
+// SEED da Hive: a FORMA que o generate-content escolheu junto com o conteudo
+// (so Instagram). Vai pro hive-decide em "modo execucao" — sem 2a IA.
+export interface HiveSeed {
+  variant: string;
+  manifestation: string;
+  highlight: { target?: string; reason?: string } | null;
+  subtitle: string | null;
+  poles: { a?: string; b?: string } | null;
+  image_scene_hint: string;
+  human_presence_adds_meaning: boolean;
+  mode_reason: string;
+  variant_reason: string;
+}
+
 export interface GeneratedVariation {
   quote: string;
   caption: string;
@@ -36,6 +50,8 @@ export interface GeneratedVariation {
   // Nota de viralizacao (0-100) + razao curta, estimadas pela IA.
   virality_score?: number;
   virality_reason?: string;
+  // So Instagram: template + destaque escolhidos junto com o texto.
+  hive_seed?: HiveSeed;
 }
 
 export interface GenerateContentOutput extends GeneratedVariation {
@@ -581,6 +597,8 @@ export const edge = {
     target_avatar?: string;
     post_id?: string;
     history_variants?: string[];
+    // Modo execucao: template ja escolhido na geracao — pula o Gemini.
+    seed?: HiveSeed;
   }): Promise<{
     success: boolean;
     decision: {

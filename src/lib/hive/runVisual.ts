@@ -8,12 +8,13 @@
 //
 // Canvas v1 = feed 1080x1350 (serve Instagram E LinkedIn).
 
-import { edge } from '@/lib/edge';
+import { edge, type HiveSeed } from '@/lib/edge';
 import { loadHiveDesign } from './loadDesign';
-import { composeM01, type ComposedSlide } from './composeM01';
+import { composeM01, pickM01BgUrl, type ComposedSlide } from './composeM01';
+import { analyzeTextZone, clearZoneCache } from './imageZone';
 import { composeM02 } from './composeM02';
 import { composeM03 } from './composeM03';
-import { resolveM02Asset, ensureM01Asset, type DecisionAssetInfo } from './marcosImage';
+import { resolveM02Asset, ensureM01Asset, clearM01AssetCache, type DecisionAssetInfo } from './marcosImage';
 import { renderFabricToDataUrl } from '@/lib/templates/renderPost';
 import { uploadAssetImage } from '@/lib/storage';
 
@@ -33,18 +34,25 @@ export async function generateHiveImage(params: {
   platform?: 'linkedin' | 'instagram';
   editorialSlug?: string;
   targetAvatar?: string;
+  // Modo execução: mantém a variante já escolhida (não re-decide). Usado pra
+  // "Regenerar fundo" — quer OUTRO fundo, mas o MESMO template.
+  seed?: HiveSeed;
+  // Força um fundo de IA novo (M01-D/E): ignora o pool e gera do zero.
+  forceBg?: boolean;
 }): Promise<HiveVisualResult> {
   const text = params.text.trim();
   if (!text) throw new Error('Sem texto pra compor a imagem.');
 
   // 1) Decisão (a IA lê as regras da base e escolhe manifestação/variante/destaque
   //    + a imagem na hierarquia: foto real do Marcos primeiro, gerar só se preciso).
+  //    Com seed, executa a variante fixa (sem re-decidir).
   const { decision } = await edge.hiveDecide({
     text,
     platform: params.platform,
     editorial_slug: params.editorialSlug,
     target_avatar: params.targetAvatar,
     post_id: params.postId,
+    seed: params.seed,
   });
 
   // 2) Composição: pega a receita frozen da variante escolhida (M01 ou M02).
@@ -79,17 +87,26 @@ export async function generateHiveImage(params: {
   } else {
     // M01-D (Campo) e M01-E (Matéria) têm fundo de IA: se a biblioteca não tem
     // asset, gera um agora (senão fica placeholder). Demais M01 = sem imagem.
+    // forceBg = "Regenerar fundo": ignora o pool e gera um novo do zero.
     let assets = design.assets;
-    if (recipe.id === 'M01-D' && design.assets.photos.length === 0) {
+    const isD = recipe.id === 'M01-D', isE = recipe.id === 'M01-E';
+    if (params.forceBg && (isD || isE)) {
+      clearM01AssetCache(params.postId);
+      const a = await ensureM01Asset(isD ? 'photo' : 'texture', params.postId);
+      if (a) { assets = isD ? { ...design.assets, photos: [a] } : { ...design.assets, textures: [a] }; clearZoneCache(a.url); }
+    } else if (isD && design.assets.photos.length === 0) {
       const a = await ensureM01Asset('photo', params.postId);
       if (a) assets = { ...design.assets, photos: [a] };
-    } else if (recipe.id === 'M01-E' && design.assets.textures.length === 0) {
+    } else if (isE && design.assets.textures.length === 0) {
       const a = await ensureM01Asset('texture', params.postId);
       if (a) assets = { ...design.assets, textures: [a] };
     }
+    // Posicionamento pós-imagem (D/E): leva o texto pra zona de espaço negativo.
+    const bgUrl = pickM01BgUrl(recipe, assets, text);
+    const layout = bgUrl ? await analyzeTextZone(bgUrl) : null;
     slide = composeM01({
       recipe, colors: design.colors, spiralUrl: design.spiralUrl, assets,
-      text, highlight, canvas: CANVAS,
+      text, highlight, canvas: CANVAS, layout,
     });
   }
 
