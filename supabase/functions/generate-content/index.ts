@@ -705,9 +705,10 @@ function buildSystemPrompt(
 
   // ANALOGIAS
   if (ctx.analogiesNew.length || ctx.analogiesUsed.length) {
-    lines.push('=== BANCO DE ANALOGIAS (SO NATUREZA/BIOLOGIA — NUNCA TECNOLOGIA/FINANCAS) ===');
+    lines.push('=== BANCO DE ANALOGIAS (quando couber: SO NATUREZA/BIOLOGIA — NUNCA TECNOLOGIA/FINANCAS) ===');
+    lines.push('⛔ ANTI-VÍCIO: NÃO use analogia com a natureza em TODO post. Isso virou um tique. Analogia com a natureza é a marca do autor, mas repetir a estrutura "algo da natureza → lição pra organização" em cada texto ENFRAQUECE e soa fórmula. Use SÓ quando a analogia ilumina a ideia de verdade — na prática, na MINORIA dos posts. Na dúvida, NÃO use. "analogy_used": null é comum e ótimo. Muitos textos são melhores diretos, sem metáfora.');
     if (ctx.analogiesNew.length) {
-      lines.push('Ainda nao usadas (prefira estas se couber):');
+      lines.push('Disponíveis (use no máximo UMA, e só se encaixar mesmo):');
       ctx.analogiesNew.forEach((a) => lines.push(`• ${a.name} — ${a.description}${a.best_for ? ` [bom pra: ${a.best_for}]` : ''}`));
     }
     if (ctx.analogiesUsed.length) {
@@ -831,8 +832,9 @@ function buildSystemPrompt(
   lines.push('  NUNCA cole 3 ou mais frases no mesmo bloco. Alterne blocos de 1 e de 2 frases pra criar ritmo e leveza na leitura.');
   lines.push('  CRÍTICO (Anonimizacao): mantenha os EVENTOS reais (eles vêm dos FATOS REAIS), mas troque nomes próprios de pessoas e empresas por arquétipos (ex: "uma grande multinacional", "um diretor", "uma consultoria global de executivos"). Anonimizar é trocar só o RÓTULO — jamais inventar ou alterar o que aconteceu.');
   lines.push('  CRÍTICO (Formatacao): PROIBIDO travessões (— ou -) na legenda. Sem bullets/listas.');
-  lines.push('  Arco (espalhado nos blocos, NÃO em 4 parágrafos): abre com GANCHO (os primeiros ~49 chars têm que prender, cabem no "ver mais") → tensão/aprofundamento → virada sistêmica com a analogia → fechamento que reverbera.');
-  lines.push('  CRÍTICO (Fechamento): VARIE o fecho entre posts. NÃO use "Vê?" como padrão (está repetitivo) — alterne entre uma pergunta de implicação, uma afirmação curta que assenta a ideia, ou um convite à reflexão. No máximo raríssimas vezes um "Vê?"; por padrão, NÃO use.');
+  lines.push('  Arco (espalhado nos blocos, NÃO em 4 parágrafos): abre com GANCHO (os primeiros ~49 chars têm que prender, cabem no "ver mais") → tensão/aprofundamento → (QUANDO o conteúdo pedir) uma virada que amplia a ideia → fechamento que reverbera. A "virada sistêmica" e a analogia NÃO são obrigatórias — são ferramentas, não etapas fixas.');
+  lines.push('  ⛔ CRÍTICO (Fecho tem que CABER no assunto): o fim nasce do PRÓPRIO texto. Se o post é uma HISTÓRIA PESSOAL, encerre DENTRO da história — NUNCA cole uma moral sobre liderança/gestão/organização que o texto não sustentou. Conclusão genérica de "lição corporativa" enfiada à força é um dos piores vícios: se a ligação não é honesta, não faça.');
+  lines.push('  ⛔ CRÍTICO (Fechamento — anti-tique): NÃO termine sempre com PERGUNTA. A MAIORIA dos posts NÃO deve fechar com "E você, o que tem feito...?" nem com pergunta-CTA — virou fórmula. NÃO use "Vê?" como padrão (raríssimo, quase nunca). VARIE de verdade: às vezes uma afirmação curta que assenta, às vezes uma imagem que reverbera, às vezes só encerra sem CTA nenhum. Pergunta no fim só quando ela for genuinamente a melhor saída — e não em posts seguidos.');
   // TAMANHO POR PLATAFORMA — no Instagram a legenda é CURTA (a profundidade mora
   // na imagem); no LinkedIn ela pode respirar mais e desenvolver o raciocínio.
   if (input.target_platform === 'instagram') {
@@ -879,6 +881,10 @@ function buildSystemPrompt(
   const regua = ctx.genesis?.principios?.find((p) => p.codigo === 'ling-regua');
   if (regua) lines.push(`- ${regua.principio}`);
   lines.push('- Se esta pessoa nunca mais conversar com voce, este texto continua produzindo vida (percepcao/liberdade)? Se nao, reescreva antes de devolver.');
+  lines.push('- CAÇA AOS TIQUES (revise e corte antes de entregar):');
+  lines.push('  1. Tem analogia com a natureza? Ela é MESMO necessária aqui, ou é reflexo? Se não iluminar de verdade, TIRE (e ponha analogy_used=null).');
+  lines.push('  2. O fecho fala do assunto REAL do post, ou escorregou pra uma lição genérica de liderança/organização que o texto não sustenta? Se escorregou, reescreva o fim pra fechar no próprio assunto.');
+  lines.push('  3. Terminou com pergunta ou com "Vê?"? Se sim, provavelmente é vício — troque por um fecho que assenta a ideia, a menos que a pergunta seja genuinamente insubstituível.');
   lines.push('');
   lines.push('- Saida em JSON puro, SEM markdown.');
 
