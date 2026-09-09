@@ -217,12 +217,13 @@ export function PostEditor() {
     if (!frase) { toast.error('Sem frase pra compor.'); return; }
     setBgBusy(true);
     try {
+      const vd = post.visual_decision as { highlight?: HiveSeed['highlight']; subtitle?: string | null } | undefined;
       const seed: HiveSeed = {
         variant,
         manifestation: variant.split('-')[0],
-        highlight: (post.visual_decision as { highlight?: HiveSeed['highlight'] } | undefined)?.highlight ?? null,
-        subtitle: null, poles: null, image_scene_hint: '',
-        human_presence_adds_meaning: false, mode_reason: '', variant_reason: 'regenerar fundo',
+        highlight: vd?.highlight ?? null,
+        subtitle: vd?.subtitle ?? null, poles: null, image_scene_hint: '',
+        human_presence_adds_meaning: variant.startsWith('M02-'), mode_reason: '', variant_reason: 'regenerar imagem',
       };
       const { slide, dataUrl, publicUrl, decision } = await generateHiveImage({
         userId: currentUser.id, postId: post.id, text: frase,
@@ -260,7 +261,7 @@ export function PostEditor() {
     // PORTÃO DO FUNDO DE IA (M01-D/E): não deixa exportar/publicar até o fundo
     // gerado por IA ser aprovado explicitamente. Ver bgGate.ts.
     if (bgGatePending(post)) {
-      toast.error('Aprove o fundo de IA antes (barra no topo do editor).');
+      toast.error('Aprove a imagem de IA antes (barra no topo do editor).');
       return null;
     }
     if (!imageDataUrl || !currentUser) {
@@ -569,19 +570,19 @@ export function PostEditor() {
           <div className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400">
             <Wand2 className="h-4 w-4 shrink-0" />
             <span>
-              <b>Fundo gerado por IA</b> ({(post.visual_decision as { variant?: string })?.variant}) — revise antes de publicar. Aprove ou regenere.
+              <b>Imagem gerada por IA</b> ({(post.visual_decision as { variant?: string })?.variant}) — revise antes de publicar. Aprove ou regenere.
             </span>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => void regenerateBg()} disabled={bgBusy}>
               {bgBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-              Regenerar fundo
+              Regenerar imagem
             </Button>
             <Button
               variant="default" size="sm" onClick={() => void approveBg()} disabled={bgBusy}
               className="bg-amber-600 text-white hover:bg-amber-700"
             >
-              <CheckCircle2 className="h-4 w-4" /> Aprovar fundo
+              <CheckCircle2 className="h-4 w-4" /> Aprovar imagem
             </Button>
           </div>
         </div>

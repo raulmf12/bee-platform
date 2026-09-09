@@ -14,7 +14,9 @@ import { composeM01, pickM01BgUrl, type ComposedSlide } from './composeM01';
 import { analyzeTextZone } from './imageZone';
 import { composeM02 } from './composeM02';
 import { composeM03 } from './composeM03';
-import { resolveM02Asset, ensureM01Asset, clearMarcosGenCache, clearM01AssetCache, type DecisionAssetInfo } from './marcosImage';
+import { ensureM01Asset, clearMarcosGenCache, clearM01AssetCache } from './marcosImage';
+import { renderM02Scene, clearM02SceneCache, type M02Place } from './m02Scene';
+import { blobFromBase64, uploadDesignAsset, listMarcosPhotos } from './assetLib';
 
 let _design: Promise<DesignData> | null = null;
 function design(): Promise<DesignData> {
@@ -30,6 +32,7 @@ export function clearItemDecision(postId: string): void {
   _decisions.delete(postId);
   clearMarcosGenCache(postId);
   clearM01AssetCache(postId);
+  clearM02SceneCache(postId);
 }
 
 export async function composeItemSlide(params: {
@@ -70,23 +73,27 @@ export async function composeItemSlide(params: {
       diagram: (dec.full.diagram as { poleA?: string; poleB?: string } | null) ?? null,
     });
   } else if (recipe.manifestacao_id === 'M02') {
-    // Usa a foto real do Marcos; se a peça depender de gerar (C/D sem foto real),
-    // gera UMA vez (cacheada por post) — assim a prévia e o finalize mostram a
-    // mesma imagem. A geração fica na hierarquia (real primeiro; isto é fallback).
-    const resolved = await resolveM02Asset(dec.full as unknown as DecisionAssetInfo, { postId: params.postId, generate: true });
+    // Gera a CENA do Marcos num ambiente real (prancha = estilo, foto real =
+    // likeness) UMA vez por post (cacheada) — prévia e finalize mostram a mesma.
+    const place: M02Place = 'esquerda';
+    const decAsset = dec.full.asset as { url?: string } | undefined;
+    let likeness = decAsset?.url;
+    if (!likeness) {
+      const photos = await listMarcosPhotos().catch(() => []);
+      likeness = photos[0]?.url;
+    }
+    if (!likeness) throw new Error('Sem foto do Marcos pra compor a cena do M02.');
+    const cacheKey = `${params.postId}|${dec.variant}|${place}`;
+    const scene = await renderM02Scene({ variant: dec.variant, place, likenessUrls: [likeness], cacheKey });
+    const mime = scene.dataUrl.slice(5, scene.dataUrl.indexOf(';'));
+    const { publicUrl } = await uploadDesignAsset(blobFromBase64(scene.dataUrl.split(',')[1], mime));
     fabricJson = composeM02({
       recipe, colors: d.colors, spiralUrl: d.spiralUrl,
       text: params.text, subtitle: (dec.full.subtitle as string | null) ?? null,
-      highlight, canvas: { w: 1080, h: 1350 }, asset: resolved.asset,
+      highlight, canvas: { w: 1080, h: 1350 },
+      asset: { url: publicUrl, width: scene.width, height: scene.height, espaco_texto: scene.place, texto_cor: 'claro', origin: 'generated', preComposed: true },
     });
-    // Grava a fonte da imagem na decisão persistida (diversidade + explicabilidade).
-    if (resolved.sourceImageId && resolved.asset) {
-      dec.full.asset = {
-        url: resolved.asset.url, width: resolved.asset.width, height: resolved.asset.height,
-        origin: resolved.asset.origin, espaco_texto: resolved.asset.espaco_texto,
-        source_image_id: resolved.sourceImageId,
-      };
-    }
+    dec.full.asset = { url: publicUrl, width: scene.width, height: scene.height, origin: 'generated', espaco_texto: scene.place, scene: true };
   } else {
     // M01-D/E com fundo de IA: gera uma vez por post (cacheada) se a biblioteca
     // estiver vazia — assim a prévia e o finalize já mostram a imagem gerada.

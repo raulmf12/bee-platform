@@ -104,20 +104,19 @@ export function composeM02(input: ComposeM02Input): ComposedSlide {
   const textFill = isDark ? azul : creme;
   const isDiary = recipe.id === 'M02-D';
 
-  // 1) FOTO full-bleed. Como foto e canvas são 4:5, o "cover" encaixa exato e
-  //    não sobra folga pra mover o rosto -> o texto cairia sobre a cara. Damos
-  //    ZOOM (>cover) pra criar folga e EMPURRAMOS o sujeito pro lado oposto ao
-  //    texto, abrindo o espaço negativo onde o texto vai viver.
-  // Zoom cria folga; push move o sujeito. Lateral = forte (precisa liberar meia
-  // largura). Cima/baixo = suave (o rosto está na metade de cima; empurrar
-  // demais corta a cabeça).
+  // 1) FOTO full-bleed. Como foto e canvas são 4:5, o "cover" encaixa exato.
+  //    Um leve ZOOM (>cover) cria folga pra EMPURRAR o sujeito pro lado oposto
+  //    ao texto e abrir espaço negativo — mas SEM estourar o rosto. O headshot
+  //    do Marcos já é fechado; zoom forte fazia a cara ficar gigante. Então
+  //    zoom mínimo + o painel (véu) escurece o lado do texto pra dar leitura,
+  //    aceitando que o sujeito fique parcialmente atrás do texto.
   const pre = Boolean(asset?.preComposed); // cena da IA já tem espaço negativo
   const ZOOM: Record<Placement, number> = pre
     ? { esquerda: 1, direita: 1, topo: 1, baixo: 1, centro: 1 }
-    : { esquerda: 1.34, direita: 1.34, topo: 1.1, baixo: 1.1, centro: 1.0 };
+    : { esquerda: 1.12, direita: 1.12, topo: 1.04, baixo: 1.04, centro: 1.0 };
   const PUSH: Record<Placement, number> = pre
     ? { esquerda: 0, direita: 0, topo: 0, baixo: 0, centro: 0 }
-    : { esquerda: 0.9, direita: 0.9, topo: 0.5, baixo: 0.5, centro: 0 };
+    : { esquerda: 1.0, direita: 1.0, topo: 0.6, baixo: 0.6, centro: 0 };
   const photoLayer = recipe.layer_stack.find((l) => l.role === 'photo');
   if (photoLayer && asset?.url) {
     const aw = asset.width ?? W, ah = asset.height ?? H;
@@ -205,9 +204,13 @@ export function composeM02(input: ComposeM02Input): ComposedSlide {
   } else {
     // PENSAMENTO em serifada editorial (com a virada em laranja).
     const boxW = Math.round(pctW(zone.w));
+    // Mede num width um pouco MENOR que a caixa real: o layoutText e o Fabric
+    // usam métricas de fonte diferentes; medir folgado evita o Fabric RE-quebrar
+    // uma linha (o que estourava a altura e fazia o subtítulo colidir com a frase).
+    const measureW = Math.round(boxW * 0.94);
     const { fontSize, lines } = layoutText(text, {
-      textWidth: boxW, maxLines: Math.min(5, num(recipe.limites?.max_linhas, 5)),
-      maxFontSize: Math.round(W * 0.07), minFontSize: Math.round(W * 0.04),
+      textWidth: measureW, maxLines: Math.min(5, num(recipe.limites?.max_linhas, 5)),
+      maxFontSize: Math.round(W * 0.066), minFontSize: Math.round(W * 0.038),
       fontFamily: FONT_SERIF, fontWeight: 'bold', balance: true, step: 2,
     });
     if (lines.length > 1 && /^[.,;:!?"')\]…]+$/.test(lines[lines.length - 1].trim())) {
@@ -217,8 +220,10 @@ export function composeM02(input: ComposeM02Input): ComposedSlide {
     const textHeight = lines.length * fontSize * LINE_HEIGHT;
     const left = zone.align === 'center' ? Math.round((W - boxW) / 2) : Math.round(pctW(zone.x));
 
-    // Bloco secundário: tique laranja + frase sans (reserva de altura).
-    const hasSub = Boolean(subtitle && subtitle.trim());
+    // Bloco secundário: tique laranja + frase sans (reserva de altura). Só entra
+    // quando a frase principal é curta o bastante — com 5 linhas não há respiro
+    // e o subtítulo colava na frase (o "texto desconcertado").
+    const hasSub = Boolean(subtitle && subtitle.trim()) && lines.length <= 4;
     const subFs = Math.round(W * 0.02);
     const tickGap = pctH(2.6);
     const subH = hasSub ? tickGap + pctH(1.4) + subFs * 1.3 * 2 : 0;

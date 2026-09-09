@@ -207,14 +207,15 @@ export async function publishOne(postId: string, userId: string): Promise<Publis
     const caption = post.caption ?? '';
     if (!caption.trim()) throw new Error('Post sem caption — adicione antes de publicar');
 
-    // PORTÃO DO FUNDO DE IA: M01-D (Campo) e M01-E (Matéria) usam fundo gerado por
-    // IA e exigem aprovação EXPLÍCITA do fundo (metadata.bg_approved). É o ÚNICO
-    // portão que resta: agendar/stand-by/publicar já implicam a aprovação geral
-    // (o portão geral de image_approved foi removido — barrava posts agendados
-    // que o humano já tinha revisado, causando a perda silenciosa acima).
+    // PORTÃO DA IMAGEM DE IA: M01-D/E (fundo de IA) e TODO M02 (cena gerada por
+    // IA) exigem aprovação EXPLÍCITA (metadata.bg_approved). É o ÚNICO portão que
+    // resta: agendar/stand-by/publicar já implicam a aprovação geral (o portão
+    // geral de image_approved foi removido — barrava posts agendados que o humano
+    // já tinha revisado, causando a perda silenciosa acima).
     const variant = (post.visual_decision as { variant?: string } | null)?.variant;
-    if ((variant === 'M01-D' || variant === 'M01-E') && post.metadata?.bg_approved !== true) {
-      throw new Error('Aprove o fundo de IA antes de publicar (portão do fundo — M01-D/E).');
+    const usesAiImage = variant === 'M01-D' || variant === 'M01-E' || (variant?.startsWith('M02-') ?? false);
+    if (usesAiImage && post.metadata?.bg_approved !== true) {
+      throw new Error('Aprove a imagem de IA antes de publicar (portão de imagem — M01-D/E e M02).');
     }
 
     let result: PublishResult;

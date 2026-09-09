@@ -17,12 +17,23 @@ import { toast } from 'sonner';
 
 interface Content { quote: string; subtitle: string; highlight: string; codigo?: string }
 
+// Onde o Marcos fica e onde sobra a zona MAIS CALMA do cenário pro texto — sem
+// "fundo liso": o ambiente real continua ali, só numa parte de menos detalhe.
 const SCENE_ZONE: Record<string, string> = {
-  esquerda: 'o homem À DIREITA do quadro; toda a METADE ESQUERDA vazia e escura (fundo liso), reservada pra texto',
-  direita: 'o homem À ESQUERDA do quadro; toda a METADE DIREITA vazia e escura (fundo liso), reservada pra texto',
-  baixo: 'o homem na METADE DE CIMA; a parte de BAIXO vazia e escura (fundo liso), reservada pra texto',
-  topo: 'o homem na parte de BAIXO; o TOPO amplo e limpo (parede/céu), reservado pra texto',
-  centro: 'o homem descentralizado; borda ampla e limpa (fundo liso) ao redor, reservada pra texto',
+  esquerda: 'o Marcos À DIREITA do quadro; a METADE ESQUERDA fica com a parte mais CALMA e profunda do cenário (céu, parede, penumbra, profundidade desfocada) — espaço pro texto respirar, mas AINDA é o cenário, nunca um fundo chapado',
+  direita: 'o Marcos À ESQUERDA do quadro; a METADE DIREITA fica com a parte mais CALMA/profunda do cenário pro texto — ambiente real, não fundo liso',
+  baixo: 'o Marcos na METADE DE CIMA; embaixo, o primeiro plano mais calmo do cenário (chão, mesa, superfície) pro texto',
+  topo: 'o Marcos na parte de BAIXO; no TOPO, céu/teto/profundidade do cenário pro texto',
+  centro: 'o Marcos descentralizado; ao redor, o cenário amplo e mais calmo pro texto',
+};
+
+// Ambiente REAL por variação (a alma da cena). O modelo constrói ISTO ao redor
+// do Marcos — é o que faltava (posts saíam "sem cenário").
+const SCENE_ENV: Record<string, string> = {
+  'M02-A': 'um interior real e sóbrio do dia a dia (um escritório com profundidade, uma sala com parede e luz de janela) — presença em primeiro plano, cenário discreto mas REAL e reconhecível. NUNCA fundo preto chapado.',
+  'M02-B': 'um ENCONTRO real: mesa com café, escritório comum vivo e desfocado ao fundo, talvez outra pessoa parcial e desfocada — clima de conversa e escuta, como uma foto de bastidor.',
+  'M02-C': 'um lugar real e COTIDIANO ao ar livre (a beira de uma mata, um campo comum, um caminho de terra, uma varanda com vista simples) — luz natural do dia, nada de paisagem épica de cartão-postal, montanha dramática ou neblina de fantasia. Uma foto que uma pessoa de verdade tiraria num passeio.',
+  'M02-D': 'uma mesa de trabalho / escrivaninha real com caderno aberto, caneta, luz de janela lateral — clima de registro e estudo (diário).',
 };
 
 // Prancha OFICIAL (referência de ESTILO/composição por variação). O Nano Banana
@@ -136,12 +147,14 @@ export function HiveTesteM02() {
         if (!sceneUrl) {
           const tileUrl = PRANCHA_TILE[variant];
           const prompt = [
-            'Gere UMA fotografia editorial de retrato (4:5 vertical). Você recebe referências com DOIS papéis diferentes:',
-            '• A 1ª imagem é a PRANCHA OFICIAL de estilo: copie dela o ENQUADRAMENTO, a COMPOSIÇÃO, a PALETA, a luz e o clima — e principalmente o ESPAÇO NEGATIVO reservado pra texto. IGNORE COMPLETAMENTE o rosto/identidade da pessoa que aparece nela; ela serve só de guia visual.',
-            '• As imagens SEGUINTES são o HOMEM REAL a ser retratado. PRESERVE EXATAMENTE a aparência dele: mesmo rosto, mesmos traços, mesmo cabelo curto castanho, mesma barba curta, mesma meia-idade. NÃO rejuvenesça, NÃO idealize, NÃO troque a roupa por terno/blazer — mantenha camisa clara/social como nas fotos dele.',
-            `Recrie a cena no estilo da prancha, com esta composição: ${SCENE_ZONE[place] ?? SCENE_ZONE.esquerda}.`,
-            'A área reservada deve ficar limpa e uniforme (fundo liso), com espaço de sobra pro texto ser depositado depois.',
-            'Paleta sóbria: off-white, azul profundo, preto e cinza. Atmosfera silenciosa, editorial, sem estética de banco de imagens.',
+            'Gere UMA fotografia editorial (4:5 vertical) do HOMEM REAL DENTRO DE UM CENÁRIO REAL. Você recebe referências com DOIS papéis distintos:',
+            '• A 1ª imagem é a PRANCHA OFICIAL de estilo: copie dela o ENQUADRAMENTO, a COMPOSIÇÃO, a PALETA, a luz e o clima. IGNORE por completo o rosto/identidade de quem aparece nela — é só guia visual de composição e ambiente.',
+            '• As imagens SEGUINTES são o HOMEM REAL. PRESERVE EXATAMENTE a aparência dele: mesmo rosto, traços, cabelo curto castanho, barba curta, meia-idade, camisa clara/social. NÃO rejuvenesça, NÃO idealize, NÃO troque a roupa por terno. ⚠️ IGNORE o FUNDO PRETO DE ESTÚDIO dessas fotos — ele NÃO deve aparecer; use as fotos SÓ pra o rosto/corpo dele.',
+            `CENÁRIO (o mais importante — é o que estava faltando): coloque o Marcos DENTRO deste ambiente: ${SCENE_ENV[variant] ?? SCENE_ENV['M02-A']} O ambiente tem que ser visível e crível, com profundidade — NADA de recorte dele sobre cor chapada.`,
+            `Composição: ${SCENE_ZONE[place] ?? SCENE_ZONE.esquerda}.`,
+            'A zona reservada pro texto é uma parte MAIS CALMA e de menos detalhe do MESMO cenário (céu, parede, profundidade desfocada) — nunca um retângulo de cor lisa.',
+            '⚠️ REALISMO: tem que parecer uma FOTO REAL e comum, que o próprio Marcos tiraria — NADA de épico, cinematográfico, dramático, hiper-nítido ou de fantasia/render 3D. Luz natural comum, imperfeição plausível. Se parecer papel de parede/banco de imagens, está ERRADO.',
+            'Atmosfera silenciosa e editorial. Paleta sóbria (off-white, azul profundo, cinza, terrosos).',
             'NÃO escreva NENHUM texto/letra/número/logo na imagem — só a cena fotográfica.',
           ].join(' ');
           // 1ª ref = prancha (estilo) · demais = Marcos real (identidade). Até 4.

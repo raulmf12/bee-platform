@@ -1,15 +1,14 @@
-// Portão de aprovação do FUNDO DE IA (M01-D Campo / M01-E Matéria).
-// Esses templates usam uma imagem de fundo gerada por IA. Regra: o humano precisa
-// APROVAR (ou regenerar) esse fundo ANTES de mandar o post pra Stand-by/Publicar.
-// O portão é separado da aprovação geral da imagem (image_approved), que hoje é
+// Portão de aprovação da IMAGEM DE IA: M01-D (Campo) e M01-E (Matéria) usam
+// fundo de IA; TODO M02 (Rosto + Pensamento) usa uma CENA gerada por IA. Regra:
+// o humano precisa APROVAR (ou regenerar) essa imagem ANTES de mandar o post pra
+// Stand-by/Publicar. É separado da aprovação geral (image_approved), que hoje é
 // auto-satisfeita ao exportar — este aqui NÃO é auto: exige um ato explícito.
 //
 // Estado: metadata.bg_approved === true. Ausência = pendente (default seguro).
 
-const AI_BG_VARIANTS = new Set(['M01-D', 'M01-E']);
-
 export function variantUsesAiBg(variant?: string | null): boolean {
-  return !!variant && AI_BG_VARIANTS.has(variant);
+  if (!variant) return false;
+  return variant === 'M01-D' || variant === 'M01-E' || variant.startsWith('M02-');
 }
 
 // true quando o post usa fundo de IA e esse fundo ainda NÃO foi aprovado.

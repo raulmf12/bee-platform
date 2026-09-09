@@ -14,7 +14,9 @@ import { composeM01, pickM01BgUrl, type ComposedSlide } from './composeM01';
 import { analyzeTextZone, clearZoneCache } from './imageZone';
 import { composeM02 } from './composeM02';
 import { composeM03 } from './composeM03';
-import { resolveM02Asset, ensureM01Asset, clearM01AssetCache, type DecisionAssetInfo } from './marcosImage';
+import { ensureM01Asset, clearM01AssetCache } from './marcosImage';
+import { renderM02Scene, clearM02SceneCache, type M02Place } from './m02Scene';
+import { blobFromBase64, uploadDesignAsset, listMarcosPhotos } from './assetLib';
 import { renderFabricToDataUrl } from '@/lib/templates/renderPost';
 import { uploadAssetImage } from '@/lib/storage';
 
@@ -70,20 +72,33 @@ export async function generateHiveImage(params: {
       text, highlight, canvas: CANVAS, diagram: decision.diagram ?? null,
     });
   } else if (recipe.manifestacao_id === 'M02') {
-    // Resolve a imagem do Marcos (real ou, no fallback honesto, gera agora).
-    const resolved = await resolveM02Asset(decision as unknown as DecisionAssetInfo, { postId: params.postId, generate: true });
+    // Gera a CENA: Marcos DENTRO de um ambiente real (prancha = estilo, foto real
+    // = likeness). É o que dá o "cenário" — a foto crua era estúdio preto ("paia").
+    const place: M02Place = 'esquerda';
+    let likeness = decision.asset?.url;
+    if (!likeness) {
+      const photos = await listMarcosPhotos().catch(() => []);
+      likeness = photos[0]?.url;
+    }
+    if (!likeness) throw new Error('Sem foto do Marcos pra compor a cena do M02.');
+    const cacheKey = `${params.postId}|${decision.variant}|${place}`;
+    if (params.forceBg) clearM02SceneCache(cacheKey);
+    const scene = await renderM02Scene({ variant: decision.variant, place, likenessUrls: [likeness], cacheKey });
+    // Sobe a cena pro Storage (URL pública -> não incha o fabric com dataUrl).
+    const mime = scene.dataUrl.slice(5, scene.dataUrl.indexOf(';'));
+    const { publicUrl } = await uploadDesignAsset(blobFromBase64(scene.dataUrl.split(',')[1], mime));
+    const asset = {
+      url: publicUrl, width: scene.width, height: scene.height,
+      espaco_texto: scene.place, texto_cor: 'claro', origin: 'generated', preComposed: true,
+    };
     slide = composeM02({
       recipe, colors: design.colors, spiralUrl: design.spiralUrl,
-      text, subtitle: decision.subtitle ?? null, highlight, canvas: CANVAS, asset: resolved.asset,
+      text, subtitle: decision.subtitle ?? null, highlight, canvas: CANVAS, asset,
     });
-    // Grava a fonte da imagem na decisão (diversidade por foto-fonte + explicabilidade).
-    if (resolved.sourceImageId && resolved.asset) {
-      (decision as Record<string, unknown>).asset = {
-        url: resolved.asset.url, width: resolved.asset.width, height: resolved.asset.height,
-        origin: resolved.asset.origin, espaco_texto: resolved.asset.espaco_texto,
-        source_image_id: resolved.sourceImageId,
-      };
-    }
+    (decision as Record<string, unknown>).asset = {
+      url: publicUrl, width: scene.width, height: scene.height,
+      origin: 'generated', espaco_texto: scene.place, scene: true,
+    };
   } else {
     // M01-D (Campo) e M01-E (Matéria) têm fundo de IA: se a biblioteca não tem
     // asset, gera um agora (senão fica placeholder). Demais M01 = sem imagem.
