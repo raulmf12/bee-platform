@@ -21,13 +21,11 @@ import { StatusBadge } from '@/components/shared/StatusBadge';
 import { PlatformBadge } from '@/components/shared/PlatformBadge';
 import { POST_STATUS_LABELS, type AiVariation, type PostStatus } from '@/types';
 import { useAuthStore } from '@/store/authStore';
-import { uploadAssetImage, hashDataUrl } from '@/lib/storage';
+import { uploadAssetImage, hashDataUrl, toJpegDataUrl } from '@/lib/storage';
 import { edge } from '@/lib/edge';
 import { aiApi, almaApi, severidadeOf } from '@/lib/api';
 import { isoToLocalInput, localInputToIso, nowLocalInput } from '@/lib/schedule';
 import { extractSlotText } from '@/lib/templates/extract';
-import { renderFabricToDataUrl } from '@/lib/templates/renderPost';
-import { CANVAS_PRESETS } from '@/components/editor/canvas-studio/useEditor';
 import { generateHiveImage } from '@/lib/hive/runVisual';
 import { bgGatePending } from '@/lib/hive/bgGate';
 import { PostCoach } from '@/components/ai/PostCoach';
@@ -84,6 +82,10 @@ export function PostEditor() {
   const canvasLoadedAt = useRef(0);
   // Garante o auto-render-ao-abrir só UMA vez por post (evita loop no effect).
   const autoRenderedRef = useRef<string | null>(null);
+  // Nº de objetos do canvas AO VIVO (atualizado no onChange, pareado com o
+  // imageDataUrl). Serve de guarda anti-branco: se a hidratação falhou, o canvas
+  // vem com 0 objetos e NÃO deixamos exportar/subir uma imagem em branco.
+  const liveObjsRef = useRef(-1);
 
   useEffect(() => {
     void load();
@@ -121,21 +123,21 @@ export function PostEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageDataUrl, fabricJson, canvasDirty]);
 
-  // AUTO-RENDER AO ABRIR: post de imagem SEM render sobe a imagem sozinho assim
-  // que o fabric está disponível — basta abrir o post (resolve os agendados "sem
-  // imagem" sem clique). Usa o renderizador offscreen, então NÃO depende do canvas
-  // visível hidratar. Uma vez por post; pulado se o fundo de IA está pendente.
+  // AUTO-RENDER AO ABRIR: post de imagem SEM render sobe a imagem sozinho quando
+  // o canvas AO VIVO já produziu um frame (imageDataUrl) — basta abrir o post.
+  // A guarda anti-branco do exportImage impede subir vazio se a hidratação falhar.
+  // Uma vez por post; pulado se o fundo de IA está pendente.
   useEffect(() => {
     if (!post || post.format === ('video' as typeof post.format)) return;
     if (post.rendered_slides?.slide1) return;      // já tem imagem
     if (bgGatePending(post)) return;               // precisa aprovar a imagem de IA antes
-    const fj = (fabricJson ?? post.carousel_fabric_json?.[0]) as { objects?: unknown[] } | undefined;
-    if (!fj || (fj.objects?.length ?? 0) === 0) return; // sem arte pra renderizar
+    if (!imageDataUrl) return;                      // canvas ainda não renderizou
+    if (liveObjsRef.current <= 0) return;           // canvas em branco (hidratação falhou)
     if (autoRenderedRef.current === post.id) return;
     autoRenderedRef.current = post.id;
     void exportImage({ silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fabricJson, post?.id]);
+  }, [imageDataUrl, post?.id]);
 
   if (!post) {
     return (
@@ -277,12 +279,11 @@ export function PostEditor() {
     }
   }
 
-  // Renderiza o canvas e sobe pro Storage no formato certo da plataforma
-  // (Instagram = JPEG, LinkedIn = PNG). Chamado AUTOMATICAMENTE ao salvar, ao
-  // agendar, ao abrir (se faltar imagem) e em Stand-by/Publicar — não existe mais
-  // botão "Exportar". Dedup por hash: se o canvas não mudou, reusa a URL já salva.
-  // silent=true (auto-render) não mostra toasts de erro — usado nos gatilhos
-  // automáticos pra não spammar durante a edição.
+  // Renderiza o canvas AO VIVO e sobe pro Storage no formato certo (Instagram =
+  // JPEG, LinkedIn = PNG). Chamado AUTOMATICAMENTE ao salvar, agendar, abrir (se
+  // faltar imagem) e em Stand-by/Publicar. Dedup por hash. Guarda anti-branco:
+  // não sobe render vazio quando a hidratação falha. silent=true (auto) não
+  // mostra toasts de erro pra não spammar durante a edição.
   async function exportImage(opts?: { silent?: boolean }): Promise<string | null> {
     const silent = opts?.silent ?? false;
     if (!post) return null;
@@ -293,33 +294,29 @@ export function PostEditor() {
       if (!silent) toast.error('Aprove a imagem de IA antes (barra no topo do editor).');
       return null;
     }
-    if (!currentUser) return null;
-    // Renderiza pelo RENDERIZADOR OFFSCREEN (mesmo da Hive/wizard: preload de
-    // fontes/imagens), a partir do fabric salvo/atual — NÃO do canvas visível.
-    // Assim renderiza certo mesmo quando o canvas do editor abre em branco
-    // (hidratação falha às vezes no dev/StrictMode) e nunca exporta em branco.
-    const fj = (fabricJson ?? post.carousel_fabric_json?.[0]) as { objects?: unknown[] } | undefined;
-    const nObjs = fj?.objects?.length ?? 0;
-    if (!fj || nObjs === 0) {
-      if (!silent) toast.error('Canvas vazio — gere a imagem com o botão Hive antes.');
+    if (!imageDataUrl || !currentUser) {
+      if (!silent) toast.error('Renderiza o canvas antes (edita qualquer elemento).');
       return null;
     }
-    const preset = derivePreset(post.platform, post.format, post.metadata?.canvas_size as string | undefined, !!post.visual_decision);
-    const dims = CANVAS_PRESETS[preset] ?? { width: 1080, height: 1350 };
-    const isIg = post.platform === 'instagram';
-    const dataUrl = await renderFabricToDataUrl(fj, { width: dims.width, height: dims.height, format: isIg ? 'jpeg' : 'png' });
-    if (!dataUrl) {
-      if (!silent) toast.error('Falha ao renderizar a imagem.');
+    // GUARDA ANTI-BRANCO: se o canvas AO VIVO não tem objetos, a hidratação
+    // falhou (canvas em branco) — NÃO sobe um render vazio por cima. O post que
+    // TEM fabric salvo com objetos mas o canvas veio vazio = hidratação quebrada:
+    // pede refresh em vez de destruir a arte com um branco.
+    const storedObjs = (post.carousel_fabric_json?.[0] as { objects?: unknown[] } | undefined)?.objects?.length ?? 0;
+    if (storedObjs > 0 && liveObjsRef.current === 0) {
+      if (!silent) toast.error('O canvas não carregou a arte (tela em branco). Dá um refresh e tente de novo.');
       return null;
     }
-    const hash = await hashDataUrl(dataUrl);
+    const hash = await hashDataUrl(imageDataUrl);
     if (hash === lastUploadedHash.current && post.rendered_slides?.slide1) {
       return post.rendered_slides.slide1; // sem mudanças desde a última exportação
     }
+    const isIg = post.platform === 'instagram';
+    const uploadUrl = isIg ? await toJpegDataUrl(imageDataUrl) : imageDataUrl;
     const { publicUrl } = await uploadAssetImage({
       userId: currentUser.id,
       assetId: post.id,
-      dataUrl,
+      dataUrl: uploadUrl,
       filename: isIg ? 'render.jpg' : 'render.png',
     });
     lastUploadedHash.current = hash;
@@ -675,6 +672,9 @@ export function PostEditor() {
               onChange={({ fabricJson: fj, dataUrl }) => {
                 setFabricJson(fj);
                 setImageDataUrl(dataUrl);
+                // Conta os objetos do canvas AO VIVO (pareado com o dataUrl) —
+                // guarda anti-branco no exportImage.
+                liveObjsRef.current = (fj as { objects?: unknown[] }).objects?.length ?? 0;
                 // Ignora as mudanças da hidratação inicial (~primeiros 2s): não
                 // são edição manual do humano. Sem isso, só abrir o editor já
                 // contava como edição e o contador nascia > 0.

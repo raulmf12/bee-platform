@@ -439,8 +439,15 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
     const c = fabricRef.current;
     if (!c) return;
     mutatingRef.current = true;
+    const expected = (json as { objects?: unknown[] }).objects?.length ?? 0;
     try {
       await c.loadFromJSON(json);
+      // HARDENING anti-tela-branca: às vezes o loadFromJSON resolve com 0 objetos
+      // (hidratação intermitente, mais comum no dev/StrictMode) — tenta 1x de novo.
+      if (expected > 0 && c.getObjects().length === 0) {
+        console.warn('[useEditor] loadFromJSON carregou 0 objetos — retry');
+        await c.loadFromJSON(json);
+      }
     } catch (e) {
       // Enliven pode falhar (ex: uma imagem não carrega). NÃO deixa o canvas
       // em branco: os objetos que carregaram já estão no canvas — renderiza o
@@ -448,6 +455,9 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
       console.warn('[useEditor] loadFromJSON parcial', e);
     } finally {
       c.renderAll();
+      // 2º render no próximo frame: imagens/fontes que chegaram tarde (a espiral
+      // é cross-origin) às vezes não entram no 1º renderAll.
+      requestAnimationFrame(() => { try { fabricRef.current?.renderAll(); } catch { /* noop */ } });
       mutatingRef.current = false;
     }
     pushHistory();
