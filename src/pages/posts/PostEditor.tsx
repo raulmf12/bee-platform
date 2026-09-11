@@ -412,12 +412,30 @@ export function PostEditor() {
     if (!frase) { toast.error('Sem frase pra compor a imagem.'); return; }
     setHiveBusy(true);
     try {
+      // Se o post JÁ tem uma decisão visual, RE-RENDERIZA o MESMO template (via
+      // seed) — mesma variante, mesmo destaque, mesmo texto — só num fabric novo
+      // e limpo (composeM01 6.0.0) que carrega/renderiza certo. É como um post
+      // com o fabric salvo corrompido (editor 6.9.1 não recarrega) volta ao ar
+      // no mesmo template. Sem decisão (1ª vez) → deixa a Hive decidir.
+      const vd = post.visual_decision as { variant?: string; highlight?: HiveSeed['highlight']; subtitle?: string | null } | undefined;
+      const seed: HiveSeed | undefined = vd?.variant ? {
+        variant: vd.variant,
+        manifestation: vd.variant.split('-')[0],
+        highlight: vd.highlight ?? null,
+        subtitle: vd.subtitle ?? null,
+        poles: null,
+        image_scene_hint: '',
+        human_presence_adds_meaning: vd.variant.startsWith('M02-'),
+        mode_reason: '',
+        variant_reason: 're-render mesmo template',
+      } : undefined;
       const { slide, dataUrl, publicUrl, decision } = await generateHiveImage({
         userId: currentUser.id,
         postId: post.id,
         text: frase,
         platform: post.platform as 'linkedin' | 'instagram',
         editorialSlug: post.metadata?.editorial_slug as string | undefined,
+        seed,
       });
       await update(post.id, {
         carousel_fabric_json: [slide],
@@ -556,7 +574,7 @@ export function PostEditor() {
             </SelectContent>
           </Select>
           {post.format !== ('video' as typeof post.format) && (
-            <Button variant="outline" size="sm" onClick={() => void runHive()} disabled={hiveBusy} title="Gerar a imagem com a Hive (decide M01 frase ou M02 rosto + pensamento)">
+            <Button variant="outline" size="sm" onClick={() => void runHive()} disabled={hiveBusy} title="Re-renderizar a imagem no MESMO template (mantém variante, texto e destaque). Se o post ainda não tem decisão, a Hive decide.">
               {hiveBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
               Hive
             </Button>
