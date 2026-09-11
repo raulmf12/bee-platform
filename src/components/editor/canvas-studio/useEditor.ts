@@ -15,8 +15,29 @@ const HISTORY_LIMIT = 40;
 // canvas.toJSON() NAO serializa props custom: `name` (identidade do slot) e
 // `beeSlot` (regras) somem. Isso apagava o slot em todo save/undo. Sempre
 // serialize por aqui.
+//
+// BUG CRÍTICO corrigido: o Fabric v6 serializa `styles` de texto num ARRAY plano
+// [{start,end,style}]. Esse formato (a) às vezes NÃO recarrega -> canvas branco,
+// e (b) DROPA o espaço na fronteira do destaque ao renderizar ("de casa perde"
+// virou "de casaperde" num post publicado). O composeM01 usa o formato NESTED
+// {linha:{char:{}}} — que renderiza certo E recarrega. Aqui preservamos o nested
+// da instância VIVA no lugar do array plano, pra editar/salvar não corromper.
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
 function serialize(c: fabric.Canvas): object {
-  return c.toObject(FABRIC_CUSTOM_PROPS);
+  const json = c.toObject(FABRIC_CUSTOM_PROPS) as { objects?: Array<Record<string, unknown>> };
+  const objs = json.objects ?? [];
+  const live = c.getObjects();
+  for (let i = 0; i < objs.length && i < live.length; i++) {
+    const liveStyles = (live[i] as unknown as { styles?: unknown }).styles;
+    // Só substitui quando a instância viva tem styles NESTED (objeto). Se já for
+    // array (texto carregado de um fabric antigo plano), deixa como está.
+    if (isPlainObject(liveStyles) && Object.keys(liveStyles).length > 0) {
+      objs[i].styles = JSON.parse(JSON.stringify(liveStyles));
+    }
+  }
+  return json;
 }
 
 export interface CanvasSize {
