@@ -21,11 +21,13 @@ import { StatusBadge } from '@/components/shared/StatusBadge';
 import { PlatformBadge } from '@/components/shared/PlatformBadge';
 import { POST_STATUS_LABELS, type AiVariation, type PostStatus } from '@/types';
 import { useAuthStore } from '@/store/authStore';
-import { uploadAssetImage, hashDataUrl, toJpegDataUrl } from '@/lib/storage';
+import { uploadAssetImage, hashDataUrl } from '@/lib/storage';
 import { edge } from '@/lib/edge';
 import { aiApi, almaApi, severidadeOf } from '@/lib/api';
 import { isoToLocalInput, localInputToIso, nowLocalInput } from '@/lib/schedule';
 import { extractSlotText } from '@/lib/templates/extract';
+import { renderFabricToDataUrl } from '@/lib/templates/renderPost';
+import { CANVAS_PRESETS } from '@/components/editor/canvas-studio/useEditor';
 import { generateHiveImage } from '@/lib/hive/runVisual';
 import { bgGatePending } from '@/lib/hive/bgGate';
 import { PostCoach } from '@/components/ai/PostCoach';
@@ -120,18 +122,20 @@ export function PostEditor() {
   }, [imageDataUrl, fabricJson, canvasDirty]);
 
   // AUTO-RENDER AO ABRIR: post de imagem SEM render sobe a imagem sozinho assim
-  // que o canvas hidrata — basta abrir o post (resolve os agendados "sem imagem"
-  // sem nenhum clique). Uma vez por post; pulado se o fundo de IA está pendente.
+  // que o fabric está disponível — basta abrir o post (resolve os agendados "sem
+  // imagem" sem clique). Usa o renderizador offscreen, então NÃO depende do canvas
+  // visível hidratar. Uma vez por post; pulado se o fundo de IA está pendente.
   useEffect(() => {
     if (!post || post.format === ('video' as typeof post.format)) return;
-    if (!imageDataUrl) return;                     // canvas ainda não hidratou
     if (post.rendered_slides?.slide1) return;      // já tem imagem
     if (bgGatePending(post)) return;               // precisa aprovar a imagem de IA antes
+    const fj = (fabricJson ?? post.carousel_fabric_json?.[0]) as { objects?: unknown[] } | undefined;
+    if (!fj || (fj.objects?.length ?? 0) === 0) return; // sem arte pra renderizar
     if (autoRenderedRef.current === post.id) return;
     autoRenderedRef.current = post.id;
     void exportImage({ silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageDataUrl, post?.id]);
+  }, [fabricJson, post?.id]);
 
   if (!post) {
     return (
@@ -289,20 +293,33 @@ export function PostEditor() {
       if (!silent) toast.error('Aprove a imagem de IA antes (barra no topo do editor).');
       return null;
     }
-    if (!imageDataUrl || !currentUser) {
-      if (!silent) toast.error('Renderiza o canvas antes (edita qualquer elemento).');
+    if (!currentUser) return null;
+    // Renderiza pelo RENDERIZADOR OFFSCREEN (mesmo da Hive/wizard: preload de
+    // fontes/imagens), a partir do fabric salvo/atual — NÃO do canvas visível.
+    // Assim renderiza certo mesmo quando o canvas do editor abre em branco
+    // (hidratação falha às vezes no dev/StrictMode) e nunca exporta em branco.
+    const fj = (fabricJson ?? post.carousel_fabric_json?.[0]) as { objects?: unknown[] } | undefined;
+    const nObjs = fj?.objects?.length ?? 0;
+    if (!fj || nObjs === 0) {
+      if (!silent) toast.error('Canvas vazio — gere a imagem com o botão Hive antes.');
       return null;
     }
-    const hash = await hashDataUrl(imageDataUrl);
+    const preset = derivePreset(post.platform, post.format, post.metadata?.canvas_size as string | undefined, !!post.visual_decision);
+    const dims = CANVAS_PRESETS[preset] ?? { width: 1080, height: 1350 };
+    const isIg = post.platform === 'instagram';
+    const dataUrl = await renderFabricToDataUrl(fj, { width: dims.width, height: dims.height, format: isIg ? 'jpeg' : 'png' });
+    if (!dataUrl) {
+      if (!silent) toast.error('Falha ao renderizar a imagem.');
+      return null;
+    }
+    const hash = await hashDataUrl(dataUrl);
     if (hash === lastUploadedHash.current && post.rendered_slides?.slide1) {
       return post.rendered_slides.slide1; // sem mudanças desde a última exportação
     }
-    const isIg = post.platform === 'instagram';
-    const uploadUrl = isIg ? await toJpegDataUrl(imageDataUrl) : imageDataUrl;
     const { publicUrl } = await uploadAssetImage({
       userId: currentUser.id,
       assetId: post.id,
-      dataUrl: uploadUrl,
+      dataUrl,
       filename: isIg ? 'render.jpg' : 'render.png',
     });
     lastUploadedHash.current = hash;
