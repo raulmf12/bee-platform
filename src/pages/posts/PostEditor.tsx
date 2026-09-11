@@ -80,6 +80,8 @@ export function PostEditor() {
   // inicial (não é edição do humano) — usamos isso pra IGNORAR essas mudanças
   // e não inflar manual_edits só por abrir o editor.
   const canvasLoadedAt = useRef(0);
+  // Garante o auto-render-ao-abrir só UMA vez por post (evita loop no effect).
+  const autoRenderedRef = useRef<string | null>(null);
 
   useEffect(() => {
     void load();
@@ -116,6 +118,20 @@ export function PostEditor() {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageDataUrl, fabricJson, canvasDirty]);
+
+  // AUTO-RENDER AO ABRIR: post de imagem SEM render sobe a imagem sozinho assim
+  // que o canvas hidrata — basta abrir o post (resolve os agendados "sem imagem"
+  // sem nenhum clique). Uma vez por post; pulado se o fundo de IA está pendente.
+  useEffect(() => {
+    if (!post || post.format === ('video' as typeof post.format)) return;
+    if (!imageDataUrl) return;                     // canvas ainda não hidratou
+    if (post.rendered_slides?.slide1) return;      // já tem imagem
+    if (bgGatePending(post)) return;               // precisa aprovar a imagem de IA antes
+    if (autoRenderedRef.current === post.id) return;
+    autoRenderedRef.current = post.id;
+    void exportImage({ silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imageDataUrl, post?.id]);
 
   if (!post) {
     return (
@@ -164,6 +180,10 @@ export function PostEditor() {
         manual_edits: (post.manual_edits ?? 0) + 1,
       });
       setCanvasDirty(false);
+      // AUTO-RENDER: todo post de imagem renderiza sozinho ao salvar (dedup por
+      // hash; silencioso; bloqueado só se o fundo de IA estiver pendente). Garante
+      // que rendered_slides fica sempre em dia — sem post agendado "sem imagem".
+      if (post.format !== ('video' as typeof post.format)) await exportImage({ silent: true });
     } catch (e) {
       console.error(e);
     }
@@ -174,6 +194,9 @@ export function PostEditor() {
     try {
       if (textDirty) await saveText();
       if (canvasDirty) await saveCanvas();
+      // Garante a renderização mesmo quando nada estava "dirty" (ex: post antigo
+      // sem imagem aberto e salvo).
+      if (post && post.format !== ('video' as typeof post.format)) await exportImage({ silent: true });
       toast.success('Salvo');
     } finally {
       setSaving(false);
@@ -251,21 +274,23 @@ export function PostEditor() {
   }
 
   // Renderiza o canvas e sobe pro Storage no formato certo da plataforma
-  // (Instagram = JPEG, LinkedIn = PNG). Chamado AUTOMATICAMENTE ao clicar em
-  // Stand-by ou Publicar — não existe mais botão "Exportar". Dedup por hash:
-  // se o canvas não mudou desde a última exportação, reusa a URL já salva.
-  // Retorna a URL pública ou null se falhou.
-  async function exportImage(): Promise<string | null> {
+  // (Instagram = JPEG, LinkedIn = PNG). Chamado AUTOMATICAMENTE ao salvar, ao
+  // agendar, ao abrir (se faltar imagem) e em Stand-by/Publicar — não existe mais
+  // botão "Exportar". Dedup por hash: se o canvas não mudou, reusa a URL já salva.
+  // silent=true (auto-render) não mostra toasts de erro — usado nos gatilhos
+  // automáticos pra não spammar durante a edição.
+  async function exportImage(opts?: { silent?: boolean }): Promise<string | null> {
+    const silent = opts?.silent ?? false;
     if (!post) return null;
     if (post.format === ('video' as typeof post.format)) return post.rendered_slides?.slide1 ?? null;
-    // PORTÃO DO FUNDO DE IA (M01-D/E): não deixa exportar/publicar até o fundo
-    // gerado por IA ser aprovado explicitamente. Ver bgGate.ts.
+    // PORTÃO DO FUNDO DE IA (M01-D/E, M02): não deixa exportar/publicar até a
+    // imagem gerada por IA ser aprovada explicitamente. Ver bgGate.ts.
     if (bgGatePending(post)) {
-      toast.error('Aprove a imagem de IA antes (barra no topo do editor).');
+      if (!silent) toast.error('Aprove a imagem de IA antes (barra no topo do editor).');
       return null;
     }
     if (!imageDataUrl || !currentUser) {
-      toast.error('Renderiza o canvas antes (edita qualquer elemento).');
+      if (!silent) toast.error('Renderiza o canvas antes (edita qualquer elemento).');
       return null;
     }
     const hash = await hashDataUrl(imageDataUrl);

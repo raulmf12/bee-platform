@@ -239,7 +239,7 @@ export async function publishOne(postId: string, userId: string): Promise<Publis
         result = await publishInstagramVideo(settings.instagram_access_token, settings.instagram_business_account_id, videoUrl, caption);
       } else {
         const imageUrl = post.rendered_slides?.slide1;
-        if (!imageUrl) throw new Error('Imagem nao renderizada. Clica em "Exportar" no editor antes.');
+        if (!imageUrl) throw new Error('Imagem não renderizada. Abra o post no editor e clique em Stand-by (renderiza automático) antes de agendar/publicar.');
         result = await publishInstagramImage(settings.instagram_access_token, settings.instagram_business_account_id, imageUrl, caption);
       }
     } else {
