@@ -139,6 +139,15 @@ export function PostEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [title, briefing, caption, textDirty]);
 
+  // AVISO ANTES DE SAIR/RECARREGAR com edição pendente — evita perder a legenda/
+  // texto que ainda não foi auto-salvo (ex: um Cmd+Shift+R no meio da edição).
+  useEffect(() => {
+    if (!textDirty && !canvasDirty) return;
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [textDirty, canvasDirty]);
+
   // Auto-save de canvas (3s; dedup por hash)
   useEffect(() => {
     if (!canvasDirty || !post || !imageDataUrl) return;
@@ -578,6 +587,7 @@ export function PostEditor() {
               setTitle(e.target.value);
               setTextDirty(true);
             }}
+            onBlur={() => { if (textDirty) void saveText(); }}
             placeholder="Titulo do post"
             className="h-8 max-w-md border-transparent bg-transparent text-base font-semibold focus-visible:border-input"
           />
@@ -752,6 +762,7 @@ export function PostEditor() {
                     setBriefing(e.target.value);
                     setTextDirty(true);
                   }}
+                  onBlur={() => { if (textDirty) void saveText(); }}
                   className="text-xs"
                 />
               </div>
@@ -767,6 +778,7 @@ export function PostEditor() {
                     setCaption(e.target.value);
                     setTextDirty(true);
                   }}
+                  onBlur={() => { if (textDirty) void saveText(); }}
                   className="text-xs leading-relaxed"
                 />
                 <p className="text-[10px] text-muted-foreground">{caption.length} chars</p>
