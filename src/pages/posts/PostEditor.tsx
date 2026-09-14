@@ -86,6 +86,11 @@ export function PostEditor() {
   // imageDataUrl). Serve de guarda anti-branco: se a hidratação falhou, o canvas
   // vem com 0 objetos e NÃO deixamos exportar/subir uma imagem em branco.
   const liveObjsRef = useRef(-1);
+  // Assinatura do fabric já hidratado + chave que força o CanvasStudio a
+  // remontar quando dados FRESCOS do banco chegam (ex: a peça da Hive foi
+  // persistida DEPOIS que o editor abriu com uma cópia velha do store).
+  const hydratedFabricRef = useRef<string | null>(null);
+  const [canvasKey, setCanvasKey] = useState(0);
 
   useEffect(() => {
     void load();
@@ -97,6 +102,7 @@ export function PostEditor() {
     setBriefing(post.briefing ?? '');
     setCaption(post.caption ?? '');
     setFabricJson(post.carousel_fabric_json?.[0]);
+    hydratedFabricRef.current = JSON.stringify(post.carousel_fabric_json?.[0] ?? null);
     setTextDirty(false);
     setCanvasDirty(false);
     lastUploadedHash.current = null;
@@ -106,6 +112,24 @@ export function PostEditor() {
     if (post.id) void aiApi.variationForPost(post.id).then(setVariation).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [post?.id]);
+
+  // RE-HIDRATA quando o fabric do post muda no store (dados frescos do banco,
+  // ex: após finalize/refresh) e o usuário NÃO tem edições pendentes — corrige o
+  // editor mostrando uma versão velha (creme) enquanto o banco tem a certa (navy).
+  useEffect(() => {
+    if (!post) return;
+    if (canvasDirty || textDirty) return; // nunca sobrescreve edição não salva
+    const sig = JSON.stringify(post.carousel_fabric_json?.[0] ?? null);
+    if (hydratedFabricRef.current === null || sig === hydratedFabricRef.current) return;
+    hydratedFabricRef.current = sig;
+    setFabricJson(post.carousel_fabric_json?.[0]);
+    setImageDataUrl(undefined);
+    liveObjsRef.current = -1;
+    lastUploadedHash.current = null;
+    autoRenderedRef.current = null;
+    setCanvasKey((k) => k + 1); // força o CanvasStudio a remontar e re-hidratar
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [post?.carousel_fabric_json, post?.id]);
 
   // Auto-save de texto (1.5s)
   useEffect(() => {
@@ -678,7 +702,7 @@ export function PostEditor() {
             </div>
           ) : (
             <CanvasStudio
-              key={post.id}
+              key={`${post.id}:${canvasKey}`}
               embedded
               initialPreset={derivePreset(post.platform, post.format, post.metadata?.canvas_size as string | undefined, !!post.visual_decision)}
               // Nunca passa undefined na montagem: o state `fabricJson` só é
