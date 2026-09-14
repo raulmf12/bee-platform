@@ -63,10 +63,12 @@ const QA_PASS = 70;
 const QA_MAX_RETRIES = 1;   // 1 nova tentativa (2 gerações no total, no pior caso)
 const PLATFORMS: Platform[] = ['linkedin', 'instagram'];
 // Rotação forçada de template no Instagram — sem isto a IA ia SEMPRE pro M01-B
-// (a voz da Bee é provocativa → tudo vira "Tensão"). Trio tipográfico confiável
-// (sem imagem de IA): A Essencial (creme), C Editorial, B Tensão (navy). D/E/M02
-// (com imagem) entram depois. LinkedIn é travado em M01-A no motor, não usa isto.
-const IG_VARIANT_ROTATION = ['M01-A', 'M01-C', 'M01-B'];
+// (a voz da Bee é provocativa → tudo vira "Tensão"). Cobre os 6 looks:
+//   M01-A Essencial (creme) · M01-D Campo (foto de IA) · M01-C Editorial ·
+//   M02-A Presença (Marcos + cena) · M01-B Tensão (navy) · M01-E Matéria (textura)
+// Intercala as PESADAS (D/M02, com imagem de IA → passam pelo portão de aprovação
+// de imagem) entre as tipográficas. LinkedIn é travado em M01-A no motor.
+const IG_VARIANT_ROTATION = ['M01-A', 'M01-D', 'M01-C', 'M02-A', 'M01-B', 'M01-E'];
 
 // Um post de imagem dentro do lote gerado. Cada um é independente e revisado
 // individualmente (título e legenda separados).
