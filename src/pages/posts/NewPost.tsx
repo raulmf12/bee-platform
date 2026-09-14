@@ -1129,6 +1129,9 @@ export function NewPost() {
     } catch (e) {
       console.error(e);
     }
+    // Atualiza o STORE com o que acabou de persistir (a Hive navy), pra o editor
+    // NÃO abrir com a cópia velha (creme) do store. Sem isso ficava stale.
+    await loadPosts().catch(() => {});
     navigate(`/posts/${item.post.id}`, { state: { from: `/posts/novo?retomar=1&post=${item.post.id}` } });
   }
 
