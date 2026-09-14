@@ -62,6 +62,11 @@ const BATCH_DEFAULT = 3;
 const QA_PASS = 70;
 const QA_MAX_RETRIES = 1;   // 1 nova tentativa (2 gerações no total, no pior caso)
 const PLATFORMS: Platform[] = ['linkedin', 'instagram'];
+// Rotação forçada de template no Instagram — sem isto a IA ia SEMPRE pro M01-B
+// (a voz da Bee é provocativa → tudo vira "Tensão"). Trio tipográfico confiável
+// (sem imagem de IA): A Essencial (creme), C Editorial, B Tensão (navy). D/E/M02
+// (com imagem) entram depois. LinkedIn é travado em M01-A no motor, não usa isto.
+const IG_VARIANT_ROTATION = ['M01-A', 'M01-C', 'M01-B'];
 
 // Um post de imagem dentro do lote gerado. Cada um é independente e revisado
 // individualmente (título e legenda separados).
@@ -479,6 +484,7 @@ export function NewPost() {
     pick: { editorial: BeeEditorial; platform: Platform; targetAvatar: TargetAvatar },
     idx: number,
     quantity: number,
+    forceVariant?: string,
   ) {
     type Cand = { v: any; qa: QaResult | null; qaScore: number };
     let best: Cand | null = null;
@@ -500,6 +506,8 @@ export function NewPost() {
         briefing,
         // Reaproveitar: adapta um post da OUTRA plataforma (só no post único).
         reference_post_id: (batchQuantity === 1 && referencePost) ? referencePost.id : undefined,
+        // Rotação forçada de template (só IG; LinkedIn é travado M01-A no motor).
+        force_variant: pick.platform === 'instagram' ? forceVariant : undefined,
       });
       const v = res.variations?.[0] ?? res;
 
@@ -561,8 +569,13 @@ export function NewPost() {
         const pick = picks[i];
         const sizeId: BeeQuoteSize = pick.platform === 'instagram' ? 'square' : 'portrait';
 
+        // Rotação forçada de template (só IG): continua o rodízio a partir do
+        // total de posts existentes, avançando por post do lote -> variedade.
+        const forceVariant = pick.platform === 'instagram'
+          ? IG_VARIANT_ROTATION[(baseGlobal + i) % IG_VARIANT_ROTATION.length]
+          : undefined;
         // gera + autochecagem interna (pode regenerar)
-        const fresh = await generateOneWithQa(pick, i, quantity);
+        const fresh = await generateOneWithQa(pick, i, quantity, forceVariant);
 
         setGenLabel(`Montando o post ${i + 1} de ${quantity}...`);
         setGenProgress(Math.round(((i + 0.85) / quantity) * 100));

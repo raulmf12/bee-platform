@@ -49,6 +49,9 @@ interface GenerateInput {
   // Adaptar de post existente — IA usa quote+caption do referenciado como base
   reference_post_id?: string;
   target_platform?: 'linkedin' | 'instagram';
+  // Rotação forçada de template (Instagram): template-alvo deste post, definido
+  // pelo cliente pra garantir variedade. Quando setado, é OBRIGATÓRIO.
+  force_variant?: string;
   // Quantas variacoes gerar (1..5). Default 1 pra nao quebrar quem ja chamava
   // (o editorial-line-tick).
   //
@@ -813,6 +816,11 @@ function buildSystemPrompt(
   // TEMPLATES VISUAIS (so Instagram) — a FORMA pensada junto com o conteudo.
   // Vem colado nas REGRAS DE SAIDA de proposito: e a ultima decisao antes de escrever.
   for (const l of templateSectionLines(templates)) lines.push(l);
+  // ROTAÇÃO FORÇADA: o cliente já escolheu o template deste post (pra garantir
+  // variedade no feed). Não é escolha livre — obedeça.
+  if (templates && input.force_variant) {
+    lines.push(`⛔⛔ TEMPLATE OBRIGATÓRIO NESTE POST: "${input.force_variant}". Ignore a escolha livre — use EXATAMENTE este. Escreva a frase da imagem MOLDADA pra ele (respeite o max_chars_frase e o destaque_permitido dele, listados acima). No JSON, "template_id" DEVE ser "${input.force_variant}". Isto é uma rotação pra dar variedade — não questione, apenas escreva um ótimo texto que sirva a este template.`);
+  }
 
   // REGRAS DE SAIDA
   lines.push('=== REGRAS DE SAIDA ===');
@@ -1200,6 +1208,30 @@ Deno.serve(async (req: Request) => {
     const wanted = variationCount(input);
     const { text, usage, model_used } = await callGemini(apiKey, sys, usr, outputBudget(wanted));
     const parsed = parseGeminiJson(text, wanted);
+
+    // ROTAÇÃO FORÇADA: garante o template-alvo no seed mesmo se o modelo teimar
+    // em outro (a voz da Bee puxa tudo pra M01-B). Mantém destaque/subtítulo do
+    // modelo, respeitando as regras da variante forçada.
+    if (input.force_variant && templates) {
+      const fv = input.force_variant;
+      const vdef = templates.variants.find((v) => v.id === fv);
+      const destaqueOk = Boolean((vdef?.limites ?? {}).destaque_permitido);
+      const mani = fv.split('-')[0];
+      for (const v of parsed.variations) {
+        const s = v.hive_seed;
+        v.hive_seed = {
+          variant: fv,
+          manifestation: mani,
+          highlight: destaqueOk ? (s?.highlight ?? null) : null,
+          subtitle: s?.subtitle ?? null,
+          poles: s?.poles ?? null,
+          image_scene_hint: s?.image_scene_hint ?? '',
+          human_presence_adds_meaning: mani === 'M02',
+          mode_reason: s?.mode_reason ?? '',
+          variant_reason: `rotação forçada (${fv})`,
+        };
+      }
+    }
 
     // Metodologia viva: marca o material usado (incrementa uso + last_used_at)
     // pra rotacionar nas proximas geracoes. Fire-and-forget — nao trava a resposta.

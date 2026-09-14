@@ -21,6 +21,9 @@ export interface GenerateContentInput {
   quote_max_chars?: number;
   reference_post_id?: string;
   target_platform?: 'linkedin' | 'instagram';
+  // Rotação forçada de template (só Instagram): o cliente manda o template-alvo
+  // deste post pra garantir variedade — o generate-content escreve moldado pra ele.
+  force_variant?: string;
   // Quantas variacoes gerar numa unica chamada (1..5).
   // As 5 saem no MESMO pedido de proposito: o prompt (persona + arsenal +
   // exemplos + Camada 0 da Alma) e enorme e a saida e curta, entao 5 variacoes
