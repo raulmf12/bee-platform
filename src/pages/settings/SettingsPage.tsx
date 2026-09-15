@@ -232,17 +232,11 @@ export function SettingsPage() {
     }
     setTestingLi(true);
     try {
-      const res = await fetch('https://api.linkedin.com/v2/userinfo', {
-        headers: { Authorization: `Bearer ${linkedinToken}` },
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(`HTTP ${res.status}: ${t.slice(0, 200)}`);
-      }
-      const data = await res.json();
-      const sub = data.sub ?? data.id;
-      const suggestedUrn = sub ? `urn:li:person:${sub}` : '';
-      toast.success(`LinkedIn OK · ${data.name ?? data.email ?? sub}${suggestedUrn ? ` · URN sugerido: ${suggestedUrn}` : ''}`);
+      // Valida no SERVIDOR (edge function): o LinkedIn não manda CORS, então
+      // chamar api.linkedin.com direto do navegador é bloqueado.
+      const data = await edge.testLinkedIn({ token: linkedinToken });
+      const suggestedUrn = data.suggested_urn;
+      toast.success(`LinkedIn OK · ${data.name ?? data.email ?? data.sub}${suggestedUrn ? ` · URN sugerido: ${suggestedUrn}` : ''}`);
       if (!linkedinAuthorUrn && suggestedUrn) setLinkedinAuthorUrn(suggestedUrn);
     } catch (e) {
       toast.error(`LinkedIn falhou: ${(e as Error).message.slice(0, 200)}`);

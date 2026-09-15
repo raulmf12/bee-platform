@@ -388,6 +388,27 @@ export const edge = {
     return JSON.parse(text);
   },
 
+  // Valida um token do LinkedIn no servidor (o browser bloqueia por CORS).
+  async testLinkedIn(input: { token: string }): Promise<{
+    success: boolean;
+    name: string | null;
+    email: string | null;
+    sub: string | null;
+    suggested_urn: string;
+  }> {
+    const headers = await authHeader();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/test-linkedin`, {
+      method: 'POST', headers, body: JSON.stringify(input),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let msg = text.slice(0, 300);
+      try { msg = JSON.parse(text).error ?? msg; } catch { /* usa texto cru */ }
+      throw new Error(msg);
+    }
+    return JSON.parse(text);
+  },
+
   async searchImages(input: {
     query: string;
     count?: number;
