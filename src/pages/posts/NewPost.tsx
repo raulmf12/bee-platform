@@ -201,6 +201,17 @@ export function NewPost() {
         && Boolean((p.carousel_text?.quote as string | undefined) ?? p.title))
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   }, [posts, sourcePlatform]);
+  // IDs de posts que JÁ foram usados como base de reaproveitamento (algum post
+  // existente aponta pra eles via metadata.reused_from). Se o post derivado for
+  // apagado, a base destrava sozinha — é calculado ao vivo, sem coluna nova.
+  const reusedSourceIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const p of posts) {
+      const from = p.metadata?.reused_from as string | undefined;
+      if (from) s.add(from);
+    }
+    return s;
+  }, [posts]);
   const [editingQuote, setEditingQuote] = useState(false);
   const [quoteDraft, setQuoteDraft] = useState('');
   const [savingQuote, setSavingQuote] = useState(false);
@@ -1697,6 +1708,27 @@ export function NewPost() {
                   ) : reusablePosts.map((p) => {
                     const on = referencePost?.id === p.id;
                     const quote = (p.carousel_text?.quote as string | undefined) ?? p.title ?? '';
+                    const reused = reusedSourceIds.has(p.id);
+                    if (reused) {
+                      // Já reaproveitado: travado (não selecionável) + etiqueta.
+                      return (
+                        <div
+                          key={p.id}
+                          aria-disabled
+                          title="Este post já foi reaproveitado"
+                          className="w-full cursor-not-allowed rounded-lg border border-border bg-secondary/20 p-2.5 text-left opacity-60"
+                        >
+                          <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                            <Badge variant="secondary" className="text-[9px]">{POST_STATUS_LABELS[p.status]}</Badge>
+                            <Badge className="gap-1 bg-emerald-600/90 text-[9px] text-white hover:bg-emerald-600/90">
+                              <Check className="h-2.5 w-2.5" /> Já reaproveitado
+                            </Badge>
+                            {p.metadata?.editorial_slug ? <span className="truncate text-[10px] text-muted-foreground">{String(p.metadata.editorial_slug)}</span> : null}
+                          </div>
+                          <p className="line-clamp-3 text-xs">{quote}</p>
+                        </div>
+                      );
+                    }
                     return (
                       <button
                         key={p.id}
