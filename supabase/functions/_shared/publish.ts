@@ -116,22 +116,6 @@ async function publishLinkedInImage(token: string, authorUrn: string, imageUrl: 
   return { url: `https://www.linkedin.com/feed/update/${encodeURIComponent(postId)}/`, id: postId, platform: 'linkedin' };
 }
 
-async function publishLinkedInTextOnly(token: string, authorUrn: string, caption: string): Promise<PublishResult> {
-  const ugcRes = await fetch('https://api.linkedin.com/v2/ugcPosts', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Restli-Protocol-Version': '2.0.0' },
-    body: JSON.stringify({
-      author: authorUrn,
-      lifecycleState: 'PUBLISHED',
-      specificContent: { 'com.linkedin.ugc.ShareContent': { shareCommentary: { text: caption }, shareMediaCategory: 'NONE' } },
-      visibility: { 'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC' },
-    }),
-  });
-  if (!ugcRes.ok) throw new Error(`LinkedIn ugcPosts (text) falhou: ${ugcRes.status} ${(await ugcRes.text()).slice(0, 300)}`);
-  const postId = ugcRes.headers.get('x-restli-id') ?? '';
-  return { url: `https://www.linkedin.com/feed/update/${encodeURIComponent(postId)}/`, id: postId, platform: 'linkedin' };
-}
-
 // ============================================================================
 // INSTAGRAM
 // ============================================================================
@@ -225,10 +209,13 @@ export async function publishOne(postId: string, userId: string): Promise<Publis
         throw new Error('LinkedIn nao configurado. Vai em Configuracoes > Integracoes.');
       }
       if (post.format === 'video') throw new Error('Publicacao de video no LinkedIn ainda nao implementada.');
+      // Espelha o Instagram: sem imagem renderizada, NAO publica. Antes havia um
+      // fallback silencioso pra texto puro (publishLinkedInTextOnly, removido) que deixava
+      // um post agendado ir ao ar SEM imagem quando slide1 nao tinha sido
+      // renderizado/persistido — perda silenciosa. Agora bloqueia com erro visivel.
       const imageUrl = post.rendered_slides?.slide1;
-      result = imageUrl
-        ? await publishLinkedInImage(settings.linkedin_token, settings.linkedin_author_urn, imageUrl, caption)
-        : await publishLinkedInTextOnly(settings.linkedin_token, settings.linkedin_author_urn, caption);
+      if (!imageUrl) throw new Error('Imagem não renderizada. Abra o post no editor e clique em Stand-by (renderiza automático) antes de agendar/publicar.');
+      result = await publishLinkedInImage(settings.linkedin_token, settings.linkedin_author_urn, imageUrl, caption);
     } else if (post.platform === 'instagram') {
       if (!settings.instagram_access_token || !settings.instagram_business_account_id) {
         throw new Error('Instagram nao configurado. Vai em Configuracoes > Integracoes.');
