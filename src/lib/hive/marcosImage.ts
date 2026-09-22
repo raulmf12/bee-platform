@@ -18,14 +18,78 @@ import type { DesignAsset } from './composeM01';
 // --- M01-D (Campo) / M01-E (Matéria): fundo gerado por IA quando a biblioteca
 // não tem asset. Uma geração por (kind, post), cacheada. Vira candidata reusável.
 const _m01Cache = new Map<string, DesignAsset>();
+// Última CENA usada por (kind, post): evita que "Regenerar" traga a mesma coisa
+// (o _m01Cache é limpo no forceBg, mas isto sobrevive pra variar de verdade).
+const _lastScene = new Map<string, string>();
+
+// Leque de CENAS pro fundo M01-D (Campo). Antes era um prompt fixo citando "vale
+// entre montanhas" — por isso TODA imagem saía igual (montanha na neblina). Agora
+// sorteamos cena × clima × paleta: muita variedade, mas sempre sóbrio e com espaço
+// negativo pro texto. Todas: sem pessoas, sem texto, vertical.
+const M01_PHOTO_SCENES = [
+  'vale largo entre montanhas distantes',
+  'superfície calma do mar encontrando o horizonte',
+  'dunas de deserto com ondulações suaves',
+  'planície aberta com céu amplo e vazio',
+  'floresta densa vista de cima, copas e clareira',
+  'lago espelhado refletindo o céu',
+  'costa rochosa com névoa sobre a água',
+  'estrada ou caminho vazio sumindo no horizonte',
+  'colinas suaves cobertas por bruma baixa',
+  'céu de nuvens em camadas, quase abstrato',
+  'campo de trigo ou capim alto ao vento',
+  'geleira ou campo de neve com relevo mínimo',
+];
+const M01_PHOTO_MOODS = [
+  'primeira luz do amanhecer',
+  'fim de tarde dourado e baixo',
+  'meio-dia nublado e difuso',
+  'crepúsculo azulado',
+  'névoa densa filtrando a luz',
+  'luz rasante criando sombras longas',
+];
+const M01_PHOTO_PALETTES = [
+  'cores dessaturadas e frias',
+  'tons terrosos e quentes contidos',
+  'monocromático azul-acinzentado',
+  'paleta creme e sépia suave',
+  'verdes escuros e brumosos',
+];
+const M01_TEXTURE_SCENES = [
+  'sombra de folhas projetada em parede clara',
+  'fibra de papel artesanal em close',
+  'superfície mineral / pedra polida',
+  'tecido de linho cru com trama visível',
+  'concreto claro com micro-textura',
+  'aquarela desbotada sobre papel',
+];
+
+function pickDistinct(pool: string[], key: string): string {
+  const last = _lastScene.get(key);
+  const options = pool.length > 1 ? pool.filter((s) => s !== last) : pool;
+  const chosen = options[Math.floor(Math.random() * options.length)];
+  _lastScene.set(key, chosen);
+  return chosen;
+}
+
+function randomOf(pool: string[]): string {
+  return pool[Math.floor(Math.random() * pool.length)];
+}
 
 export async function ensureM01Asset(kind: 'photo' | 'texture', postId: string): Promise<DesignAsset | null> {
   const key = `${kind}|${postId}`;
   const cached = _m01Cache.get(key);
   if (cached) return cached;
-  const prompt = kind === 'photo'
-    ? 'Fotografia atmosférica e contemplativa com profundidade real, névoa suave, cores dessaturadas e muito espaço negativo (floresta ao amanhecer, horizonte, caminho na neblina, vale entre montanhas). Sem texto, sem logo, sem pessoas olhando para a câmera. Vertical.'
-    : 'Textura orgânica sutil e elegante (sombra de folhas em parede clara, fibra de papel, superfície mineral), baixo contraste, luz suave, fundo predominantemente claro/creme. Sem texto, sem logo.';
+  let prompt: string;
+  if (kind === 'photo') {
+    const scene = pickDistinct(M01_PHOTO_SCENES, key);
+    const mood = randomOf(M01_PHOTO_MOODS);
+    const palette = randomOf(M01_PHOTO_PALETTES);
+    prompt = `Fotografia atmosférica e contemplativa: ${scene}, ${mood}, ${palette}. Profundidade real, muito espaço negativo pro texto, sem pessoas, sem texto, sem logo. Vertical.`;
+  } else {
+    const scene = pickDistinct(M01_TEXTURE_SCENES, key);
+    prompt = `Textura orgânica sutil e elegante: ${scene}. Baixo contraste, luz suave, fundo predominantemente claro/creme, muito espaço negativo. Sem texto, sem logo.`;
+  }
   const res = await edge.generateImage({ prompt, aspect_ratio: '3:4', style_hint: 'Marcos Piccini / Bee — sóbrio, silencioso, sistêmico' });
   if (!res.success || !res.image_base64) return null;
   const mime = res.mime_type || 'image/png';
