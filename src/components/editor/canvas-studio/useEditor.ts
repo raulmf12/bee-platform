@@ -523,6 +523,9 @@ export function useEditor({ width, height, background = '#FFFFFF', onChange }: U
     if (!c) return;
     c.setActiveObject(obj);
     c.requestRenderAll();
+    // setActiveObject NÃO dispara selection:created no Fabric — atualiza o estado
+    // React na mão pra o painel de propriedades reagir ao clique na lista de camadas.
+    setActiveObject(obj);
   }, []);
 
   const exportPng = useCallback((multiplier = 2): string | null => {

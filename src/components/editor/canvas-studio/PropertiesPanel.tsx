@@ -3,8 +3,9 @@
 
 import {
   AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowDownToLine,
-  ArrowUp, ArrowUpToLine, Bold, Italic, Layers, Lock, LockOpen, Move,
-  Paintbrush, RotateCcw, RotateCw, Trash2,
+  ArrowUp, ArrowUpToLine, Bold, Circle as CircleIcon, Image as ImageIcon,
+  Italic, Layers, Lock, LockOpen, Minus, Move,
+  Paintbrush, RotateCcw, RotateCw, Square, Trash2, Type as TypeIcon,
 } from 'lucide-react';
 import type * as fabric from 'fabric';
 import { Button } from '@/components/ui/button';
@@ -33,15 +34,91 @@ function prettyType(t?: string): string {
   }
 }
 
+// Nome amigável pra cada camada. Usa o `name` que a Hive dá aos objetos
+// (texture/headline/line/bee-spiral); senão cai pro tipo.
+function layerName(o: fabric.Object): string {
+  const raw = (o as unknown as { name?: string }).name;
+  switch (raw) {
+    case 'texture':
+    case 'bg':
+    case 'background': return 'Fundo';
+    case 'headline':
+    case 'quote': return 'Texto principal';
+    case 'subtitle': return 'Subtítulo';
+    case 'line': return 'Linha (detalhe)';
+    case 'bee-spiral':
+    case 'spiral': return 'Espiral Bee';
+    case 'signature': return 'Assinatura';
+    default: break;
+  }
+  if (raw && raw.trim()) return raw;
+  return prettyType(o.type);
+}
+
+function LayerIcon({ type }: { type?: string }) {
+  const cls = 'h-3.5 w-3.5 shrink-0';
+  switch (type) {
+    case 'textbox':
+    case 'i-text':
+    case 'text': return <TypeIcon className={cls} />;
+    case 'image': return <ImageIcon className={cls} />;
+    case 'circle': return <CircleIcon className={cls} />;
+    case 'line': return <Minus className={cls} />;
+    default: return <Square className={cls} />;
+  }
+}
+
+// Lista de camadas clicável. Resolve o caso do detalhe fino (a "linha" de 3px)
+// e da espiral, que são praticamente impossíveis de clicar no canvas: aqui você
+// seleciona qualquer objeto pelo nome e aí move/edita/apaga pelo painel.
+function LayersList({ api }: { api: EditorApi }) {
+  const canvas = api.fabric.current;
+  // Depende de activeObject/canvasEpoch pra re-renderizar quando a seleção ou os
+  // objetos mudam (add/delete/reorder). getObjects() vem de baixo→topo; invertemos
+  // pra mostrar o topo primeiro (ordem visual).
+  void api.canvasEpoch;
+  const objs = canvas ? [...canvas.getObjects()].reverse() : [];
+  if (objs.length === 0) return null;
+  return (
+    <div className="space-y-0.5">
+      {objs.map((o, i) => {
+        const active = o === api.activeObject;
+        return (
+          <button
+            key={(o as unknown as { name?: string }).name ?? `${o.type}-${i}`}
+            onClick={() => api.selectObject(o)}
+            title="Selecionar camada"
+            className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors ${
+              active ? 'bg-accent/15 text-accent ring-1 ring-accent/40' : 'hover:bg-accent/5 text-foreground'
+            }`}
+          >
+            <LayerIcon type={o.type} />
+            <span className="truncate">{layerName(o)}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function PropertiesPanel({ api, templateMode = false }: { api: EditorApi; templateMode?: boolean }) {
   const obj = api.activeObject;
 
   if (!obj) {
     return (
-      <aside className="hidden w-72 shrink-0 border-l border-border bg-card/40 p-4 lg:flex lg:flex-col lg:items-center lg:justify-center lg:gap-2">
-        <Move className="h-5 w-5 text-muted-foreground" />
-        <p className="text-xs font-medium text-muted-foreground">Nenhum objeto selecionado</p>
-        <p className="text-[10px] text-muted-foreground/70">Clique em algo no canvas pra editar.</p>
+      <aside className="hidden w-72 shrink-0 border-l border-border bg-card/40 p-4 lg:flex lg:flex-col lg:gap-3">
+        <div className="flex flex-col items-center gap-1 py-2 text-center">
+          <Move className="h-5 w-5 text-muted-foreground" />
+          <p className="text-xs font-medium text-muted-foreground">Nenhum objeto selecionado</p>
+          <p className="text-[10px] text-muted-foreground/70">Clique em algo no canvas ou escolha uma camada abaixo.</p>
+        </div>
+        <Separator />
+        <div>
+          <Label className="mb-2 flex items-center gap-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+            <Layers className="h-3 w-3" /> Camadas
+          </Label>
+          <LayersList api={api} />
+        </div>
       </aside>
     );
   }
@@ -307,6 +384,9 @@ export function PropertiesPanel({ api, templateMode = false }: { api: EditorApi;
         <Label className="mb-2 flex items-center gap-1 text-[11px] uppercase tracking-wider text-muted-foreground">
           <Layers className="h-3 w-3" /> Camadas
         </Label>
+        <div className="mb-2">
+          <LayersList api={api} />
+        </div>
         <div className="grid grid-cols-4 gap-1">
           <Button variant="outline" size="icon" onClick={() => api.moveLayer('top')} title="Pro topo"><ArrowUpToLine className="h-3 w-3" /></Button>
           <Button variant="outline" size="icon" onClick={() => api.moveLayer('up')} title="Subir"><ArrowUp className="h-3 w-3" /></Button>
