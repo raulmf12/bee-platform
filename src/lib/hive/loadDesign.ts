@@ -17,7 +17,7 @@ export interface DesignData {
 async function loadTokensAndAssets(): Promise<{ colors: Record<string, string>; spiralUrl: string; assets: DesignData['assets'] }> {
   const [tokRes, assetRes] = await Promise.all([
     supabase.from('design_tokens').select('slug,kind,value'),
-    supabase.from('design_assets').select('kind,url,width,height').eq('is_active', true).in('kind', ['photo', 'texture']),
+    supabase.from('design_assets').select('kind,url,width,height,person_slug').eq('is_active', true).in('kind', ['photo', 'texture']),
   ]);
   if (tokRes.error) throw tokRes.error;
   if (assetRes.error) throw assetRes.error;
@@ -34,8 +34,17 @@ async function loadTokensAndAssets(): Promise<{ colors: Record<string, string>; 
   const textures: DesignAsset[] = [];
   for (const a of assetRes.data ?? []) {
     const asset: DesignAsset = { url: a.url as string, width: a.width as number | undefined, height: a.height as number | undefined };
-    if (a.kind === 'photo') photos.push(asset);
-    else if (a.kind === 'texture') textures.push(asset);
+    // photos alimenta SÓ o M01-D ("Campo" = paisagem contemplativa). O pool de
+    // kind='photo' também guarda os retratos de estúdio do Marcos (person_slug),
+    // que são do M02 — e como fundo full-bleed de Campo ficavam horríveis (rosto/
+    // corpo no quadro, sem espaço negativo, texto branco sobre estúdio claro).
+    // Aqui M01-D recebe apenas paisagens (sem pessoa); o Marcos entra pelo M02 via
+    // outro caminho (listMarcosPhotos/decision.asset).
+    if (a.kind === 'photo') {
+      if (!a.person_slug) photos.push(asset);
+    } else if (a.kind === 'texture') {
+      textures.push(asset);
+    }
   }
   return { colors, spiralUrl, assets: { photos, textures } };
 }
