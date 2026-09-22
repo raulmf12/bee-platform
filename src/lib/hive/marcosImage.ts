@@ -11,6 +11,7 @@
 // placeholder até finalizar.
 
 import { edge } from '@/lib/edge';
+import { nextImageModel } from './modelRotation';
 import { imageDims, blobFromBase64, uploadDesignAsset, saveDesignAsset } from './assetLib';
 import type { M02Asset } from './composeM02';
 import type { DesignAsset } from './composeM01';
@@ -90,7 +91,13 @@ export async function ensureM01Asset(kind: 'photo' | 'texture', postId: string):
     const scene = pickDistinct(M01_TEXTURE_SCENES, key);
     prompt = `Textura orgânica sutil e elegante: ${scene}. Baixo contraste, luz suave, fundo predominantemente claro/creme, muito espaço negativo. Sem texto, sem logo.`;
   }
-  const res = await edge.generateImage({ prompt, aspect_ratio: '3:4', style_hint: 'Marcos Piccini / Bee — sóbrio, silencioso, sistêmico' });
+  // Rodízio de modelos (teste): alterna Nano Banana × GPT Image 2.5 no dia a dia.
+  const model = nextImageModel();
+  const isGpt = model.startsWith('gpt-image');
+  const res = await edge.generateImage({
+    prompt, aspect_ratio: '3:4', style_hint: 'Marcos Piccini / Bee — sóbrio, silencioso, sistêmico',
+    model, ...(isGpt ? { quality: 'medium' as const } : {}),
+  });
   if (!res.success || !res.image_base64) return null;
   const mime = res.mime_type || 'image/png';
   const dataUrl = `data:${mime};base64,${res.image_base64}`;
@@ -100,8 +107,10 @@ export async function ensureM01Asset(kind: 'photo' | 'texture', postId: string):
   await saveDesignAsset({
     kind, title: `${kind === 'photo' ? 'Campo' : 'Matéria'} — gerada`, url: publicUrl, storage_path: path,
     mime_type: mime, width: dims.w, height: dims.h, origin: 'generated',
-    semantic: kind === 'photo' ? { natureza: true, profundidade: 'alta', espaco_texto: 'baixo', generated: true } : { organico: true, sutil: true, generated: true },
-    tags: ['m01', 'gerada'],
+    semantic: kind === 'photo'
+      ? { natureza: true, profundidade: 'alta', espaco_texto: 'baixo', generated: true, model }
+      : { organico: true, sutil: true, generated: true, model },
+    tags: ['m01', 'gerada', model],
   });
   const asset: DesignAsset = { url: publicUrl, width: dims.w, height: dims.h };
   _m01Cache.set(key, asset);

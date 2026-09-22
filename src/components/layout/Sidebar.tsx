@@ -85,6 +85,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/conhecimento', label: 'Conhecimento', icon: Database },
       { to: '/curadoria', label: 'Curadoria', icon: Sparkles },
       { to: '/custos', label: 'Custos de API', icon: DollarSign },
+      { to: '/labs/imagens', label: 'Teste de imagem', icon: ImageIcon },
     ]
   },
   {

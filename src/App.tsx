@@ -34,6 +34,7 @@ import { HiveConvite } from '@/pages/hive/HiveConvite';
 import { HiveTesteM02 } from '@/pages/hive/HiveTesteM02'; // TEMP: apagar depois
 import { HiveTesteM01 } from '@/pages/hive/HiveTesteM01'; // TEMP: apagar depois
 import { Custos } from '@/pages/custos/Custos';
+import { ImageLab } from '@/pages/labs/ImageLab';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { currentUser, settings, initialized } = useAuthStore();
@@ -116,6 +117,7 @@ export default function App() {
           <Route path="hive/teste-m02" element={<HiveTesteM02 />} /> {/* TEMP: apagar depois */}
           <Route path="hive/teste-m01" element={<HiveTesteM01 />} /> {/* TEMP: apagar depois */}
           <Route path="custos" element={<Custos />} />
+          <Route path="labs/imagens" element={<ImageLab />} />
           {/* Vídeo virou parte do wizard (NewPost). Rota antiga redireciona. */}
           <Route path="posts/novo-video" element={<Navigate to="/posts/novo" replace />} />
           <Route path="podcasts" element={<Podcasts />} />
