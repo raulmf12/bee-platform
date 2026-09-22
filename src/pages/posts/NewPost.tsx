@@ -1063,13 +1063,17 @@ export function NewPost() {
       const isHive = !!item.hiveDecision;
       const dims = isHive ? { width: 1080, height: 1350 } : getLayoutDimensions(item.sizeId);
       const dataUrl = await renderFabricToDataUrl(item.fabricJson, { ...dims, format: 'jpeg' });
-      let renderedSlides: Record<string, string> | undefined;
-      if (dataUrl) {
-        const { publicUrl } = await uploadAssetImage({
-          userId: currentUser.id, assetId: item.post.id, dataUrl, filename: 'render.png',
-        });
-        renderedSlides = { slide1: publicUrl };
+      // Sem imagem renderizada NÃO agenda/aprova. Antes o render falho (null) era
+      // engolido e o post ia pra scheduled SEM imagem — publicava nu/quebrado. O
+      // renderFabricToDataUrl já pré-carrega as imagens; se ainda assim voltar null,
+      // é falha real de carga → aborta com erro claro e o humano tenta de novo.
+      if (!dataUrl) {
+        throw new Error('Não consegui renderizar a imagem (o fundo não carregou). Tente de novo em instantes ou abra a edição manual.');
       }
+      const { publicUrl } = await uploadAssetImage({
+        userId: currentUser.id, assetId: item.post.id, dataUrl, filename: 'render.png',
+      });
+      const renderedSlides: Record<string, string> = { slide1: publicUrl };
 
       // Medição da eficácia. Baseline = último texto da IA (item.aiQuote); final =
       // o que vai ao ar. Se o humano editou a frase à mão (manualEdits>0), o final
@@ -1091,7 +1095,7 @@ export function NewPost() {
         manual_edits: item.manualEdits,
         ...(date ? { scheduled_date: date.toISOString() } : {}),
         carousel_fabric_json: [item.fabricJson],
-        ...(renderedSlides ? { rendered_slides: renderedSlides } : {}),
+        rendered_slides: renderedSlides,
         ...(item.hiveDecision ? { visual_decision: item.hiveDecision, image_status: 'pending' as const } : {}),
       });
 

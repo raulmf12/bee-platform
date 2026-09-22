@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import * as fabric from 'fabric';
 import { Loader2 } from 'lucide-react';
 import { CANVAS_PRESETS } from '@/components/editor/canvas-studio/useEditor';
+import { preloadFabricImages } from '@/lib/templates/renderPost';
 
 interface StaticCanvasPreviewProps {
   fabricJson: object;
@@ -37,6 +38,12 @@ export function StaticCanvasPreview({ fabricJson, width, height, presetId = 'lin
 
     async function load() {
       try {
+        // Pré-carrega as imagens (fundo IA pesado sem cache, espiral) ANTES de
+        // hidratar — senão a prévia pinta antes do fundo carregar e sai "bugada",
+        // o mesmo defeito que o render offscreen tinha. Se falhar, segue pro
+        // loadFromJSON mesmo assim (o canvas ainda re-renderiza quando carregar).
+        await preloadFabricImages(fabricJson).catch((e) => console.warn('[StaticCanvasPreview] preload', e));
+        if (!isMounted) return;
         await canvas.loadFromJSON(fabricJson);
         if (isMounted) {
           canvas.renderAll();
