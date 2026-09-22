@@ -11,6 +11,7 @@
 import {
   errorResponse,
   getUserGeminiKey,
+  getUserOpenAIKey,
   jsonResponse,
   logUsage,
   preflight,
@@ -30,6 +31,50 @@ interface ImageInput {
   prompt: string;
   aspect_ratio?: '1:1' | '3:4' | '4:3' | '9:16' | '16:9';
   style_hint?: string;
+  // Modelo escolhido. Ausente/'nano'/'gemini-*' = Nano Banana (Gemini). Os
+  // 'gpt-image-2.5-*' vão pro ramo OpenAI. Serve o teste comparativo de modelos.
+  model?: string;
+  quality?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
+}
+
+// aspect_ratio -> size da OpenAI (Images API aceita parâmetro de tamanho).
+function openaiSize(aspect: string): string {
+  switch (aspect) {
+    case '4:5': case '3:4': case '9:16': return '1024x1536';
+    case '5:4': case '4:3': case '16:9': case '1.91:1': return '1536x1024';
+    default: return '1024x1024';
+  }
+}
+
+// OpenAI GPT Image 2.5 (flare/sunburst) via Images API. Devolve b64 + custo REAL
+// calculado do usage (in $5/M, out $30/M). n=1.
+async function tryOpenAI(
+  apiKey: string, model: string, prompt: string, aspect: string, quality: string,
+): Promise<{ b64: string; mime: string; costUsd: number; tokensIn: number; tokensOut: number; err: string }> {
+  const body = {
+    model,
+    prompt,
+    n: 1,
+    size: openaiSize(aspect),
+    quality,
+  };
+  const res = await fetch('https://api.openai.com/v1/images/generations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+  });
+  const txt = await res.text();
+  if (!res.ok) return { b64: '', mime: 'image/png', costUsd: 0, tokensIn: 0, tokensOut: 0, err: `[${model}] HTTP ${res.status}: ${txt.slice(0, 240)}` };
+  const json = JSON.parse(txt);
+  const b64 = json.data?.[0]?.b64_json ?? '';
+  const u = json.usage ?? {};
+  const tokensIn = u.input_tokens ?? 0;
+  const tokensOut = u.output_tokens ?? 0;
+  // in inclui texto ($5/M) e, no img2img, imagem ($8/M). Aqui o input é texto;
+  // o custo dominante é o output de imagem ($30/M). Cálculo do usage real.
+  const costUsd = (tokensIn / 1_000_000) * 5 + (tokensOut / 1_000_000) * 30;
+  if (!b64) return { b64: '', mime: 'image/png', costUsd, tokensIn, tokensOut, err: `[${model}] sem imagem no retorno` };
+  return { b64, mime: 'image/png', costUsd, tokensIn, tokensOut, err: '' };
 }
 
 // Descrição da proporção pro prompt (Nano Banana lê do texto, não de parâmetro).
@@ -103,11 +148,8 @@ Deno.serve(async (req: Request) => {
     const input = (await req.json()) as ImageInput;
     if (!input.prompt || input.prompt.length < 3) return errorResponse('prompt eh obrigatorio', 400);
 
-    const apiKey = await getUserGeminiKey(userId);
-    if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
-
     const aspect = input.aspect_ratio ?? '4:5';
-    // Aspect no PROMPT (Nano Banana) + regra dura de "sem texto na imagem".
+    // Aspect no PROMPT (Nano Banana lê do texto) + regra dura de "sem texto".
     const finalPrompt = [
       input.prompt,
       input.style_hint ? `Estilo: ${input.style_hint}.` : '',
@@ -115,7 +157,30 @@ Deno.serve(async (req: Request) => {
       'NÃO escreva nenhum texto, letra, número, marca ou logo na imagem.',
     ].filter(Boolean).join(' ');
 
-    // 1) Nano Banana (principal). 2) Imagen (fallback).
+    const model = input.model ?? 'gemini-2.5-flash-image';
+    const isOpenAI = model.startsWith('gpt-image');
+
+    // ---- Ramo OpenAI (GPT Image 2.5 flare/sunburst) ----
+    if (isOpenAI) {
+      const oaKey = await getUserOpenAIKey(userId);
+      if (!oaKey) return errorResponse('Chave OpenAI não configurada (Configurações > Chaves de API).', 400);
+      const quality = input.quality ?? 'medium';
+      const r = await tryOpenAI(oaKey, model, finalPrompt, aspect, quality);
+      if (!r.b64) return errorResponse('OpenAI não gerou a imagem', 502, r.err);
+      logUsage({
+        userId, provider: 'openai', product: 'image', model,
+        tokens_input: r.tokensIn, tokens_output: r.tokensOut, cost_usd: r.costUsd,
+        metadata: { prompt: finalPrompt.slice(0, 200), aspect, quality },
+      });
+      return jsonResponse({
+        success: true, image_base64: r.b64, mime_type: r.mime,
+        model, cost_usd: r.costUsd, tokens_input: r.tokensIn, tokens_output: r.tokensOut,
+      });
+    }
+
+    // ---- Ramo Gemini (Nano Banana principal, Imagen fallback) ----
+    const apiKey = await getUserGeminiKey(userId);
+    if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
     const nano = await tryNano(apiKey, finalPrompt);
     let b64 = nano.b64, mime = nano.mime, usedModel = nano.model, lastErr = nano.err;
     if (!b64) {
@@ -126,12 +191,13 @@ Deno.serve(async (req: Request) => {
 
     if (!b64) return errorResponse('Nenhum modelo de imagem disponível gerou a imagem', 502, lastErr);
 
+    const geminiCost = usedModel === 'gemini-2.5-flash-image' ? 0.039 : 0.04;
     logUsage({
-      userId, provider: 'gemini', product: 'image', model: usedModel,
+      userId, provider: 'gemini', product: 'image', model: usedModel, cost_usd: geminiCost,
       metadata: { prompt: finalPrompt.slice(0, 200), aspect },
     });
 
-    return jsonResponse({ success: true, image_base64: b64, mime_type: mime });
+    return jsonResponse({ success: true, image_base64: b64, mime_type: mime, model: usedModel, cost_usd: geminiCost });
   } catch (e) {
     return errorResponse('Erro ao gerar imagem', 500, String(e));
   }

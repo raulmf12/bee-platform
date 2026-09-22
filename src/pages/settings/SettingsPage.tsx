@@ -44,6 +44,7 @@ export function SettingsPage() {
   const [brandColors, setBrandColors] = useState((settings?.brand_colors ?? []).join(', '));
   const [logoUrl, setLogoUrl] = useState(settings?.brand_logo_url ?? '');
   const [geminiKey, setGeminiKey] = useState(settings?.gemini_api_key ?? '');
+  const [openaiKey, setOpenaiKey] = useState(settings?.openai_api_key ?? '');
   const [serpKey, setSerpKey] = useState(settings?.serpapi_key ?? '');
   const [linkedinToken, setLinkedinToken] = useState(settings?.linkedin_token ?? '');
   const [linkedinAuthorUrn, setLinkedinAuthorUrn] = useState(settings?.linkedin_author_urn ?? '');
@@ -125,6 +126,7 @@ export function SettingsPage() {
     setBrandColors((settings?.brand_colors ?? []).join(', '));
     setLogoUrl(settings?.brand_logo_url ?? '');
     setGeminiKey(settings?.gemini_api_key ?? '');
+    setOpenaiKey(settings?.openai_api_key ?? '');
     setSerpKey(settings?.serpapi_key ?? '');
     setLinkedinToken(settings?.linkedin_token ?? '');
     setLinkedinAuthorUrn(settings?.linkedin_author_urn ?? '');
@@ -212,6 +214,7 @@ export function SettingsPage() {
     try {
       await updateSettings({
         gemini_api_key: geminiKey,
+        openai_api_key: openaiKey,
         serpapi_key: serpKey,
         linkedin_token: linkedinToken,
         linkedin_author_urn: linkedinAuthorUrn,
@@ -437,6 +440,14 @@ export function SettingsPage() {
                 <p className="text-xs text-muted-foreground">
                   <Sparkles className="mr-1 inline h-3 w-3" />
                   Usada pra texto, imagens, embeddings e transcrição de vídeo.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="openai">Chave OpenAI (opcional)</Label>
+                <Input id="openai" type="password" value={openaiKey} onChange={(e) => setOpenaiKey(e.target.value)} placeholder="sk-..." />
+                <p className="text-xs text-muted-foreground">
+                  <Sparkles className="mr-1 inline h-3 w-3" />
+                  Pra testar os modelos de imagem GPT (gpt-image-2.5). Só necessária durante a comparação de modelos.
                 </p>
               </div>
               <div className="space-y-2">

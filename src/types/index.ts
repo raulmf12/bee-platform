@@ -51,6 +51,7 @@ export interface UserSettings {
   brand_logo_url?: string;
   brand_font?: string;
   gemini_api_key?: string;
+  openai_api_key?: string;
   serpapi_key?: string;
   linkedin_token?: string;
   linkedin_user_id?: string;

@@ -22,6 +22,10 @@ export const PRICING: Record<string, ModelPrice> = {
   'gemini-embedding-001': { inPerM: 0.15, outPerM: 0 },
   // Imagem — Gemini 2.5 Flash Image (Nano Banana): $0.039/imagem
   'gemini-2.5-flash-image': { perImage: 0.039 },
+  // Imagem — OpenAI GPT Image 2.5 (por token: in $5/M, out imagem $30/M). O custo
+  // real por imagem vem do usage da API; aqui é referência.
+  'gpt-image-2.5-flare': { inPerM: 5, outPerM: 30 },
+  'gpt-image-2.5-sunburst': { inPerM: 5, outPerM: 30 },
   // Imagem — Imagen (~$0.04/imagem)
   'imagen-3.0-generate-002': { perImage: 0.04 },
   'imagen-4.0-generate-001': { perImage: 0.04 },

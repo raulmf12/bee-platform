@@ -124,6 +124,29 @@ export async function getUserGeminiKey(userId: string): Promise<string | null> {
   return Deno.env.get('GEMINI_API_KEY') ?? null;
 }
 
+// Carrega a chave OpenAI do user (user_settings.openai_api_key) — usada pra testar
+// os modelos de imagem GPT (gpt-image-2.5-*). Mesmo padrão da Gemini.
+export async function getUserOpenAIKey(userId: string): Promise<string | null> {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (supabaseUrl && serviceKey) {
+    try {
+      const res = await fetch(
+        `${supabaseUrl}/rest/v1/user_settings?select=openai_api_key&user_id=eq.${userId}&limit=1`,
+        { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+      );
+      if (res.ok) {
+        const rows = (await res.json()) as Array<{ openai_api_key: string | null }>;
+        const userKey = rows[0]?.openai_api_key;
+        if (userKey) return userKey;
+      }
+    } catch (e) {
+      console.warn('[getUserOpenAIKey] DB fetch failed', e);
+    }
+  }
+  return Deno.env.get('OPENAI_API_KEY') ?? null;
+}
+
 // Tabela de preços (USD). Mantém em sincronia com src/lib/pricing.ts.
 // Texto: por 1M tokens (in/out). Imagem: por imagem. Busca: por chamada.
 // Preços reais (ai.google.dev/gemini-api/docs/pricing, ago/2026). Sincronizar
@@ -137,6 +160,10 @@ const PRICE: Record<string, { inPerM?: number; outPerM?: number; perImage?: numb
   'gemini-3.1-pro-preview': { inPerM: 1.25, outPerM: 10.0 },
   'gemini-embedding-001': { inPerM: 0.15, outPerM: 0 },
   'gemini-2.5-flash-image': { perImage: 0.039 },
+  // OpenAI GPT Image 2.5 — preço POR TOKEN (in $5/M texto, out $30/M imagem). O
+  // custo real por imagem sai do `usage` que a API devolve; aqui é só fallback.
+  'gpt-image-2.5-flare': { inPerM: 5, outPerM: 30 },
+  'gpt-image-2.5-sunburst': { inPerM: 5, outPerM: 30 },
   'imagen-3.0-generate-002': { perImage: 0.04 },
   'imagen-4.0-generate-001': { perImage: 0.04 },
   'imagen-3.0-generate-001': { perImage: 0.04 },
@@ -147,16 +174,22 @@ const DEFAULT_PRICE: Record<string, { inPerM?: number; outPerM?: number; perImag
 };
 function estimateCost(input: { product: string; model?: string; tokens_input?: number; tokens_output?: number }): number {
   const p = (input.model && PRICE[input.model]) || DEFAULT_PRICE[input.product] || {};
-  if (input.product === 'image' || p.perImage != null) return p.perImage ?? 0;
-  if (input.product === 'image-search' || p.perCall != null) return p.perCall ?? 0;
+  if (p.perImage != null) return p.perImage;
+  if (p.perCall != null) return p.perCall;
+  // Por token — texto E imagem token-priced (ex: gpt-image-2.5-*, cujo custo vem
+  // do output de imagem). Se houver tokens, calcula; senão cai no fallback do produto.
   const ti = input.tokens_input ?? 0, to = input.tokens_output ?? 0;
-  return (ti / 1_000_000) * (p.inPerM ?? 0) + (to / 1_000_000) * (p.outPerM ?? 0);
+  const tokenCost = (ti / 1_000_000) * (p.inPerM ?? 0) + (to / 1_000_000) * (p.outPerM ?? 0);
+  if (tokenCost > 0) return tokenCost;
+  if (input.product === 'image') return DEFAULT_PRICE.image.perImage ?? 0;
+  if (input.product === 'image-search') return DEFAULT_PRICE['image-search'].perCall ?? 0;
+  return 0;
 }
 
 // Log de uso (custo, tokens, etc) na tabela usage_events.
 export async function logUsage(input: {
   userId: string;
-  provider: 'gemini' | 'serpapi';
+  provider: 'gemini' | 'serpapi' | 'openai';
   product: 'text' | 'image' | 'image-search';
   model?: string;
   tokens_input?: number;

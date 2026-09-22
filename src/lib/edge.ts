@@ -356,7 +356,9 @@ export const edge = {
     prompt: string;
     aspect_ratio?: string;
     style_hint?: string;
-  }): Promise<{ success: boolean; image_base64: string; mime_type: string }> {
+    model?: string;                 // 'gemini-2.5-flash-image' (nano) | 'gpt-image-2.5-flare' | 'gpt-image-2.5-sunburst'
+    quality?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
+  }): Promise<{ success: boolean; image_base64: string; mime_type: string; model?: string; cost_usd?: number; tokens_input?: number; tokens_output?: number }> {
     const headers = await authHeader();
     const res = await fetch(`${SUPABASE_URL}/functions/v1/generate-image-ai`, {
       method: 'POST',
