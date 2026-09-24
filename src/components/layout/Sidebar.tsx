@@ -58,6 +58,8 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Produção de conteúdo',
     icon: PenTool,
     items: [
+      { to: '/campanhas', label: 'Campanhas', icon: CalendarClock },
+      { to: '/criar', label: 'Criar', icon: PenLine },
       { to: '/linhas', label: 'Campanha de conteúdo', icon: CalendarClock, gated: true },
       { to: '/posts/novo', label: 'Post individual', icon: PenLine },
       { to: '/agenda', label: 'Agenda', icon: CalendarDays },

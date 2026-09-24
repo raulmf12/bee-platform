@@ -165,6 +165,19 @@ export interface PersonaChatOutput {
   error?: string;
 }
 
+// POST numa edge function com a sessão atual; erro vira Error com a mensagem do servidor.
+async function postEdge<T>(fn: string, body: unknown): Promise<T> {
+  const headers = await authHeader();
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/${fn}`, { method: 'POST', headers, body: JSON.stringify(body) });
+  const text = await res.text();
+  if (!res.ok) {
+    let msg = text.slice(0, 300);
+    try { msg = JSON.parse(text).error ?? msg; } catch { /* texto cru */ }
+    throw new Error(msg);
+  }
+  return JSON.parse(text) as T;
+}
+
 export const edge = {
   // A IA cria uma PESSOA inteira a partir de um público-base + pistas (não salva).
   async generatePersona(input: { base?: object; hints?: string }): Promise<GeneratePersonaOutput> {
@@ -391,6 +404,30 @@ export const edge = {
   },
 
   // Valida um token do LinkedIn no servidor (o browser bloqueia por CORS).
+  // --- Campanhas (F2) ---
+  async campaignMoment(input: { type: 'organica' | 'vendas'; intent?: string; user_note?: string }): Promise<{
+    success: boolean; moment: { label: string; summary: string; signals: string[] }; facts: Record<string, unknown>;
+  }> {
+    return postEdge('campaign-moment', input);
+  },
+
+  async campaignStrategy(input: {
+    mode: 'recommend' | 'adjust'; type: 'organica' | 'vendas'; intent?: string;
+    moment?: { label: string; summary: string }; user_note?: string;
+    current_mix?: Record<string, number>; instruction?: string; product_id?: string;
+  }): Promise<{
+    success: boolean;
+    strategy: {
+      mix: Record<'presenca' | 'posicionamento' | 'autoridade' | 'relacionamento' | 'produtos', number>;
+      rationale: string;
+      phases: Array<Record<'presenca' | 'posicionamento' | 'autoridade' | 'relacionamento' | 'produtos', 'muito_baixo' | 'baixo' | 'medio' | 'alto'>>;
+      recommended_weeks: number;
+      duration_rationale: string;
+    };
+  }> {
+    return postEdge('campaign-strategy', input);
+  },
+
   async testLinkedIn(input: { token: string }): Promise<{
     success: boolean;
     name: string | null;
