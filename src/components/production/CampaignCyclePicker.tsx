@@ -66,7 +66,9 @@ export function CampaignCyclePicker({ campaigns, campaignId, cycles, cycleId, re
               {showAll ? 'Mostrar menos' : 'Ver ciclos futuros'} <ChevronRight className={`h-4 w-4 transition-transform ${showAll ? 'rotate-90' : ''}`} />
             </button>
           )}
-          {recommendedCycleId && recommendedCycleId !== cycleId && (
+          {/* Só sugere voltar ao ciclo atual quando ELE é o recomendado (ainda sem pauta aprovada). */}
+          {recommendedCycleId && recommendedCycleId !== cycleId
+            && cycles.some((c) => c.id === recommendedCycleId && c.start_date <= today && today <= c.end_date) && (
             <HiveNote className="p-3">Começar pelo ciclo atual.</HiveNote>
           )}
         </section>

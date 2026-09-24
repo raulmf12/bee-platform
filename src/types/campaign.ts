@@ -167,6 +167,22 @@ export interface ContentConsidered { base?: string; coerencia?: string; formato?
 
 export interface ContentVersion { at: string; body: ContentBody; note?: string }
 
+// Ciclo de aprendizado: a variação PRISTINA da IA (última versão gerada) é o
+// baseline; a validação mede quanto o humano editou (ai_reviews).
+export interface ContentMetadata {
+  generation_id?: string;
+  variation_id?: string;
+  ai_rounds?: number;        // quantas vezes a Hive refez (ajuste/nova versão)
+  manual_edits?: number;     // edições diretas do humano
+  qa_score?: number | null;
+  virality_score?: number | null;
+  virality_reason?: string | null;
+  headline_type?: string | null;
+  analogy?: string | null;
+  validation_post_id?: string;
+  [k: string]: unknown;
+}
+
 export interface Content {
   id: string;
   user_id: string;
@@ -182,6 +198,7 @@ export interface Content {
   status: ContentStatus;
   versions: ContentVersion[];
   position: number;
+  metadata: ContentMetadata;
   created_at: string;
   updated_at: string;
 }

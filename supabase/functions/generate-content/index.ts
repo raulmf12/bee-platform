@@ -48,6 +48,10 @@ interface GenerateInput {
   quote_max_chars?: number;
   // Adaptar de post existente — IA usa quote+caption do referenciado como base
   reference_post_id?: string;
+  // Campanhas: desenvolver uma IDEIA-MÃE já aprovada na pauta. A ideia É a
+  // tarefa principal (o arsenal não é sorteado, como no reaproveitar). Opcional:
+  // sem ele o comportamento é o de sempre.
+  mother_idea?: { title: string; direction?: string; strategic_function?: string };
   target_platform?: 'linkedin' | 'instagram';
   // Rotação forçada de template (Instagram): template-alvo deste post, definido
   // pelo cliente pra garantir variedade. Quando setado, é OBRIGATÓRIO.
@@ -241,7 +245,7 @@ async function loadBeeContext(input: GenerateInput, userId: string) {
       // REAPROVEITAR: a FONTE é o post de referência, não o arsenal. Sem isto o
       // prompt puxava um item de arsenal rotacionado e o modelo gerava sobre OUTRO
       // tema (bug: "gerou conteúdo de outro post"). Então não carrega arsenal aqui.
-      : input.reference_post_id
+      : input.reference_post_id || input.mother_idea
         ? Promise.resolve([] as BeeArsenal[])
         // Sem item escolhido: ROTACIONA — pega o item ativo menos usado / mais antigo
         // (metodologia viva: a cada geracao varia o material e evita repetir).
@@ -916,6 +920,20 @@ function buildUserPrompt(input: GenerateInput, arsenalItem?: { title: string; su
   // sobre outro tema/arsenal. Isso tem prioridade sobre qualquer material.
   if (input.reference_post_id) {
     parts.push('TAREFA: ADAPTE o "POST DE REFERENCIA" (mostrado nas instruções) para a nova plataforma, seguindo as regras da seção "POST DE REFERENCIA — ADAPTAR". O conteúdo NASCE do post de referência — é o MESMO assunto/ideia, reescrito pra nova plataforma. NÃO gere sobre outro tema, NÃO troque o assunto, NÃO invente um post novo.');
+    if (input.briefing) parts.push(`Contexto adicional / briefing:\n${input.briefing}`);
+    parts.push('\nDevolva o JSON conforme as regras de saida.');
+    return parts.join('\n\n');
+  }
+  // CAMPANHAS: a ideia-mãe aprovada é a tarefa. Frase + texto desenvolvem ESSA
+  // linha de pensamento (é o conteúdo-mãe, validado no formato do produtor).
+  if (input.mother_idea) {
+    const m = input.mother_idea;
+    parts.push([
+      `TAREFA: DESENVOLVA a IDEIA-MÃE aprovada na pauta: "${m.title}".`,
+      m.direction ? `Direção do pensamento: ${m.direction}` : '',
+      m.strategic_function ? `Função estratégica na campanha: ${m.strategic_function}` : '',
+      'Desenvolva a linha de pensamento COMPLETA dessa ideia (não troque o assunto, não gere sobre outro tema). A frase condensa o pensamento; o texto o desdobra.',
+    ].filter(Boolean).join('\n'));
     if (input.briefing) parts.push(`Contexto adicional / briefing:\n${input.briefing}`);
     parts.push('\nDevolva o JSON conforme as regras de saida.');
     return parts.join('\n\n');

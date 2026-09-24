@@ -92,3 +92,18 @@ export async function mockPauta(page: Page, calls: Array<Record<string, unknown>
     };
   }, calls);
 }
+
+// content-develop: frase + texto previsíveis por modo.
+export async function mockDevelop(page: Page, calls: Array<Record<string, unknown>> = []) {
+  await mockEdge(page, 'content-develop', async (body) => {
+    const [idea] = await sql<{ title: string }>(`select title from ideas where id='${body.idea_id}'`);
+    const tag = body.mode === 'adjust' ? ' (ajustado)' : body.mode === 'new_version' ? ' (nova versão)' : '';
+    return {
+      success: true,
+      frase: `Frase de ${idea?.title ?? 'ideia'}${tag}`,
+      texto: `Primeiro parágrafo do texto${tag}.\n\nSegundo parágrafo que desdobra o pensamento.`,
+      considered: { base: 'Diagnóstico Sistêmico · Genesis', coerencia: 'Fortalece autoridade sem aproximação comercial direta.', formato: 'LinkedIn · frase + texto' },
+      meta: { headline_type: 'contradicao-direta', analogy: null, virality_score: 80, virality_reason: 'motivo', qa_score: 75 },
+    };
+  }, calls);
+}

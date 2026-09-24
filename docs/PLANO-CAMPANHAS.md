@@ -167,7 +167,7 @@ código antigo; reativar o cron antigo; restaurar tabelas do backup se preciso (
 | **F1** Dados + contas ✅ | migrações (§3), tipos, APIs, backfill de contas, publicação multi-conta c/ fallback, aba Contas | CRUD de contas; round-trip das APIs; RLS isola usuários |
 | **F2** Criação de campanha ✅ | `/criar`, wizard Telas 03–08, `campaign-moment`, `campaign-strategy`, ativação cria ciclos, `/campanhas` + detalhe | wizard completo → campanha ativa c/ N ciclos, mix = 100, ajuste por texto, "Fazer depois" → pendência |
 | **F3** Planejamento + pauta ✅ | `/producao` passos 1–4, plano determinístico, `cycle-pauta` (full/swap/refresh), editar/adicionar ideia, aprovar pauta | pauta gerada, trocar/editar/adicionar, aprovar → ideias `approved` |
-| **F4** Desenvolvimento/validação | `content-develop`, Telas 10–11 (loop 1 de N), ajustar/editar/nova versão, aprovar → peça LinkedIn aprovada + IG "a desenvolver" | validar 4 conteúdos → 4 peças de validação + desdobramentos previstos |
+| **F4** Desenvolvimento/validação ✅ | `content-develop`, Telas 10–11 (loop 1 de N), ajustar/editar/nova versão, aprovar → peça LinkedIn aprovada + IG "a desenvolver" | validar 4 conteúdos → 4 peças de validação + desdobramentos previstos |
 | **F5** Produção visual | desdobramentos (IG via adaptação + Hive), alternativas, galeria 12A, escolha 12B, edição 12C, conclusão | galeria → escolher alternativa → editar → aprovar → produção concluída |
 | **F6** Agenda | timeline, lente de campanha, barras, fila priorizada c/ janela, arrastar, IA distribuir por campanha, painel lateral | agendar por arrasto; IA distribuir respeita campanha; painel |
 | **F7** Home + Pipeline + navegação | Home regente, Pipeline por ideia, "Um conteúdo", menu novo, remoção dos fluxos antigos | Home mostra pendências reais; Kanban agrupa peças; navegação |
@@ -196,3 +196,10 @@ código antigo; reativar o cron antigo; restaurar tabelas do backup se preciso (
   c/ ajuste manual, Pauta: trocar/editar/remover/adicionar/nova seleção/aprovar). E2E f3 4/4 + @live; unit 4/4;
   regressão 24/24. Bugs reais achados: distribuição de canais estourava a cadência quando a IA restringia plataformas
   (cobertura antes de preferência); nova seleção apagava ideias do usuário.
+- 2026-09-24 — **F4 concluída.** `generate-content` ganhou `mother_idea` opcional (retrocompatível; ideia vira a tarefa
+  e o arsenal não é sorteado — chamada legada verificada ao vivo). Edge `content-develop` (develop/adjust/new_version,
+  QA + 1 retry <70, "o que a Hive considerou"). `lib/campaign/develop.ts` preserva o ciclo de aprendizado (cada versão
+  da IA = ai_variation pristina; validação cria a peça LinkedIn `piece_role=validation`, `text_approved`, codigo BEE-…,
+  vincula a variação e grava ai_reviews). Migração `contents.metadata`. Tela: Telas 10–11 (desenvolver c/ progresso,
+  Conteúdo N de M, aprovar/ajustar/editar/nova versão/descartar, "ao aprovar", resumo, desdobramentos). E2E f4 2/2 +
+  @live; regressão 26/26. Bug real: ciclo em memória ficava desatualizado após desenvolver (botão sumia).

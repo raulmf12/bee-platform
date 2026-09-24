@@ -441,6 +441,18 @@ export const edge = {
     return postEdge('cycle-pauta', input);
   },
 
+  // --- Produção (F4): desenvolver/validar conteúdo-mãe ---
+  async contentDevelop(input: {
+    idea_id: string; mode?: 'develop' | 'adjust' | 'new_version';
+    current?: { frase?: string; texto?: string }; instruction?: string;
+  }): Promise<{
+    success: boolean; frase: string; texto: string;
+    considered: { base: string; coerencia: string; formato: string };
+    meta: { headline_type: string | null; analogy: string | null; virality_score: number | null; virality_reason: string | null; qa_score: number | null };
+  }> {
+    return postEdge('content-develop', input);
+  },
+
   async testLinkedIn(input: { token: string }): Promise<{
     success: boolean;
     name: string | null;

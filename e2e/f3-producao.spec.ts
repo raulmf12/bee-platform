@@ -54,7 +54,7 @@ test.describe('F3 · planejamento e pauta', () => {
     await expect(page.getByText('Sua ideia')).toBeVisible();
 
     await page.getByRole('button', { name: /Aprovar pauta e desenvolver conteúdos/ }).click();
-    await expect(page.getByTestId('develop-step')).toBeVisible();
+    await expect(page.getByTestId('develop-intro')).toBeVisible();
 
     const ideas = await sql<{ title: string; status: string; origin: string }>(`select title, status, origin from ideas where cycle_id='${camp.cycleIds[0]}' order by position, created_at`);
     expect(ideas.filter((i) => i.status === 'approved')).toHaveLength(4);

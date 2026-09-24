@@ -33,3 +33,19 @@ export async function seedCampaign(opts: { weeks?: number; name?: string; accoun
   const ordered = await sql<{ id: string }>(`select id from campaign_cycles where campaign_id='${c.id}' order by idx`);
   return { id: c.id, cycleIds: ordered.map((r) => r.id).length ? ordered.map((r) => r.id) : cycles.map((r) => r.id) };
 }
+
+// Ciclo 1 com pauta APROVADA (ideias approved) — ponto de partida da F4.
+export async function seedApprovedPauta(
+  campaignId: string, cycleId: string,
+  ideas: Array<{ title: string; fn: string; channels: Array<{ account_id: string; platform: string }> }>,
+): Promise<string[]> {
+  const { id: userId } = e2eUser();
+  await sql(`update campaign_cycles set status='pauta_approved', plan='{"needs":[],"channels":[],"calendar":[],"totals":{"contents":${ideas.length},"pieces":${ideas.reduce((a, i) => a + i.channels.length, 0)}}}'::jsonb where id='${cycleId}'`);
+  const ids: string[] = [];
+  for (const [n, i] of ideas.entries()) {
+    const [r] = await sql<{ id: string }>(`insert into ideas (user_id, campaign_id, cycle_id, title, summary, strategic_function, editorial_slug, channels, suggested_pieces, origin, status, position)
+      values ('${userId}', '${campaignId}', '${cycleId}', '${i.title.replace(/'/g, "''")}', 'Direção ${n + 1}', '${i.fn}', 'diagnostico-sistemico', '${JSON.stringify(i.channels)}'::jsonb, ${i.channels.length}, 'hive', 'approved', ${n}) returning id`);
+    ids.push(r.id);
+  }
+  return ids;
+}
