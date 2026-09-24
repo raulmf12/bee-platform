@@ -166,7 +166,7 @@ código antigo; reativar o cron antigo; restaurar tabelas do backup se preciso (
 | **F0** Fundação | backup, branch, Playwright, usuário de teste, baseline | baseline 4/4 ✅ |
 | **F1** Dados + contas ✅ | migrações (§3), tipos, APIs, backfill de contas, publicação multi-conta c/ fallback, aba Contas | CRUD de contas; round-trip das APIs; RLS isola usuários |
 | **F2** Criação de campanha ✅ | `/criar`, wizard Telas 03–08, `campaign-moment`, `campaign-strategy`, ativação cria ciclos, `/campanhas` + detalhe | wizard completo → campanha ativa c/ N ciclos, mix = 100, ajuste por texto, "Fazer depois" → pendência |
-| **F3** Planejamento + pauta | `/producao` passos 1–4, plano determinístico, `cycle-pauta` (full/swap/refresh), editar/adicionar ideia, aprovar pauta | pauta gerada, trocar/editar/adicionar, aprovar → ideias `approved` |
+| **F3** Planejamento + pauta ✅ | `/producao` passos 1–4, plano determinístico, `cycle-pauta` (full/swap/refresh), editar/adicionar ideia, aprovar pauta | pauta gerada, trocar/editar/adicionar, aprovar → ideias `approved` |
 | **F4** Desenvolvimento/validação | `content-develop`, Telas 10–11 (loop 1 de N), ajustar/editar/nova versão, aprovar → peça LinkedIn aprovada + IG "a desenvolver" | validar 4 conteúdos → 4 peças de validação + desdobramentos previstos |
 | **F5** Produção visual | desdobramentos (IG via adaptação + Hive), alternativas, galeria 12A, escolha 12B, edição 12C, conclusão | galeria → escolher alternativa → editar → aprovar → produção concluída |
 | **F6** Agenda | timeline, lente de campanha, barras, fila priorizada c/ janela, arrastar, IA distribuir por campanha, painel lateral | agendar por arrasto; IA distribuir respeita campanha; painel |
@@ -189,3 +189,10 @@ código antigo; reativar o cron antigo; restaurar tabelas do backup se preciso (
   `lib/campaign/recommend.ts`), `/campanhas/nova` (Telas 03–08), `/campanhas`, `/campanhas/:id`. Ativação cria ciclos
   semanais (seg–dom) e cadência por conta (prefs da Agenda ou guia). E2E f2 7/7 + @live (IA real) ✅; regressão 16/16.
   Bug real achado pelo E2E: refetch (StrictMode) sobrescrevia o nome/cadência em edição → rascunhos separados.
+- 2026-09-24 — **F3 concluída.** Planejador determinístico `lib/campaign/plan.ts` (mix × intensidade da fase ×
+  cadência → conteúdos/peças/necessidades/frequência; calibrado c/ a maquete 3+3+1→5/7; pesos de intensidade 0.2/0.5/1/1.8).
+  Edge `cycle-pauta` (full/refresh/swap; RAG + arsenal + anti-repetição; servidor garante quantidade, funções e
+  cadência EXATA por conta). Tela `/producao` (trilho de 6 etapas, seletor campanha/ciclo com recomendado, Planejamento
+  c/ ajuste manual, Pauta: trocar/editar/remover/adicionar/nova seleção/aprovar). E2E f3 4/4 + @live; unit 4/4;
+  regressão 24/24. Bugs reais achados: distribuição de canais estourava a cadência quando a IA restringia plataformas
+  (cobertura antes de preferência); nova seleção apagava ideias do usuário.

@@ -428,6 +428,19 @@ export const edge = {
     return postEdge('campaign-strategy', input);
   },
 
+  // --- Produção (F3): pauta do ciclo ---
+  async cyclePauta(input: { cycle_id: string; mode?: 'full' | 'refresh' | 'swap'; idea_id?: string }): Promise<{
+    success: boolean;
+    ideas: Array<{
+      title: string; summary: string;
+      strategic_function: 'presenca' | 'posicionamento' | 'autoridade' | 'relacionamento' | 'produtos';
+      editorial_slug: string; channels: Array<{ account_id: string; platform: 'linkedin' | 'instagram' }>;
+      suggested_pieces: number; rationale: string;
+    }>;
+  }> {
+    return postEdge('cycle-pauta', input);
+  },
+
   async testLinkedIn(input: { token: string }): Promise<{
     success: boolean;
     name: string | null;

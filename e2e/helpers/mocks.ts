@@ -63,3 +63,32 @@ export async function mockCampaignAI(page: Page, calls: { moment: Array<Record<s
   await mockEdge(page, 'campaign-strategy', strategyResponse, calls.strategy);
   return calls;
 }
+
+// cycle-pauta "inteligente": lê o plano REAL do ciclo e devolve ideias que
+// respeitam as necessidades e a cadência (como o servidor garante).
+import { sql } from './admin';
+let _pautaRound = 0;
+export async function mockPauta(page: Page, calls: Array<Record<string, unknown>> = []) {
+  await mockEdge(page, 'cycle-pauta', async (body) => {
+    if (body.mode === 'swap') {
+      return { success: true, ideas: [{ title: 'Ideia trocada pela Hive', summary: 'Nova direção.', strategic_function: 'presenca', editorial_slug: 'provocacao-de-crenca', channels: [], suggested_pieces: 0, rationale: 'troca' }] };
+    }
+    _pautaRound++;
+    const [c] = await sql<{ plan: { needs: Array<{ function: string; count: number }>; channels: Array<{ account_id: string; platform: string; contents: number }> } }>(
+      `select plan from campaign_cycles where id='${body.cycle_id}'`);
+    const fns = c.plan.needs.flatMap((n) => Array(n.count).fill(n.function));
+    const chans: Array<Array<{ account_id: string; platform: string }>> = fns.map(() => []);
+    for (const ch of c.plan.channels) {
+      const order = chans.map((a, i) => ({ i, load: a.length })).sort((a, b) => a.load - b.load || a.i - b.i);
+      for (const o of order.slice(0, ch.contents)) chans[o.i].push({ account_id: ch.account_id, platform: ch.platform });
+    }
+    const prefix = body.mode === 'refresh' ? 'Nova seleção' : 'Ideia da Hive';
+    return {
+      success: true,
+      ideas: fns.map((f, i) => ({
+        title: `${prefix} ${i + 1} (r${_pautaRound})`, summary: `Direção de pensamento ${i + 1}.`, strategic_function: f,
+        editorial_slug: 'provocacao-de-crenca', channels: chans[i], suggested_pieces: chans[i].length, rationale: 'porque sim',
+      })),
+    };
+  }, calls);
+}

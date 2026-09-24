@@ -39,6 +39,7 @@ import { CreateHub } from '@/pages/criar/CreateHub';
 import { Campaigns } from '@/pages/campanhas/Campaigns';
 import { NewCampaign } from '@/pages/campanhas/NewCampaign';
 import { CampaignDetail } from '@/pages/campanhas/CampaignDetail';
+import { Production } from '@/pages/producao/Production';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { currentUser, settings, initialized } = useAuthStore();
@@ -126,6 +127,7 @@ export default function App() {
           <Route path="campanhas" element={<Campaigns />} />
           <Route path="campanhas/nova" element={<NewCampaign />} />
           <Route path="campanhas/:id" element={<CampaignDetail />} />
+          <Route path="producao" element={<Production />} />
           {/* Vídeo virou parte do wizard (NewPost). Rota antiga redireciona. */}
           <Route path="posts/novo-video" element={<Navigate to="/posts/novo" replace />} />
           <Route path="podcasts" element={<Podcasts />} />

@@ -26,7 +26,8 @@ import {
   Database,
   ScrollText,
   UserCircle,
-  DollarSign
+  DollarSign,
+  Layers
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BeeLogo } from '@/components/shared/BeeLogo';
@@ -60,6 +61,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/campanhas', label: 'Campanhas', icon: CalendarClock },
       { to: '/criar', label: 'Criar', icon: PenLine },
+      { to: '/producao', label: 'Produção', icon: Layers },
       { to: '/linhas', label: 'Campanha de conteúdo', icon: CalendarClock, gated: true },
       { to: '/posts/novo', label: 'Post individual', icon: PenLine },
       { to: '/agenda', label: 'Agenda', icon: CalendarDays },

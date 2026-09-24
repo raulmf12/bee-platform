@@ -9,7 +9,7 @@ export async function seedAccounts(): Promise<{ linkedin: string; instagram: str
 }
 
 // Campanha ativa com N ciclos semanais a partir da segunda-feira desta semana.
-export async function seedCampaign(opts: { weeks?: number; name?: string; accountIds?: string[] } = {}): Promise<{ id: string; cycleIds: string[] }> {
+export async function seedCampaign(opts: { weeks?: number; name?: string; accountIds?: string[]; cadence?: number[] } = {}): Promise<{ id: string; cycleIds: string[] }> {
   const weeks = opts.weeks ?? 8;
   const { id: userId } = e2eUser();
   const accounts = opts.accountIds ?? [];
@@ -19,7 +19,7 @@ export async function seedCampaign(opts: { weeks?: number; name?: string; accoun
     values ('${userId}', '${opts.name ?? 'Campanha E2E'}', 'organica', 'active', ${weeks},
       date_trunc('week', now())::date, (date_trunc('week', now()) + interval '${weeks * 7 - 1} days')::date, '#10B981',
       array[${accounts.map((a) => `'${a}'`).join(',')}]::uuid[],
-      '${JSON.stringify(Object.fromEntries(accounts.map((a) => [a, 2])))}'::jsonb,
+      '${JSON.stringify(Object.fromEntries(accounts.map((a, i) => [a, opts.cadence?.[i] ?? 2])))}'::jsonb,
       '{"label":"Expansão de presença","summary":"Resumo E2E"}'::jsonb,
       '{"mix":{"presenca":35,"posicionamento":30,"autoridade":20,"relacionamento":10,"produtos":5},"rationale":"R","matrix":[]}'::jsonb,
       now())
