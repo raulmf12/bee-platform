@@ -164,7 +164,7 @@ código antigo; reativar o cron antigo; restaurar tabelas do backup se preciso (
 | Fase | Entrega | E2E de aceite |
 |---|---|---|
 | **F0** Fundação | backup, branch, Playwright, usuário de teste, baseline | baseline 4/4 ✅ |
-| **F1** Dados + contas | migrações (§3), tipos, APIs, backfill de contas, publicação multi-conta c/ fallback, aba Contas | CRUD de contas; round-trip das APIs; RLS isola usuários |
+| **F1** Dados + contas ✅ | migrações (§3), tipos, APIs, backfill de contas, publicação multi-conta c/ fallback, aba Contas | CRUD de contas; round-trip das APIs; RLS isola usuários |
 | **F2** Criação de campanha | `/criar`, wizard Telas 03–08, `campaign-moment`, `campaign-strategy`, ativação cria ciclos, `/campanhas` + detalhe | wizard completo → campanha ativa c/ N ciclos, mix = 100, ajuste por texto, "Fazer depois" → pendência |
 | **F3** Planejamento + pauta | `/producao` passos 1–4, plano determinístico, `cycle-pauta` (full/swap/refresh), editar/adicionar ideia, aprovar pauta | pauta gerada, trocar/editar/adicionar, aprovar → ideias `approved` |
 | **F4** Desenvolvimento/validação | `content-develop`, Telas 10–11 (loop 1 de N), ajustar/editar/nova versão, aprovar → peça LinkedIn aprovada + IG "a desenvolver" | validar 4 conteúdos → 4 peças de validação + desdobramentos previstos |
@@ -179,3 +179,8 @@ código antigo; reativar o cron antigo; restaurar tabelas do backup se preciso (
 - 2026-09-24 — **F0 concluída.** Backup completo (código/bundle+tag, banco público+sistema, storage 158
   arquivos, cron, edge list). Branch `feat/campanhas`. Playwright 1.63 + usuário de teste
   `23a3fdf1-264d-4fef-aa59-5db2ad05e336` (chave Gemini copiada no servidor). Baseline 4/4.
+- 2026-09-24 — **F1 concluída.** Migração `20260924000001_campanhas_modelo.sql` aplicada (6 tabelas + 11 colunas
+  em `user_posts`, RLS dono). Tipos `src/types/campaign.ts`, APIs `src/lib/campaignApi.ts`. `publish.ts` resolve
+  credenciais pela conta da peça com fallback em `user_settings` (deploy de publish-post/scheduler; cron pós-deploy
+  200 OK). Aba Configurações › Contas (`AccountsPanel`: LinkedIn, Instagram OAuth c/ Insights, importar integrações,
+  padrão, remover). E2E 10/10 (baseline + f1-contas).

@@ -29,19 +29,46 @@ export async function sql<T = Record<string, unknown>>(query: string): Promise<T
 // Tabelas com user_id que os testes podem sujar. Ordem = filhos antes dos pais.
 // (Cresce conforme as fases adicionam tabelas.)
 export const E2E_OWNED_TABLES = [
+  'post_metrics',
   'user_posts',
+  'contents',
+  'ideas',
+  'campaign_cycles',
+  'campaigns',
+  'social_accounts',
   'image_model_trials',
 ];
 
-// Apaga TUDO do usuário de teste nessas tabelas. Trava dupla contra apagar dado real.
+// Apaga TUDO do usuário de teste nessas tabelas, numa única ida ao banco.
+// Trava dupla contra apagar dado real.
+let _existing: Set<string> | null = null;
 export async function cleanupE2EData(): Promise<void> {
   const { id } = e2eUser();
   if (!id || id === MARCOS) throw new Error('cleanup recusado: id inválido');
-  const existing = await sql<{ t: string }>(
-    `select table_name as t from information_schema.columns where table_schema='public' and column_name='user_id' and table_name in (${E2E_OWNED_TABLES.map((t) => `'${t}'`).join(',')})`,
-  );
-  const have = new Set(existing.map((r) => r.t));
-  for (const t of E2E_OWNED_TABLES) {
-    if (have.has(t)) await sql(`delete from public.${t} where user_id='${id}'`);
+  if (!_existing) {
+    const rows = await sql<{ t: string }>(
+      `select table_name as t from information_schema.columns where table_schema='public' and column_name='user_id' and table_name in (${E2E_OWNED_TABLES.map((t) => `'${t}'`).join(',')})`,
+    );
+    _existing = new Set(rows.map((r) => r.t));
   }
+  const stmts = E2E_OWNED_TABLES.filter((t) => _existing!.has(t)).map((t) => `delete from public.${t} where user_id='${id}';`);
+  if (stmts.length) await sql(stmts.join(' '));
+}
+
+// Escapa um literal SQL simples (só pra dados de teste controlados).
+export const lit = (v: unknown): string =>
+  v === null || v === undefined ? 'null' : typeof v === 'number' || typeof v === 'boolean'
+    ? String(v) : `'${String(v).replace(/'/g, "''")}'`;
+
+// Insere uma linha do usuário de teste e devolve o id.
+export async function seed(table: string, row: Record<string, unknown>): Promise<string> {
+  const { id: userId } = e2eUser();
+  const full: Record<string, unknown> = { user_id: userId, ...row };
+  const cols = Object.keys(full);
+  const vals = cols.map((c) => {
+    const v = full[c];
+    return v !== null && typeof v === 'object' ? `${lit(JSON.stringify(v))}::jsonb` : lit(v);
+  });
+  const rows = await sql<{ id: string }>(`insert into public.${table} (${cols.join(',')}) values (${vals.join(',')}) returning id`);
+  return rows[0].id;
 }

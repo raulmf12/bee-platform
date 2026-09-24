@@ -19,6 +19,7 @@ import { beeApi, knowledgeApi } from '@/lib/api';
 import { edge } from '@/lib/edge';
 import { db } from '@/lib/db';
 import { toast } from 'sonner';
+import { AccountsPanel, IG_ACCOUNT_STATE_KEY } from '@/components/settings/AccountsPanel';
 
 interface BeeStats {
   editorials: number;
@@ -277,13 +278,20 @@ export function SettingsPage() {
         <p className="mt-1 text-sm text-muted-foreground">Perfil, voz Bee, branding e integracoes.</p>
       </header>
 
-      <Tabs defaultValue="profile">
+      {/* Volta do OAuth de uma conta (Contas) abre direto na aba Contas. */}
+      <Tabs defaultValue={typeof window !== 'undefined' && sessionStorage.getItem(IG_ACCOUNT_STATE_KEY) ? 'accounts' : 'profile'}>
         <TabsList>
           <TabsTrigger value="profile">Perfil</TabsTrigger>
+          <TabsTrigger value="accounts">Contas</TabsTrigger>
           <TabsTrigger value="voice">Voz Bee</TabsTrigger>
           <TabsTrigger value="branding">Branding</TabsTrigger>
           <TabsTrigger value="integrations">Integracoes</TabsTrigger>
         </TabsList>
+
+        {/* ============ CONTAS ============ */}
+        <TabsContent value="accounts" className="space-y-4">
+          <AccountsPanel />
+        </TabsContent>
 
         {/* ============ PERFIL ============ */}
         <TabsContent value="profile" className="space-y-4">

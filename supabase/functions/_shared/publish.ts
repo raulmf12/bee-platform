@@ -27,6 +27,9 @@ export interface PublishablePost {
   // publicam depois de image_approved=true.
   visual_decision: unknown | null;
   image_approved: boolean | null;
+  // Campanhas: a conta social da peça. Nula nos posts antigos → credenciais de
+  // user_settings (comportamento de sempre).
+  account_id: string | null;
 }
 
 interface UserSettings {
@@ -40,7 +43,7 @@ export interface PublishResult { url: string; id: string; platform: string }
 
 async function loadPost(id: string): Promise<PublishablePost | null> {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/user_posts?id=eq.${id}&select=id,user_id,platform,format,caption,rendered_slides,metadata,publish_attempts,visual_decision,image_approved&limit=1`,
+    `${SUPABASE_URL}/rest/v1/user_posts?id=eq.${id}&select=id,user_id,platform,format,caption,rendered_slides,metadata,publish_attempts,visual_decision,image_approved,account_id&limit=1`,
     { headers: svcHeaders() },
   );
   if (!res.ok) return null;
@@ -56,6 +59,53 @@ async function loadSettings(userId: string): Promise<UserSettings | null> {
   if (!res.ok) return null;
   const rows = await res.json();
   return rows[0] ?? null;
+}
+
+interface SocialAccountRow extends UserSettings {
+  id: string;
+  platform: 'linkedin' | 'instagram';
+  label: string;
+  status: string;
+}
+
+async function loadAccount(id: string): Promise<SocialAccountRow | null> {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/social_accounts?id=eq.${id}&select=id,platform,label,status,linkedin_token,linkedin_author_urn,instagram_access_token,instagram_business_account_id&limit=1`,
+    { headers: svcHeaders() },
+  );
+  if (!res.ok) return null;
+  const rows = await res.json();
+  return rows[0] ?? null;
+}
+
+// Credenciais de publicação: a CONTA da peça (multi-conta) tem prioridade; sem
+// conta (posts antigos), cai em user_settings — exatamente como antes.
+interface Credentials extends UserSettings { accountLabel: string | null }
+
+async function resolveCredentials(post: PublishablePost, settings: UserSettings): Promise<Credentials> {
+  if (!post.account_id) return { ...settings, accountLabel: null };
+  const acc = await loadAccount(post.account_id);
+  if (!acc) throw new Error('A conta desta peça não existe mais. Escolha outra conta antes de publicar.');
+  if (acc.platform !== post.platform) {
+    throw new Error(`A conta "${acc.label}" é de ${acc.platform}, mas a peça é de ${post.platform}.`);
+  }
+  if (acc.status !== 'connected') {
+    throw new Error(`A conta "${acc.label}" está desconectada. Reconecte em Configurações > Contas.`);
+  }
+  return {
+    linkedin_token: acc.linkedin_token,
+    linkedin_author_urn: acc.linkedin_author_urn,
+    instagram_access_token: acc.instagram_access_token,
+    instagram_business_account_id: acc.instagram_business_account_id,
+    accountLabel: acc.label,
+  };
+}
+
+function missingCreds(platform: string, creds: Credentials): string {
+  const net = platform === 'linkedin' ? 'LinkedIn' : 'Instagram';
+  return creds.accountLabel
+    ? `A conta "${creds.accountLabel}" está sem token do ${net}. Configure em Configurações > Contas.`
+    : `${net} nao configurado. Vai em Configuracoes > Integracoes.`;
 }
 
 async function updatePost(id: string, patch: Record<string, unknown>): Promise<void> {
@@ -202,11 +252,12 @@ export async function publishOne(postId: string, userId: string): Promise<Publis
       throw new Error('Aprove a imagem de IA antes de publicar (portão de imagem — M01-D/E e M02).');
     }
 
+    const creds = await resolveCredentials(post, settings);
     let result: PublishResult;
 
     if (post.platform === 'linkedin') {
-      if (!settings.linkedin_token || !settings.linkedin_author_urn) {
-        throw new Error('LinkedIn nao configurado. Vai em Configuracoes > Integracoes.');
+      if (!creds.linkedin_token || !creds.linkedin_author_urn) {
+        throw new Error(missingCreds('linkedin', creds));
       }
       if (post.format === 'video') throw new Error('Publicacao de video no LinkedIn ainda nao implementada.');
       // Espelha o Instagram: sem imagem renderizada, NAO publica. Antes havia um
@@ -215,19 +266,19 @@ export async function publishOne(postId: string, userId: string): Promise<Publis
       // renderizado/persistido — perda silenciosa. Agora bloqueia com erro visivel.
       const imageUrl = post.rendered_slides?.slide1;
       if (!imageUrl) throw new Error('Imagem não renderizada. Abra o post no editor e clique em Stand-by (renderiza automático) antes de agendar/publicar.');
-      result = await publishLinkedInImage(settings.linkedin_token, settings.linkedin_author_urn, imageUrl, caption);
+      result = await publishLinkedInImage(creds.linkedin_token, creds.linkedin_author_urn, imageUrl, caption);
     } else if (post.platform === 'instagram') {
-      if (!settings.instagram_access_token || !settings.instagram_business_account_id) {
-        throw new Error('Instagram nao configurado. Vai em Configuracoes > Integracoes.');
+      if (!creds.instagram_access_token || !creds.instagram_business_account_id) {
+        throw new Error(missingCreds('instagram', creds));
       }
       if (post.format === 'video') {
         const videoUrl = (post.metadata as { video_url?: string })?.video_url;
         if (!videoUrl) throw new Error('video_url ausente no post metadata');
-        result = await publishInstagramVideo(settings.instagram_access_token, settings.instagram_business_account_id, videoUrl, caption);
+        result = await publishInstagramVideo(creds.instagram_access_token, creds.instagram_business_account_id, videoUrl, caption);
       } else {
         const imageUrl = post.rendered_slides?.slide1;
         if (!imageUrl) throw new Error('Imagem não renderizada. Abra o post no editor e clique em Stand-by (renderiza automático) antes de agendar/publicar.');
-        result = await publishInstagramImage(settings.instagram_access_token, settings.instagram_business_account_id, imageUrl, caption);
+        result = await publishInstagramImage(creds.instagram_access_token, creds.instagram_business_account_id, imageUrl, caption);
       }
     } else {
       throw new Error(`Plataforma nao suportada: ${post.platform}`);

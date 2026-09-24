@@ -237,6 +237,18 @@ export interface UserPost {
   published_at?: string | null;
   publish_error?: string | null;
   publish_attempts?: number;
+  // Campanhas — a Peça (user_posts) ligada ao conteúdo-mãe/campanha/ciclo/conta.
+  content_id?: string | null;
+  campaign_id?: string | null;
+  cycle_id?: string | null;
+  account_id?: string | null;
+  piece_role?: 'validation' | 'unfold' | null;
+  alternative_group?: string | null;
+  alternative_rank?: number | null;
+  is_recommended?: boolean | null;
+  schedule_priority?: number | null;
+  suggested_start?: string | null;
+  suggested_end?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1057,3 +1069,5 @@ export interface AiGate {
   amostra_total: number;
   segmentos: AiSegment[];
 }
+
+export * from './campaign';
