@@ -84,14 +84,7 @@ export async function editContent(content: Content, body: ContentBody): Promise<
   });
 }
 
-// BEE-DDMMAA-G{global}-D{dia} — mesma nomenclatura do fluxo antigo.
-export async function nextCodigo(offset = 0): Promise<string> {
-  const rows = await db.select<{ created_at: string }>('user_posts', { select: 'created_at' });
-  const now = new Date();
-  const sameDay = (iso: string) => { const d = new Date(iso); return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate(); };
-  const dd = String(now.getDate()).padStart(2, '0'), mm = String(now.getMonth() + 1).padStart(2, '0'), yy = String(now.getFullYear()).slice(-2);
-  return `BEE-${dd}${mm}${yy}-G${rows.length + 1 + offset}-D${rows.filter((r) => sameDay(r.created_at)).length + 1 + offset}`;
-}
+// O codigo BEE-DDMMAA-G{n}-D{n} é gerado no banco (trigger) — único mesmo em paralelo.
 
 // Aprovar o conteúdo: valida a linha de pensamento. Se a ideia tem LinkedIn
 // (formato de validação do Marcos), a peça do LinkedIn nasce com o texto
@@ -112,7 +105,6 @@ export async function validateContent(
         quote: content.body.frase ?? '', headline_type: meta.headline_type ?? null, analogy: meta.analogy ?? null,
         virality_score: meta.virality_score ?? null, virality_reason: meta.virality_reason ?? null,
       },
-      codigo: await nextCodigo(),
       virality_score: meta.virality_score ?? null, virality_reason: meta.virality_reason ?? null,
       ai_edit_rounds: meta.ai_rounds ?? 0, manual_edits: meta.manual_edits ?? 0,
       text_approved: true,

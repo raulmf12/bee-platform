@@ -107,3 +107,25 @@ export async function mockDevelop(page: Page, calls: Array<Record<string, unknow
     };
   }, calls);
 }
+
+// Produção visual: hive-decide (respeita a seed), generate-content (3 variações com
+// variantes gráficas distintas), edit-text. Composição/render/upload são REAIS.
+export async function mockProduction(page: Page, calls: { gen: Array<Record<string, unknown>>; decide: Array<Record<string, unknown>>; edit: Array<Record<string, unknown>> } = { gen: [], decide: [], edit: [] }) {
+  await mockEdge(page, 'hive-decide', (b) => {
+    const seed = b.seed as { variant?: string; highlight?: unknown } | undefined;
+    const variant = seed?.variant ?? (b.platform === 'linkedin' ? 'M01-A' : 'M01-B');
+    return { success: true, model_used: 'mock', decision: { mode: variant.split('-')[0], variant, highlight: seed?.highlight ?? null, subtitle: null, asset: null, diagram: null, explanation: { variant_reason: `Direção ${variant} (E2E)` } } };
+  }, calls.decide);
+  await mockEdge(page, 'generate-content', (b) => {
+    const n = Number(b.variations ?? 1);
+    const variants = ['M01-A', 'M01-B', 'M01-C'];
+    const vars = Array.from({ length: n }, (_, i) => ({
+      quote: `Frase do desdobramento ${i + 1}`, caption: `Legenda do desdobramento ${i + 1}.\n\nSegundo bloco.`,
+      headline_type_used: 'contradicao-direta', virality_score: 70 + i,
+      hive_seed: { variant: variants[i % 3], manifestation: 'M01', highlight: null, subtitle: null, poles: null, image_scene_hint: '', human_presence_adds_meaning: false, mode_reason: '', variant_reason: `Opção ${variants[i % 3]}` },
+    }));
+    return { success: true, variations: vars, ...vars[0] };
+  }, calls.gen);
+  await mockEdge(page, 'edit-text', (b) => ({ success: true, text: b.field === 'legenda' ? 'Legenda ajustada pela Hive' : 'Frase ajustada pela Hive' }), calls.edit);
+  return calls;
+}

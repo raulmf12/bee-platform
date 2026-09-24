@@ -24,6 +24,8 @@ export interface GenerateContentInput {
   // Rotação forçada de template (só Instagram): o cliente manda o template-alvo
   // deste post pra garantir variedade — o generate-content escreve moldado pra ele.
   force_variant?: string;
+  // Campanhas: desenvolver uma ideia-mãe aprovada (a ideia é a tarefa; sem arsenal).
+  mother_idea?: { title: string; direction?: string; strategic_function?: string };
   // Quantas variacoes gerar numa unica chamada (1..5).
   // As 5 saem no MESMO pedido de proposito: o prompt (persona + arsenal +
   // exemplos + Camada 0 da Alma) e enorme e a saida e curta, entao 5 variacoes

@@ -75,3 +75,23 @@ export async function seed(table: string, row: Record<string, unknown>): Promise
   const rows = await sql<{ id: string }>(`insert into public.${table} (${cols.join(',')}) values (${vals.join(',')}) returning id`);
   return rows[0].id;
 }
+
+// Apaga do Storage os arquivos que os testes subiram na pasta do usuário de teste
+// (bucket media, prefixo <uid>/). Nunca toca em outra pasta.
+export async function cleanupE2EStorage(): Promise<number> {
+  const { id } = e2eUser();
+  if (!id || id === MARCOS) throw new Error('cleanup recusado: id inválido');
+  const rows = await sql<{ name: string }>(`select name from storage.objects where bucket_id='media' and name like '${id}/%'`);
+  if (!rows.length) return 0;
+  const keys = await fetch(`https://api.supabase.com/v1/projects/${REF}/api-keys`, { headers: { Authorization: `Bearer ${mgmtToken()}` } }).then((r) => r.json()) as Array<{ name: string; api_key: string }>;
+  const svc = keys.find((k) => k.name === 'service_role')?.api_key;
+  if (!svc) return 0;
+  const names = rows.map((r) => r.name).filter((n) => n.startsWith(`${id}/`));
+  for (let i = 0; i < names.length; i += 100) {
+    await fetch(`https://${REF}.supabase.co/storage/v1/object/media`, {
+      method: 'DELETE', headers: { apikey: svc, Authorization: `Bearer ${svc}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prefixes: names.slice(i, i + 100) }),
+    });
+  }
+  return names.length;
+}

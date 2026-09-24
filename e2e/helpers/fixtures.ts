@@ -49,3 +49,29 @@ export async function seedApprovedPauta(
   }
   return ids;
 }
+
+// Ciclo em PRODUÇÃO com conteúdos validados (ponto de partida da F5).
+export async function seedValidatedContents(
+  campaignId: string, cycleId: string,
+  specs: Array<{ title: string; channels: Array<{ account_id: string; platform: string }>; validationPiece?: boolean; rendered?: boolean }>,
+): Promise<Array<{ contentId: string; ideaId: string; pieceId?: string }>> {
+  const { id: userId } = e2eUser();
+  await sql(`update campaign_cycles set status='producing' where id='${cycleId}'`);
+  const out: Array<{ contentId: string; ideaId: string; pieceId?: string }> = [];
+  for (const [n, s] of specs.entries()) {
+    const t = s.title.replace(/'/g, "''");
+    const [idea] = await sql<{ id: string }>(`insert into ideas (user_id, campaign_id, cycle_id, title, summary, strategic_function, editorial_slug, channels, suggested_pieces, status, position)
+      values ('${userId}','${campaignId}','${cycleId}','${t}','Direção','autoridade','diagnostico-sistemico','${JSON.stringify(s.channels)}'::jsonb, ${s.channels.length}, 'developed', ${n}) returning id`);
+    const [content] = await sql<{ id: string }>(`insert into contents (user_id, idea_id, campaign_id, cycle_id, title, strategic_function, editorial_slug, body, status, position)
+      values ('${userId}','${idea.id}','${campaignId}','${cycleId}','${t}','autoridade','diagnostico-sistemico','{"frase":"Frase validada ${n + 1}","texto":"Texto validado."}'::jsonb,'validated', ${n}) returning id`);
+    let pieceId: string | undefined;
+    if (s.validationPiece) {
+      const li = s.channels.find((c) => c.platform === 'linkedin');
+      const [p] = await sql<{ id: string }>(`insert into user_posts (user_id, platform, format, status, title, caption, carousel_text, text_approved, content_id, campaign_id, cycle_id, account_id, piece_role, metadata ${s.rendered ? ', rendered_slides' : ''})
+        values ('${userId}','linkedin','image','pending_approval','Diagnóstico Sistêmico','Texto validado.','{"quote":"Frase validada ${n + 1}"}'::jsonb, true, '${content.id}','${campaignId}','${cycleId}','${li?.account_id}','validation','{"editorial_slug":"diagnostico-sistemico"}'::jsonb ${s.rendered ? `, '{"slide1":"https://example.com/x.jpg"}'::jsonb` : ''}) returning id`);
+      pieceId = p.id;
+    }
+    out.push({ contentId: content.id, ideaId: idea.id, pieceId });
+  }
+  return out;
+}

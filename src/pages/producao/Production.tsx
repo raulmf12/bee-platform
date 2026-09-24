@@ -2,14 +2,15 @@
 // Desenvolvimento → Revisão (maquete). A etapa vem do status do ciclo; as já
 // alcançadas podem ser revisitadas pelo trilho.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { CheckCircle2, Loader2 } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ProductionStepper } from '@/components/production/ProductionStepper';
 import { CampaignCyclePicker } from '@/components/production/CampaignCyclePicker';
 import { PlanStep } from '@/components/production/PlanStep';
 import { PautaStep } from '@/components/production/PautaStep';
 import { DevelopStep } from '@/components/production/DevelopStep';
+import { ReviewStep } from '@/components/production/ReviewStep';
 import { accountApi, campaignApi, cycleApi, ideaApi } from '@/lib/campaignApi';
 import { beeApi } from '@/lib/api';
 import type { BeeEditorial, Campaign, CampaignCycle, CycleStatus, Idea, SocialAccount } from '@/types';
@@ -117,16 +118,7 @@ export function Production() {
             <DevelopStep campaign={campaign} cycle={cycle} ideas={ideas} editorials={editorials} accounts={accounts}
               onIdeasChange={setIdeas} onCycleChange={replaceCycle} onDone={(c) => { replaceCycle(c); setViewStep(null); }} />
           ) : (
-            <div className="space-y-4 rounded-2xl border bg-card p-8" data-testid="review-step">
-              <p className="flex items-center gap-2 font-display text-xl font-semibold"><CheckCircle2 className="h-5 w-5 text-emerald-600" /> Conteúdos validados</p>
-              <p className="text-sm text-muted-foreground">A produção visual dos desdobramentos acontece nesta etapa.</p>
-              <ol className="space-y-1 text-sm">
-                {ideas.filter((i) => i.status === 'approved' || i.status === 'developed').map((i, n) => (
-                  <li key={i.id}><span className="mr-2 text-muted-foreground">{String(n + 1).padStart(2, '0')}</span>{i.title}</li>
-                ))}
-              </ol>
-              <Link to={`/campanhas/${campaign.id}`} className="text-sm underline">Ver campanha</Link>
-            </div>
+            <ReviewStep campaign={campaign} cycle={cycle} ideas={ideas} editorials={editorials} accounts={accounts} onCycleChange={replaceCycle} />
           )}
         </main>
       </div>

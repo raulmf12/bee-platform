@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { cleanupE2EData, sql } from './helpers/admin';
-import { mockDevelop } from './helpers/mocks';
+import { mockDevelop, mockProduction } from './helpers/mocks';
 import { seedAccounts, seedApprovedPauta, seedCampaign } from './helpers/fixtures';
 
 // F4 — Telas 10–11: desenvolver os conteúdos-mãe e validá-los um a um.
@@ -18,6 +18,7 @@ test.describe('F4 · desenvolvimento e validação', () => {
   test('desenvolver → aprovar / editar / ajustar → resumo → desdobramentos (com ciclo de aprendizado)', async ({ page }) => {
     const calls: Array<Record<string, unknown>> = [];
     await mockDevelop(page, calls);
+    await mockProduction(page); // a etapa seguinte (produção visual) começa sozinha
     const { acc, camp } = await setup((a) => [
       { title: 'Por que bons líderes repetem velhos padrões?', fn: 'autoridade', channels: [{ account_id: a.linkedin, platform: 'linkedin' }, { account_id: a.instagram, platform: 'instagram' }] },
       { title: 'O problema pode não estar onde procuramos', fn: 'posicionamento', channels: [{ account_id: a.linkedin, platform: 'linkedin' }] },
@@ -65,16 +66,17 @@ test.describe('F4 · desenvolvimento e validação', () => {
     await expect(page.getByTestId('develop-stats')).toContainText('2já aprovadas no formato de validação');
     await expect(page.getByTestId('develop-stats')).toContainText('2desdobramentos a desenvolver');
     await page.getByRole('button', { name: /Desenvolver desdobramentos/ }).click();
-    await expect(page.getByTestId('review-step')).toBeVisible();
+    await expect(page.getByTestId('review-overview')).toBeVisible();
     const [cy2] = await sql<{ status: string }>(`select status from campaign_cycles where id='${cycleId}'`);
     expect(cy2.status).toBe('producing');
 
     // ---- banco: peças de validação + ciclo de aprendizado ----
     const pieces = await sql<{ id: string; platform: string; piece_role: string; status: string; text_approved: boolean; account_id: string; caption: string; quote: string; ai_edit_rounds: number; manual_edits: number; codigo: string }>(
-      `select id, platform, piece_role, status, text_approved, account_id, caption, carousel_text->>'quote' as quote, ai_edit_rounds, manual_edits, codigo from user_posts where cycle_id='${cycleId}' order by created_at`);
+      `select id, platform, piece_role, status, text_approved, account_id, caption, carousel_text->>'quote' as quote, ai_edit_rounds, manual_edits, codigo from user_posts where cycle_id='${cycleId}' and piece_role='validation' order by created_at`);
     expect(pieces).toHaveLength(2);
     for (const p of pieces) {
-      expect(p).toMatchObject({ platform: 'linkedin', piece_role: 'validation', status: 'pending_approval', text_approved: true, account_id: acc.linkedin });
+      // o status evolui (a produção visual começa sozinha e aprova a peça de validação)
+      expect(p).toMatchObject({ platform: 'linkedin', piece_role: 'validation', text_approved: true, account_id: acc.linkedin });
       expect(p.codigo).toMatch(/^BEE-\d{6}-G\d+-D\d+$/);
     }
     expect(pieces[1].quote).toBe('Frase reescrita à mão pelo Marcos');

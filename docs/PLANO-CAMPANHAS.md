@@ -168,7 +168,7 @@ código antigo; reativar o cron antigo; restaurar tabelas do backup se preciso (
 | **F2** Criação de campanha ✅ | `/criar`, wizard Telas 03–08, `campaign-moment`, `campaign-strategy`, ativação cria ciclos, `/campanhas` + detalhe | wizard completo → campanha ativa c/ N ciclos, mix = 100, ajuste por texto, "Fazer depois" → pendência |
 | **F3** Planejamento + pauta ✅ | `/producao` passos 1–4, plano determinístico, `cycle-pauta` (full/swap/refresh), editar/adicionar ideia, aprovar pauta | pauta gerada, trocar/editar/adicionar, aprovar → ideias `approved` |
 | **F4** Desenvolvimento/validação ✅ | `content-develop`, Telas 10–11 (loop 1 de N), ajustar/editar/nova versão, aprovar → peça LinkedIn aprovada + IG "a desenvolver" | validar 4 conteúdos → 4 peças de validação + desdobramentos previstos |
-| **F5** Produção visual | desdobramentos (IG via adaptação + Hive), alternativas, galeria 12A, escolha 12B, edição 12C, conclusão | galeria → escolher alternativa → editar → aprovar → produção concluída |
+| **F5** Produção visual ✅ | desdobramentos (IG via adaptação + Hive), alternativas, galeria 12A, escolha 12B, edição 12C, conclusão | galeria → escolher alternativa → editar → aprovar → produção concluída |
 | **F6** Agenda | timeline, lente de campanha, barras, fila priorizada c/ janela, arrastar, IA distribuir por campanha, painel lateral | agendar por arrasto; IA distribuir respeita campanha; painel |
 | **F7** Home + Pipeline + navegação | Home regente, Pipeline por ideia, "Um conteúdo", menu novo, remoção dos fluxos antigos | Home mostra pendências reais; Kanban agrupa peças; navegação |
 | **F8** Métricas + recomendações | `metrics-ingest`, métricas manuais LinkedIn, resultados nos cards, "Hive recomenda", `campaign-tick` | ingestão (mock Graph API); recomendação aparece; pauta pré-gerada |
@@ -203,3 +203,12 @@ código antigo; reativar o cron antigo; restaurar tabelas do backup se preciso (
   vincula a variação e grava ai_reviews). Migração `contents.metadata`. Tela: Telas 10–11 (desenvolver c/ progresso,
   Conteúdo N de M, aprovar/ajustar/editar/nova versão/descartar, "ao aprovar", resumo, desdobramentos). E2E f4 2/2 +
   @live; regressão 26/26. Bug real: ciclo em memória ficava desatualizado após desenvolver (botão sumia).
+- 2026-09-24 — **F5 concluída.** `lib/campaign/produce.ts` reusa `generateHiveImage` (peça de validação LinkedIn M01-A
+  produzida e aprovada automaticamente; desdobramentos via generate-content c/ `reference_post_id` ou `mother_idea`,
+  3 variações → alternativas só com variante visual distinta; alternative_group/rank/is_recommended; ciclo de
+  aprendizado; cache-buster `?v=` no render). `ReviewStep`: Telas 12/12A/12B/12C + pós-aprovação + conclusão →
+  `/agenda?campaign=`. Executor de produção por ciclo com assinantes (sem duplicar em remontagem). Migração
+  `…000003`: trigger gera `codigo` no banco (advisory lock por usuário) — corrige códigos duplicados em paralelo;
+  preserva código informado. Limpeza do Storage do usuário de teste. E2E f5 3/3 (×3 sem intermitência) + @live;
+  regressão 29/29. Bugs reais: produção presa em "0 de N" (StrictMode), códigos duplicados, corrida das ideias
+  (desdobramentos não produzidos), resumo piscando incompleto.
