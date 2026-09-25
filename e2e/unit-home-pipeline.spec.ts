@@ -121,6 +121,16 @@ test.describe('unit · home regente', () => {
     expect(items.find((i) => i.kind === 'legacy_text')?.title).toBe('1 post aguardando aprovação de texto');
   });
 
+  test('publicação que falhou vira pendência urgente; histórico com conteúdo segue como legado', () => {
+    const posts = [
+      post('f1', { status: 'scheduled', scheduled_date: new Date(2026, 8, 9, 9).toISOString(), publish_error: 'Aprove a imagem de IA antes de publicar', carousel_text: { quote: 'Frase X' } }),
+      post('h1', { status: 'pending_approval', content_id: 'k-hist', metadata: {} }),
+    ];
+    const items = pendingItems(base({ posts }));
+    expect(items[0]).toMatchObject({ kind: 'publish_failed', title: '“Frase X”', urgent: true, cta: 'Resolver', to: '/posts/f1', dueLabel: 'Publicar — atrasado desde 09/09' });
+    expect(items.find((i) => i.kind === 'legacy_text')?.title).toBe('1 post aguardando aprovação de texto');
+  });
+
   test('acontecendo + próximas publicações', () => {
     const posts = [
       post('s1', { status: 'scheduled', scheduled_date: new Date(2026, 8, 24, 18, 0).toISOString(), account_id: 'li' }),

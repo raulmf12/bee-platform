@@ -15,7 +15,6 @@ import { Produtos } from '@/pages/produtos/Produtos';
 import { Editoriais } from '@/pages/editoriais/Editoriais';
 import { Arsenal } from '@/pages/arsenal/Arsenal';
 import { Curadoria } from '@/pages/curadoria/Curadoria';
-import { LinhasEditoriais } from '@/pages/linhas/LinhasEditoriais';
 import { Podcasts } from '@/pages/podcasts/Podcasts';
 import { NewPodcastClip } from '@/pages/podcasts/NewPodcastClip';
 import { Templates } from '@/pages/templates/Templates';
@@ -143,7 +142,8 @@ export default function App() {
           <Route path="editoriais" element={<Editoriais />} />
           <Route path="arsenal" element={<Arsenal />} />
           <Route path="curadoria" element={<Curadoria />} />
-          <Route path="linhas" element={<LinhasEditoriais />} />
+          {/* Linhas editoriais foram encerradas no cutover (D11): a estrutura agora é Campanhas. */}
+          <Route path="linhas" element={<Navigate to="/campanhas" replace />} />
           <Route path="biblioteca" element={<Biblioteca />} />
           <Route path="conhecimento" element={<KnowledgeBase />} />
           <Route path="configuracoes" element={<SettingsPage />} />

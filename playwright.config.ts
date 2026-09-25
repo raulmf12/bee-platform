@@ -30,7 +30,7 @@ export default defineConfig({
       name: 'e2e',
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, storageState: 'e2e/.auth/user.json' },
       dependencies: ['setup'],
-      grepInvert: /@live/,
+      grepInvert: process.env.TOOLS ? /@live/ : /@live|@tool/, // TOOLS=1 roda as ferramentas (e2e/tools)
     },
     {
       name: 'live',

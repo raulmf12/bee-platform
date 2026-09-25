@@ -66,11 +66,12 @@ interface SocialAccountRow extends UserSettings {
   platform: 'linkedin' | 'instagram';
   label: string;
   status: string;
+  metadata: { source?: string } | null;
 }
 
 async function loadAccount(id: string): Promise<SocialAccountRow | null> {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/social_accounts?id=eq.${id}&select=id,platform,label,status,linkedin_token,linkedin_author_urn,instagram_access_token,instagram_business_account_id&limit=1`,
+    `${SUPABASE_URL}/rest/v1/social_accounts?id=eq.${id}&select=id,platform,label,status,metadata,linkedin_token,linkedin_author_urn,instagram_access_token,instagram_business_account_id&limit=1`,
     { headers: svcHeaders() },
   );
   if (!res.ok) return null;
@@ -80,7 +81,7 @@ async function loadAccount(id: string): Promise<SocialAccountRow | null> {
 
 // Credenciais de publicação: a CONTA da peça (multi-conta) tem prioridade; sem
 // conta (posts antigos), cai em user_settings — exatamente como antes.
-interface Credentials extends UserSettings { accountLabel: string | null }
+interface Credentials extends UserSettings { accountLabel: string | null; viaIntegrations?: boolean }
 
 async function resolveCredentials(post: PublishablePost, settings: UserSettings): Promise<Credentials> {
   if (!post.account_id) return { ...settings, accountLabel: null };
@@ -92,6 +93,9 @@ async function resolveCredentials(post: PublishablePost, settings: UserSettings)
   if (acc.status !== 'connected') {
     throw new Error(`A conta "${acc.label}" está desconectada. Reconecte em Configurações > Contas.`);
   }
+  // Conta "via Integrações" (as principais, importadas no cutover): as credenciais
+  // seguem morando em user_settings — fonte única, renovada pelo instagram-refresh.
+  if (acc.metadata?.source === 'integrations') return { ...settings, accountLabel: acc.label, viaIntegrations: true };
   return {
     linkedin_token: acc.linkedin_token,
     linkedin_author_urn: acc.linkedin_author_urn,
@@ -103,7 +107,7 @@ async function resolveCredentials(post: PublishablePost, settings: UserSettings)
 
 function missingCreds(platform: string, creds: Credentials): string {
   const net = platform === 'linkedin' ? 'LinkedIn' : 'Instagram';
-  return creds.accountLabel
+  return creds.accountLabel && !creds.viaIntegrations
     ? `A conta "${creds.accountLabel}" está sem token do ${net}. Configure em Configurações > Contas.`
     : `${net} nao configurado. Vai em Configuracoes > Integracoes.`;
 }

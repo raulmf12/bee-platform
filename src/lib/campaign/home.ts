@@ -16,7 +16,7 @@ export interface HomeData {
 
 export interface PendingItem {
   id: string;
-  kind: 'start' | 'plan' | 'pauta' | 'develop' | 'validate' | 'review' | 'schedule' | 'legacy_text' | 'legacy_review';
+  kind: 'start' | 'plan' | 'pauta' | 'develop' | 'validate' | 'review' | 'schedule' | 'legacy_text' | 'legacy_review' | 'publish_failed';
   eyebrow: string;         // "Campanha Orgânica · Próximo ciclo"
   title: string;
   body: string;
@@ -120,8 +120,17 @@ export function pendingItems(d: HomeData): PendingItem[] {
     }
   }
 
-  // Histórico (antes da campanha): posts parados na aprovação.
-  const legacy = livePieces.filter((p) => !p.content_id && !p.cycle_id);
+  // Publicação que falhou (agendada com erro): o agendador tenta de novo, mas
+  // quase sempre precisa de uma ação sua (token, imagem, portão da imagem de IA).
+  for (const p of livePieces.filter((x) => x.status === 'scheduled' && x.publish_error)) {
+    const label = (p.carousel_text?.quote as string | undefined) || p.title || 'Peça';
+    push({ id: `failed:${p.id}`, kind: 'publish_failed', eyebrow: `Publicação · ${p.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'}`, title: `“${label}”`,
+      body: `A publicação falhou: ${p.publish_error!.slice(0, 140)}`, due: p.scheduled_date ? iso(new Date(p.scheduled_date)) : t, cta: 'Resolver', to: `/posts/${p.id}`, verb: 'Publicar' });
+  }
+
+  // Histórico (antes da campanha): posts parados na aprovação. "Fora de ciclo"
+  // = histórico (depois do cutover eles ganham conteúdo, mas não ciclo).
+  const legacy = livePieces.filter((p) => !p.cycle_id);
   const text = legacy.filter(isTextPending);
   if (text.length) push({ id: 'legacy_text', kind: 'legacy_text', eyebrow: 'Posts anteriores', title: `${text.length} ${text.length === 1 ? 'post aguardando' : 'posts aguardando'} aprovação de texto`, body: 'Título e legenda ainda não aprovados — retome de onde parou.', due: null, cta: 'Revisar', to: '/posts/novo?retomar=1' });
   const design = legacy.filter((p) => p.status === 'pending_approval' && !isTextPending(p));

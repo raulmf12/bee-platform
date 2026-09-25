@@ -84,6 +84,19 @@ test.describe('F1 · contas e modelo de dados', () => {
     expect(row.publish_error).toContain('LinkedIn nao configurado');
   });
 
+  test('conta "via Integrações" publica com as credenciais de user_settings (fonte única)', async ({ page }) => {
+    await page.goto('/');
+    const accountId = await seed('social_accounts', { platform: 'linkedin', label: 'Principal', status: 'connected', is_default: true, metadata: { source: 'integrations' } });
+    const postId = await seed('user_posts', {
+      platform: 'linkedin', format: 'image', status: 'approved', caption: 'Peça via integrações E2E', account_id: accountId,
+    });
+    const res = await callEdge<{ success: boolean }>(page, 'publish-post', { post_id: postId });
+    expect(res.json.success).toBe(false);
+    const [row] = await sql<{ publish_error: string }>(`select publish_error from user_posts where id='${postId}'`);
+    // o usuário de teste não tem LinkedIn em Integrações → cai na mensagem de Integrações, não na da conta
+    expect(row.publish_error).toContain('LinkedIn nao configurado');
+  });
+
   test('tabelas novas têm RLS por dono', async () => {
     const rows = await sql<{ tablename: string; qual: string }>(
       `select tablename, qual from pg_policies where tablename in ('social_accounts','campaigns','campaign_cycles','ideas','contents','post_metrics') order by 1`);

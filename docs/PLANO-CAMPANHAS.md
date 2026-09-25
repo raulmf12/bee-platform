@@ -145,8 +145,15 @@ Script idempotente e transacional (`supabase/migrations/…_campanhas_backfill.s
    `campaign-tick` ativados.
 4. Conferência: contagens antes/depois; os 13 agendados intactos (mesma data/status/imagem).
 
-**Rollback**: reverter o merge (Netlify volta a UI antiga); tabelas/colunas novas são inertes para o
-código antigo; reativar o cron antigo; restaurar tabelas do backup se preciso (`pg_restore -t`).
+**Rollback** (pronto e testável):
+1. App: `git revert -m 1 <merge>` na `main` e push (Netlify volta a UI antiga). Tag `backup/pre-campanhas-2026-09-24` = main antes.
+2. Banco: rodar `supabase/rollback/20260925000001_campanhas_cutover_rollback.sql` (via SQL, transacional):
+   religa `editorial-line-tick` (comando guardado em `cutover.cron_jobs`), desliga `campaign-tick`/`metrics-ingest`,
+   devolve o status das linhas editoriais (`cutover.editorial_lines_status`), desfaz os conteúdos do histórico
+   (`metadata.backfill='cutover-20260925'`) e remove as contas criadas no cutover. Colunas/tabelas novas são inertes
+   para o código antigo.
+3. Edges: `publish.ts`/`instagram-refresh` novos são retrocompatíveis (sem conta → user_settings, como antes); não
+   precisam voltar. Snapshot do estado anterior: `backups/2026-09-25-pre-cutover/` (local, fora do git).
 
 ## 7. Estratégia de testes (a cada fase)
 
@@ -172,7 +179,7 @@ código antigo; reativar o cron antigo; restaurar tabelas do backup se preciso (
 | **F6** Agenda ✅ | timeline, lente de campanha, barras, fila priorizada c/ janela, arrastar, IA distribuir por campanha, painel lateral | agendar por arrasto; IA distribuir respeita campanha; painel |
 | **F7** Home + Pipeline + navegação ✅ | Home regente, Pipeline por ideia, "Um conteúdo", menu novo, remoção dos fluxos antigos | Home mostra pendências reais; Kanban agrupa peças; navegação |
 | **F8** Métricas + recomendações ✅ | `metrics-ingest`, métricas manuais LinkedIn, resultados nos cards, "Hive recomenda", `campaign-tick` | ingestão (mock Graph API); recomendação aparece; pauta pré-gerada |
-| **F9** Migração + cutover | backfill do histórico, crons, merge, smoke em produção, rollback pronto | contagens batem; agendados intactos; smoke @live em produção |
+| **F9** Migração + cutover ✅ | backfill do histórico, crons, merge, smoke em produção, rollback pronto | contagens batem; agendados intactos; smoke @live em produção |
 
 ## 9. Diário de bordo
 
@@ -246,3 +253,15 @@ código antigo; reativar o cron antigo; restaurar tabelas do backup se preciso (
   via cron) + unit 6/6; regressão 53/53. Achado: o `SUPABASE_SERVICE_ROLE_KEY` das edges passou a ser a chave nova
   `sb_secret_…` (rotação em 2026-09-25 00:47 UTC); crons de produção seguem 200 (verificado). Funções novas aceitam
   chave nova OU JWT legado de service_role (`isServiceCall`), que é o que o cron guarda no Vault.
+- 2026-09-25 — **F9 concluída (cutover).** Publicação: conta "via Integrações" (`metadata.source='integrations'`)
+  publica com as credenciais de `user_settings` — fonte única, renovada pelo `instagram-refresh`, que agora também
+  renova contas com token próprio (ex.: Instagram da Bee). Deploy: publish-post v10, publish-scheduler v11 (cron 200
+  "nada vencido" após o deploy), instagram-refresh v3 (`--no-verify-jwt` preservado; invocado: 200). Migração
+  `20260925000001_campanhas_cutover.sql` aplicada via SQL (transação única; NÃO via `db push` — o histórico remoto
+  da CLI só vai até 20260807): contas LinkedIn · Marcos e Instagram · Marcos (sem token copiado), 77 peças → 63
+  conteúdos "Sem campanha" (11 multi-canal por reaproveitamento), 13 agendados idênticos ao snapshot, linha editorial
+  encerrada (status anterior guardado em `cutover.*`), cron `editorial-line-tick` fora, `campaign-tick` (06:00) e
+  `metrics-ingest` (06:30) dentro. `account_id` do histórico NÃO foi tocado (publicação idêntica). `/linhas` →
+  `/campanhas`. Home aponta publicação que falhou (há 1: post de 09/09 com erro de publicação, pré-existente).
+  Prévia read-only da Home/Pipeline do Marcos (`e2e/tools/marcos-preview.spec.ts`, `TOOLS=1`): 12 programados,
+  63 cards (50 publicados · 12 agendados · 1 aprovado). Regressão 55/55 + @live 6/6 (IA real) pós-cutover.

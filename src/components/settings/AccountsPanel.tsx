@@ -150,26 +150,21 @@ export function AccountsPanel() {
     }
   }
 
-  // Cria as contas a partir das credenciais que já estão em Integrações.
+  // Cria as contas a partir das credenciais que já estão em Integrações. Elas NÃO
+  // copiam o token: publicam com o de Integrações (fonte única, renovada sozinha).
   async function importFromIntegrations() {
     const owner = (currentUser?.name ?? '').split(' ')[0] || 'Principal';
     let created = 0;
     setBusy(true);
     try {
       const current = await accountApi.list();
-      if (settings?.linkedin_token && !current.some((a) => a.platform === 'linkedin' && a.linkedin_author_urn === settings.linkedin_author_urn)) {
-        await accountApi.create({
-          platform: 'linkedin', label: owner, linkedin_token: settings.linkedin_token,
-          linkedin_author_urn: settings.linkedin_author_urn ?? null, status: 'connected',
-        });
+      const viaIntegrations = (platform: 'linkedin' | 'instagram') => current.some((a) => a.platform === platform && a.metadata?.source === 'integrations');
+      if (settings?.linkedin_token && !viaIntegrations('linkedin') && !current.some((a) => a.platform === 'linkedin' && a.linkedin_author_urn === settings.linkedin_author_urn)) {
+        await accountApi.create({ platform: 'linkedin', label: owner, linkedin_author_urn: settings.linkedin_author_urn ?? null, status: 'connected', metadata: { source: 'integrations' } });
         created++;
       }
-      if (settings?.instagram_access_token && !current.some((a) => a.platform === 'instagram' && a.instagram_business_account_id === settings.instagram_business_account_id)) {
-        await accountApi.create({
-          platform: 'instagram', label: owner, instagram_access_token: settings.instagram_access_token,
-          instagram_business_account_id: settings.instagram_business_account_id ?? null,
-          instagram_token_expires_at: settings.instagram_token_expires_at ?? null, status: 'connected',
-        });
+      if (settings?.instagram_access_token && !viaIntegrations('instagram') && !current.some((a) => a.platform === 'instagram' && a.instagram_business_account_id === settings.instagram_business_account_id)) {
+        await accountApi.create({ platform: 'instagram', label: owner, instagram_business_account_id: settings.instagram_business_account_id ?? null, status: 'connected', metadata: { source: 'integrations' } });
         created++;
       }
       toast.success(created ? `${created} conta(s) importada(s) das integrações.` : 'Nada novo pra importar.');
@@ -224,9 +219,9 @@ export function AccountsPanel() {
                       {a.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} · {a.label}
                     </p>
                     <p className="truncate text-xs text-muted-foreground">
-                      {a.handle ?? (a.platform === 'linkedin' ? (a.linkedin_author_urn ?? 'sem URN') : (a.instagram_business_account_id ?? 'sem perfil'))}
-                      {a.platform === 'instagram' && a.instagram_token_expires_at
-                        ? ` · token até ${new Date(a.instagram_token_expires_at).toLocaleDateString('pt-BR')}` : ''}
+                      {a.metadata?.source === 'integrations' ? 'via Integrações' : (a.handle ?? (a.platform === 'linkedin' ? (a.linkedin_author_urn ?? 'sem URN') : (a.instagram_business_account_id ?? 'sem perfil')))}
+                      {a.platform === 'instagram' && (a.metadata?.source === 'integrations' ? settings?.instagram_token_expires_at : a.instagram_token_expires_at)
+                        ? ` · token até ${new Date((a.metadata?.source === 'integrations' ? settings?.instagram_token_expires_at : a.instagram_token_expires_at)!).toLocaleDateString('pt-BR')}` : ''}
                     </p>
                   </div>
                 </div>

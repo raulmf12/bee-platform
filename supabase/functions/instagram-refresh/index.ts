@@ -37,7 +37,6 @@ Deno.serve(async (req: Request) => {
     const res = await fetch(url, { headers: svcHeaders() });
     if (!res.ok) throw new Error(`fetch settings HTTP ${res.status}`);
     const rows: Row[] = await res.json();
-    if (!rows.length) return jsonResponse({ success: true, refreshed: 0, message: 'nada a renovar' });
 
     let refreshed = 0;
     const results: Array<{ user_id: string; ok: boolean; error?: string }> = [];
@@ -59,7 +58,32 @@ Deno.serve(async (req: Request) => {
         console.error('[instagram-refresh] falhou', r.user_id, (e as Error).message);
       }
     }
-    return jsonResponse({ success: true, refreshed, total: rows.length, results });
+    // Contas conectadas com token PRÓPRIO (ex.: Instagram da Bee via OAuth). As
+    // contas "via Integrações" não têm token: herdam o de user_settings (acima).
+    const accUrl = `${SUPABASE_URL}/rest/v1/social_accounts` +
+      `?select=id,user_id,instagram_access_token,instagram_token_expires_at,metadata` +
+      `&platform=eq.instagram&instagram_access_token=not.is.null` +
+      `&or=(instagram_token_expires_at.is.null,instagram_token_expires_at.lte.${cutoff})`;
+    const accRes = await fetch(accUrl, { headers: svcHeaders() });
+    const accs: Array<Row & { id: string }> = accRes.ok ? await accRes.json() : [];
+    for (const a of accs) {
+      try {
+        const ex = await fetch(`${GRAPH}/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${a.instagram_access_token}`);
+        const data = await ex.json();
+        if (!ex.ok || !data.access_token) throw new Error(data.error?.message ?? `HTTP ${ex.status}`);
+        const expiresAt = new Date(Date.now() + Number(data.expires_in ?? 60 * 24 * 3600) * 1000).toISOString();
+        await fetch(`${SUPABASE_URL}/rest/v1/social_accounts?id=eq.${a.id}`, {
+          method: 'PATCH', headers: { ...svcHeaders(), Prefer: 'return=minimal' },
+          body: JSON.stringify({ instagram_access_token: data.access_token, instagram_token_expires_at: expiresAt }),
+        });
+        refreshed++;
+        results.push({ user_id: a.user_id, ok: true });
+      } catch (e) {
+        results.push({ user_id: a.user_id, ok: false, error: `conta ${a.id}: ${(e as Error).message.slice(0, 200)}` });
+        console.error('[instagram-refresh] conta falhou', a.id, (e as Error).message);
+      }
+    }
+    return jsonResponse({ success: true, refreshed, total: rows.length + accs.length, results });
   } catch (e) {
     console.error('[instagram-refresh outer]', e);
     return jsonResponse({ success: false, error: String(e) }, 500);
