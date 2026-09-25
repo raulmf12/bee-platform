@@ -444,6 +444,14 @@ export const edge = {
   },
 
   // --- Produção (F4): desenvolver/validar conteúdo-mãe ---
+  // --- Desempenho (F8) ---
+  async metricsIngest(): Promise<{ success: boolean; results: Array<{ posts: number; saved: number; insights: boolean; errors: string[] }> }> {
+    return postEdge('metrics-ingest', {});
+  },
+  async campaignTick(): Promise<{ success: boolean; results: Array<{ pautas: Array<{ cycle_id: string; ideas: number }>; errors: string[] }> }> {
+    return postEdge('campaign-tick', {});
+  },
+
   async contentDevelop(input: {
     idea_id: string; mode?: 'develop' | 'adjust' | 'new_version';
     current?: { frase?: string; texto?: string }; instruction?: string;

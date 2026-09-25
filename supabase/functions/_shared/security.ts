@@ -73,6 +73,24 @@ export function internalUserId(req: Request): string | null {
   return req.headers.get('x-bee-user-id');
 }
 
+// Chamada de SERVIÇO (cron/servidor): a chave secreta atual do ambiente OU o JWT
+// legado de service_role (o que o cron guarda no Vault). O JWT já foi validado
+// pelo gateway (verify_jwt) antes de chegar aqui; só lemos o claim `role`.
+export function isServiceCall(req: Request): boolean {
+  const auth = req.headers.get('Authorization');
+  if (!auth?.startsWith('Bearer ')) return false;
+  const token = auth.slice(7);
+  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (serviceKey && token === serviceKey) return true;
+  try {
+    const [, payload] = token.split('.');
+    if (!payload) return false;
+    return JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))).role === 'service_role';
+  } catch {
+    return false;
+  }
+}
+
 // Rate limit super simples por user_id, em memoria.
 // (Reseta quando a function reinicia; pra produciao trocar por KV/Redis.)
 const rateLimits = new Map<string, { count: number; resetAt: number }>();

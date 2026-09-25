@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "test:e2e": "playwright test --project=e2e",
-    "test:e2e:live": "playwright test --project=live"
+    "test:e2e:live": "playwright test --project=live",
+    "build:edge-shared": "esbuild src/lib/campaign/plan.ts --bundle --format=esm --platform=neutral --log-level=warning \"--banner:js=// GERADO por 'npm run build:edge-shared' a partir de src/lib/campaign/plan.ts — NÃO edite à mão.\" --outfile=supabase/functions/_shared/campaign-plan.js"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.2",

@@ -171,7 +171,7 @@ código antigo; reativar o cron antigo; restaurar tabelas do backup se preciso (
 | **F5** Produção visual ✅ | desdobramentos (IG via adaptação + Hive), alternativas, galeria 12A, escolha 12B, edição 12C, conclusão | galeria → escolher alternativa → editar → aprovar → produção concluída |
 | **F6** Agenda ✅ | timeline, lente de campanha, barras, fila priorizada c/ janela, arrastar, IA distribuir por campanha, painel lateral | agendar por arrasto; IA distribuir respeita campanha; painel |
 | **F7** Home + Pipeline + navegação ✅ | Home regente, Pipeline por ideia, "Um conteúdo", menu novo, remoção dos fluxos antigos | Home mostra pendências reais; Kanban agrupa peças; navegação |
-| **F8** Métricas + recomendações | `metrics-ingest`, métricas manuais LinkedIn, resultados nos cards, "Hive recomenda", `campaign-tick` | ingestão (mock Graph API); recomendação aparece; pauta pré-gerada |
+| **F8** Métricas + recomendações ✅ | `metrics-ingest`, métricas manuais LinkedIn, resultados nos cards, "Hive recomenda", `campaign-tick` | ingestão (mock Graph API); recomendação aparece; pauta pré-gerada |
 | **F9** Migração + cutover | backfill do histórico, crons, merge, smoke em produção, rollback pronto | contagens batem; agendados intactos; smoke @live em produção |
 
 ## 9. Diário de bordo
@@ -232,3 +232,17 @@ código antigo; reativar o cron antigo; restaurar tabelas do backup se preciso (
   Menu novo: + Criar · Início · Campanhas · Produção · Pipeline · Agenda · Base Hive · Inteligência · Configurações;
   saíram "Campanha de conteúdo" e "Post individual" (rotas antigas seguem vivas p/ retomada até o cutover). Kanban
   antigo removido (arrastar entre colunas deu lugar às ações do fluxo). E2E f7 3/3 + unit 8/8; regressão 46/46.
+- 2026-09-24 — **F8 concluída.** Edge `metrics-ingest` (IG Graph: curtidas/comentários sempre; alcance/salvos/
+  compartilhamentos/views com permissão de insights; id da mídia do `published_url`/`metadata.ig_media_id`; grava
+  permalink real; lógica pura em `_shared/metrics.ts`). Edge `campaign-tick` (encerra campanha vencida, fecha ciclo
+  pronto, pré-gera a pauta do próximo ciclo ≤4 dias → `pauta_ready` + `review_due` na véspera; idempotente; não toca
+  campanha não iniciada). O planejador das edges é **bundle gerado** do mesmo `plan.ts` do app
+  (`npm run build:edge-shared`; teste unitário garante que está em dia). As duas funções estão deployadas **sem
+  agendamento** — os crons entram no cutover (F9). `/desempenho`: resumo por canal (30 dias), comparação com a
+  própria média (≥3 amostras), registro manual do LinkedIn, "Atualizar métricas do Instagram", recomendação por
+  desempenho → ideia no backlog (`origin='result'`, que o `cycle-pauta` já considera). Resultados nos cards
+  publicados do Pipeline ("↑ 60% acima da média", "Bom potencial de reuso", "Ver resultados"); Home recomenda por
+  desempenho; Agenda usa o melhor horário aprendido. Menu ganhou "Desempenho". E2E f8 2/2 + @live (pauta real
+  via cron) + unit 6/6; regressão 53/53. Achado: o `SUPABASE_SERVICE_ROLE_KEY` das edges passou a ser a chave nova
+  `sb_secret_…` (rotação em 2026-09-25 00:47 UTC); crons de produção seguem 200 (verificado). Funções novas aceitam
+  chave nova OU JWT legado de service_role (`isServiceCall`), que é o que o cron guarda no Vault.

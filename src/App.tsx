@@ -36,6 +36,7 @@ import { HiveTesteM01 } from '@/pages/hive/HiveTesteM01'; // TEMP: apagar depois
 import { Custos } from '@/pages/custos/Custos';
 import { ImageLab } from '@/pages/labs/ImageLab';
 import { Pipeline } from '@/pages/pipeline/Pipeline';
+import { Performance } from '@/pages/desempenho/Performance';
 import { OneContent } from '@/pages/criar/OneContent';
 import { CreateHub } from '@/pages/criar/CreateHub';
 import { Campaigns } from '@/pages/campanhas/Campaigns';
@@ -118,6 +119,7 @@ export default function App() {
           <Route path="posts/novo" element={<NewPost />} />
           <Route path="agenda" element={<Agenda />} />
           <Route path="pipeline" element={<Pipeline />} />
+          <Route path="desempenho" element={<Performance />} />
           <Route path="hive/preview" element={<HivePreview />} />
           <Route path="hive/assets" element={<HiveAssets />} />
           <Route path="hive/marcos" element={<HiveMarcos />} />

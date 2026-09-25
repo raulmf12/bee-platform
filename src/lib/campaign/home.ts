@@ -5,11 +5,13 @@ import { addDays, differenceInCalendarDays, format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { isTextPending } from '@/lib/postReview';
 import { buildPipeline } from '@/lib/campaign/pipeline';
-import { CAMPAIGN_TYPE_LABELS, type Campaign, type CampaignCycle, type Content, type Idea, type SocialAccount, type UserPost } from '@/types';
+import { performanceRecs } from '@/lib/campaign/performance';
+import { CAMPAIGN_TYPE_LABELS, type BeeEditorial, type Campaign, type CampaignCycle, type Content, type Idea, type PostMetrics, type SocialAccount, type UserPost } from '@/types';
 
 export interface HomeData {
   campaigns: Campaign[]; cycles: CampaignCycle[]; ideas: Idea[]; contents: Content[]; posts: UserPost[];
   accounts: SocialAccount[]; avulsoId?: string | null; today?: Date;
+  metrics?: PostMetrics[]; editorials?: BeeEditorial[];
 }
 
 export interface PendingItem {
@@ -165,7 +167,10 @@ export interface Recommendation { id: string; title: string; body: string; cta: 
 export function recommendations(d: HomeData): Recommendation[] {
   const today = d.today ?? new Date();
   const t = iso(today);
-  const out: Recommendation[] = [];
+  // Desempenho primeiro: é o movimento que só a Hive enxerga nos dados.
+  const out: Recommendation[] = d.metrics?.length
+    ? performanceRecs({ posts: d.posts, metrics: d.metrics, contents: d.contents, today, editorialName: (s) => d.editorials?.find((e) => e.slug === s)?.name })
+    : [];
   const live = d.campaigns.filter((c) => LIVE_CAMPAIGN(c) && c.end_date! >= t);
   if (live.length === 0) {
     out.push({ id: 'first-campaign', title: 'Organize sua presença numa campanha', body: 'Com uma campanha, a Hive planeja os ciclos, sugere as ideias e mantém sua agenda coberta semana a semana.', cta: 'Criar campanha', to: '/campanhas/nova' });

@@ -26,7 +26,8 @@ import {
   DollarSign,
   Layers,
   Plus,
-  Workflow
+  Workflow,
+  BarChart3
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BeeLogo } from '@/components/shared/BeeLogo';
@@ -57,6 +58,7 @@ const NAV_GROUPS: NavGroup[] = [
   { label: 'Produção', to: '/producao', icon: Layers },
   { label: 'Pipeline', to: '/pipeline', icon: Workflow },
   { label: 'Agenda', to: '/agenda', icon: CalendarDays },
+  { label: 'Desempenho', to: '/desempenho', icon: BarChart3 },
   {
     label: 'Base Hive',
     icon: Library,

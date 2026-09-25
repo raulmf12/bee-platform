@@ -95,3 +95,26 @@ export async function cleanupE2EStorage(): Promise<number> {
   }
   return names.length;
 }
+
+// Chama uma edge function COMO SERVIÇO (service_role + x-bee-user-id do usuário
+// de teste) — o mesmo caminho do cron, mas escopado ao usuário E2E. A chave nunca
+// sai deste processo (não vai pra log nem pra página).
+let _svc: string | null = null;
+export async function callEdgeAsService<T = Record<string, unknown>>(fn: string, body: unknown): Promise<{ status: number; json: T }> {
+  const { id } = e2eUser();
+  if (!id || id === MARCOS) throw new Error('chamada recusada: id inválido');
+  if (!_svc) {
+    const keys = await fetch(`https://api.supabase.com/v1/projects/${REF}/api-keys`, { headers: { Authorization: `Bearer ${mgmtToken()}` } }).then((r) => r.json()) as Array<{ name: string; api_key: string }>;
+    _svc = keys.find((k) => k.name === 'service_role')?.api_key ?? null;
+    if (!_svc) throw new Error('service_role indisponível');
+  }
+  const res = await fetch(`https://${REF}.supabase.co/functions/v1/${fn}`, {
+    method: 'POST',
+    headers: { apikey: _svc, Authorization: `Bearer ${_svc}`, 'x-bee-user-id': id, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let json: unknown = text;
+  try { json = JSON.parse(text); } catch { /* texto cru */ }
+  return { status: res.status, json: json as T };
+}

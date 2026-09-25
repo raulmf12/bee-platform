@@ -14,6 +14,7 @@ import { beeApi } from '@/lib/api';
 import { postClickRoute } from '@/lib/postReview';
 import { useOps } from '@/lib/campaign/useOps';
 import { dueLabel, pendingItems } from '@/lib/campaign/home';
+import { baselines, metricsByPost, resultFor, type PieceResult } from '@/lib/campaign/performance';
 import {
   NO_FILTER, PIPELINE_COLUMNS, buildPipeline, filterCards, sortColumn, stageOfPost,
   type PipelineCard, type PipelineColumn, type PipelineFilter,
@@ -57,6 +58,14 @@ export function Pipeline() {
 
   const cards = useMemo(() => (ops ? buildPipeline({ campaigns: ops.campaigns, ideas: ops.ideas, contents: ops.contents, posts }) : []), [ops, posts]);
   const visible = useMemo(() => filterCards(cards, f), [cards, f]);
+  const byPost = useMemo(() => metricsByPost(ops?.metrics ?? []), [ops]);
+  const base = useMemo(() => baselines(posts, byPost), [posts, byPost]);
+  // Resultado do card publicado = a peça publicada com melhor desempenho.
+  const resultOf = (c: PipelineCard): { post: UserPost; r: PieceResult } | null => {
+    const pub = c.pieces.filter((p) => p.status === 'published').map((p) => ({ post: p, r: resultFor(p, byPost, base) }));
+    if (!pub.length) return null;
+    return pub.sort((a, b) => (b.r.deltaPct ?? -999) - (a.r.deltaPct ?? -999))[0];
+  };
   const cycles = ops?.cycles ?? [];
   const cycleOf = (id: string | null) => cycles.find((c) => c.id === id);
   const campaignOf = (id: string | null) => ops?.campaigns.find((c) => c.id === id);
@@ -169,7 +178,7 @@ export function Pipeline() {
                       <CardView key={c.id} card={c} onOpen={() => setOpenId(c.id)} link={linkFor(c)}
                         editorial={edName(c.editorialSlug)} cycle={cycleOf(c.cycleId)} cycleLabel={cycleLabel(cycleOf(c.cycleId))}
                         campaignName={f.campaign === 'all' ? (campaignOf(c.campaignId)?.name ?? 'Sem campanha') : null}
-                        accountLabel={accountLabel} today={today} />
+                        accountLabel={accountLabel} today={today} result={c.column === 'publicado' ? resultOf(c) : null} />
                     ))}
                     {list.length === 0 && <p className="py-6 text-center text-xs text-muted-foreground">Vazio</p>}
                   </div>
@@ -266,9 +275,9 @@ function units(pieces: UserPost[]): Array<{ p: UserPost; options: number }> {
   return [...m.values()];
 }
 
-function CardView({ card: c, onOpen, link, editorial, cycle, cycleLabel, campaignName, accountLabel, today }: {
+function CardView({ card: c, onOpen, link, editorial, cycle, cycleLabel, campaignName, accountLabel, today, result }: {
   card: PipelineCard; onOpen: () => void; link: string; editorial: string | null; cycle?: CampaignCycle; cycleLabel: string | null;
-  campaignName: string | null; accountLabel: (p: UserPost) => string; today: Date;
+  campaignName: string | null; accountLabel: (p: UserPost) => string; today: Date; result: { post: UserPost; r: PieceResult } | null;
 }) {
   const channels = (chs: IdeaChannel[]) => [...new Set(chs.map((ch) => NET(ch.platform)))].join(' + ');
   const due = c.column === 'pendente' && cycle ? dueLabel(cycle.review_due ?? (cycle.start_date > format(today, 'yyyy-MM-dd') ? cycle.start_date : null), today) : null;
@@ -302,6 +311,9 @@ function CardView({ card: c, onOpen, link, editorial, cycle, cycleLabel, campaig
           {c.missingChannels.map((ch, i) => <p key={i} className="text-muted-foreground">{NET(ch.platform)} · a desenvolver</p>)}
           {c.column === 'aprovado' && <p className="flex items-center gap-1 text-emerald-600"><Check className="h-3 w-3" /> Pronto para agendar</p>}
           {c.column === 'publicado' && c.publishedAt && <p className="text-muted-foreground">Publicado em {format(parseISO(c.publishedAt), 'dd MMM', { locale: ptBR })}</p>}
+          {result?.r.label && <p className={cn('font-medium', (result.r.deltaPct ?? 0) >= 10 ? 'text-emerald-600' : (result.r.deltaPct ?? 0) <= -10 ? 'text-rose-600' : 'text-muted-foreground')} data-testid="card-result">{(result.r.deltaPct ?? 0) >= 10 ? '↑' : (result.r.deltaPct ?? 0) <= -10 ? '↓' : '•'} {result.r.label}</p>}
+          {result?.r.reuse && <p className="flex items-center gap-1 text-amber-600"><Sparkles className="h-3 w-3" /> Bom potencial de reuso</p>}
+          {result && !result.r.metrics && result.post.platform === 'linkedin' && <p className="text-muted-foreground">Resultados a registrar</p>}
           {due && <p className="flex items-center gap-1 text-amber-600"><AlertTriangle className="h-3 w-3" /> {due}</p>}
         </div>
       )}
@@ -311,6 +323,9 @@ function CardView({ card: c, onOpen, link, editorial, cycle, cycleLabel, campaig
       )}
       {c.column === 'pendente' && (
         <Button asChild size="sm" variant="accent" className="mt-2 h-7 w-full text-xs"><Link to={link}>Revisar <ArrowRight className="h-3 w-3" /></Link></Button>
+      )}
+      {result && (
+        <Button asChild size="sm" variant="outline" className="mt-2 h-7 w-full text-xs"><Link to={`/desempenho?post=${result.post.id}`}>Ver resultados <ArrowRight className="h-3 w-3" /></Link></Button>
       )}
     </article>
   );

@@ -32,7 +32,8 @@ import {
 } from '@/components/ui/dialog';
 import { CampaignTimeline } from '@/components/agenda/CampaignTimeline';
 import { ScheduleQueue, type QueueGroup } from '@/components/agenda/ScheduleQueue';
-import { campaignApi, cycleApi } from '@/lib/campaignApi';
+import { campaignApi, cycleApi, metricsApi } from '@/lib/campaignApi';
+import { bestTimes, metricsByPost } from '@/lib/campaign/performance';
 import { formatRange } from '@/lib/campaign/dates';
 import { scheduleQueue, suggestionsFor, type HiveSuggestion } from '@/lib/campaign/priority';
 import { usePostStore } from '@/store/postStore';
@@ -46,7 +47,7 @@ import {
 } from '@/lib/schedule';
 import {
   PLATFORM_COLORS, PLATFORM_LABELS, type BeeEditorial, type Campaign, type CampaignCycle,
-  type DistributionPrefs, type Platform, type UserPost,
+  type DistributionPrefs, type Platform, type PostMetrics, type UserPost,
 } from '@/types';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -110,6 +111,7 @@ export function Agenda() {
   const lens = searchParams.get('campaign');
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [cycles, setCycles] = useState<CampaignCycle[]>([]);
+  const [metrics, setMetrics] = useState<PostMetrics[]>([]);
   const setLens = (id: string | null) => {
     const n = new URLSearchParams(searchParams);
     if (id) n.set('campaign', id); else n.delete('campaign');
@@ -141,6 +143,7 @@ export function Agenda() {
     void beeApi.listEditorials().then(setEditorials).catch(console.error);
     void campaignApi.list().then(setCampaigns).catch(console.error);
     void cycleApi.listAll().then(setCycles).catch(console.error);
+    void metricsApi.listAll().then(setMetrics).catch(() => {});
   }, [load]);
 
   // Esc fecha o painel lateral da peça.
@@ -153,6 +156,8 @@ export function Agenda() {
 
   const campaignById = useMemo(() => new Map(campaigns.map((c) => [c.id, c])), [campaigns]);
   const cycleById = useMemo(() => new Map(cycles.map((c) => [c.id, c])), [cycles]);
+  // Melhor horário aprendido dos seus resultados (senão, o guia da plataforma).
+  const learnedTimes = useMemo(() => bestTimes(posts, metricsByPost(metrics)), [posts, metrics]);
   // Campanhas que aparecem no calendário (barras): em andamento/planejadas, respeitando a lente.
   const barCampaigns = useMemo(
     () => campaigns.filter((c) => c.start_date && c.end_date && c.status !== 'ended' && c.status !== 'draft' && (!lens || c.id === lens)),
@@ -1008,7 +1013,7 @@ export function Agenda() {
         const camp = selected.campaign_id ? campaignById.get(selected.campaign_id) : undefined;
         const cyc = selected.cycle_id ? cycleById.get(selected.cycle_id) : undefined;
         const info = queueInfo.get(selected.id);
-        const tips = suggestionsFor(selected, cyc);
+        const tips = suggestionsFor(selected, cyc, learnedTimes[selected.platform]);
         const imgs = Object.values(selected.rendered_slides ?? {}).filter(Boolean);
         const shown = imgs.length ? imgs : Object.values(selected.generated_images ?? {}).filter(Boolean);
         const isPublished = selected.status === 'published';
