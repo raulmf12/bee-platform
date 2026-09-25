@@ -658,7 +658,8 @@ export const edge = {
   async distributeSchedule(input: {
     today_date: string;
     horizon_days?: number;
-    standby: Array<{ id: string; platform: string; editorial_slug?: string; editorial_name?: string; title?: string; theme?: string; virality_score?: number }>;
+    standby: Array<{ id: string; platform: string; editorial_slug?: string; editorial_name?: string; title?: string; theme?: string; virality_score?: number;
+      campaign_name?: string; priority?: number; priority_label?: string; window_start?: string; window_end?: string }>;
     occupied?: Array<{ date: string; platform: string; editorial_slug?: string }>;
     prefs: {
       skip_weekends?: boolean;

@@ -37,6 +37,13 @@ interface StandbyPost {
   title?: string;
   theme?: string;
   virality_score?: number;
+  // Campanhas (opcionais): a Agenda manda a ordem de prioridade e a janela que a
+  // Hive sugere pra cada peça. Sem eles, comportamento de sempre.
+  campaign_name?: string;
+  priority?: number;          // 1 = primeira a entrar em circulação
+  priority_label?: string;    // 'Alta' | 'Média' | 'Menor'
+  window_start?: string;      // 'YYYY-MM-DD'
+  window_end?: string;        // 'YYYY-MM-DD'
 }
 interface Occupied {
   date: string;       // 'YYYY-MM-DD'
@@ -170,6 +177,8 @@ Deno.serve(async (req: Request) => {
       '- Considere a nota de viralidade pra dar bons dias/horários aos posts mais fortes, sem amontoar todos juntos.',
       '- Escolha o dia da semana e o horário que fazem sentido pra cada plataforma e tipo de conteúdo.',
       'Para CADA post, escreva uma justificativa CURTA (1 frase, máx ~90 chars) explicando por que aquele dia/horário — concreta, não genérica.',
+      '- Quando o post tiver JANELA SUGERIDA (campanha), agende DENTRO dela sempre que houver data válida nela; e respeite a ORDEM DE PRIORIDADE (prioridade 1 entra em circulação antes).',
+      '- Várias campanhas disputando os mesmos dias: equilibre, dando preferência à que tem janela mais próxima/urgente.',
       'REGRAS DURAS: use SOMENTE datas da lista de datas válidas e SOMENTE horários permitidos da plataforma do post. Todo post do stand-by deve receber exatamente um slot.',
     ].join('\n');
 
@@ -194,7 +203,10 @@ Deno.serve(async (req: Request) => {
       input.standby.map((p, i) =>
         `${i + 1}. id=${p.id} · ${p.platform}${p.editorial_name ? ` · editoria: ${p.editorial_name}` : ''}` +
         `${p.virality_score != null ? ` · nota: ${p.virality_score}` : ''}` +
-        `${p.title ? ` · "${String(p.title).slice(0, 80)}"` : ''}`,
+        `${p.title ? ` · "${String(p.title).slice(0, 80)}"` : ''}` +
+        `${p.campaign_name ? ` · campanha: ${p.campaign_name}` : ''}` +
+        `${p.priority != null ? ` · prioridade ${p.priority}${p.priority_label ? ` (${p.priority_label})` : ''}` : ''}` +
+        `${p.window_start ? ` · JANELA SUGERIDA: ${p.window_start} a ${p.window_end ?? p.window_start}` : ''}`,
       ).join('\n'),
       '',
       'Devolva JSON puro (sem markdown):',

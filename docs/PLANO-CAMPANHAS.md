@@ -169,7 +169,7 @@ código antigo; reativar o cron antigo; restaurar tabelas do backup se preciso (
 | **F3** Planejamento + pauta ✅ | `/producao` passos 1–4, plano determinístico, `cycle-pauta` (full/swap/refresh), editar/adicionar ideia, aprovar pauta | pauta gerada, trocar/editar/adicionar, aprovar → ideias `approved` |
 | **F4** Desenvolvimento/validação ✅ | `content-develop`, Telas 10–11 (loop 1 de N), ajustar/editar/nova versão, aprovar → peça LinkedIn aprovada + IG "a desenvolver" | validar 4 conteúdos → 4 peças de validação + desdobramentos previstos |
 | **F5** Produção visual ✅ | desdobramentos (IG via adaptação + Hive), alternativas, galeria 12A, escolha 12B, edição 12C, conclusão | galeria → escolher alternativa → editar → aprovar → produção concluída |
-| **F6** Agenda | timeline, lente de campanha, barras, fila priorizada c/ janela, arrastar, IA distribuir por campanha, painel lateral | agendar por arrasto; IA distribuir respeita campanha; painel |
+| **F6** Agenda ✅ | timeline, lente de campanha, barras, fila priorizada c/ janela, arrastar, IA distribuir por campanha, painel lateral | agendar por arrasto; IA distribuir respeita campanha; painel |
 | **F7** Home + Pipeline + navegação | Home regente, Pipeline por ideia, "Um conteúdo", menu novo, remoção dos fluxos antigos | Home mostra pendências reais; Kanban agrupa peças; navegação |
 | **F8** Métricas + recomendações | `metrics-ingest`, métricas manuais LinkedIn, resultados nos cards, "Hive recomenda", `campaign-tick` | ingestão (mock Graph API); recomendação aparece; pauta pré-gerada |
 | **F9** Migração + cutover | backfill do histórico, crons, merge, smoke em produção, rollback pronto | contagens batem; agendados intactos; smoke @live em produção |
@@ -212,3 +212,11 @@ código antigo; reativar o cron antigo; restaurar tabelas do backup se preciso (
   preserva código informado. Limpeza do Storage do usuário de teste. E2E f5 3/3 (×3 sem intermitência) + @live;
   regressão 29/29. Bugs reais: produção presa em "0 de N" (StrictMode), códigos duplicados, corrida das ideias
   (desdobramentos não produzidos), resumo piscando incompleto.
+- 2026-09-24 — **F6 concluída.** `lib/campaign/priority.ts` (fila estratégica: ordem = ciclo mais cedo → vendas →
+  validação antes de desdobramento → viralidade; janela "Hive sugere" pelo calendário do plano/ciclo sem colidir com o
+  que já está agendado; rótulos 1 Alta / meio Média / último Menor; sugestões do painel: fora do ciclo e horário ≥60min
+  do recomendado). Agenda: timeline das campanhas ativas (30/60/90 dias, clicar = lente `?campaign=`), barras da
+  campanha no mês e na semana, "Conteúdos para agendar" agrupados por campanha, painel lateral (contexto, mover,
+  Hive sugere c/ Aplicar, ver versão completa, remover da agenda), "IA distribuir" envia prioridade/janela/campanha
+  (edge `distribute-schedule` estendido, retrocompatível) e o fallback local segue a prioridade. E2E f6 2/2 + unit 6/6;
+  regressão 36/36. Bug real: drop zones dependiam do estado React no 1º dragover → checam o `dataTransfer`.

@@ -1,5 +1,7 @@
-// Agenda de conteúdo — calendário estilo Google Agenda. NÃO substitui o Kanban:
-// é outra visão, focada em QUANDO cada post vai ao ar.
+// Agenda de conteúdo (Tela 13) — calendário estilo Google Agenda, orquestrado por
+// CAMPANHA: timeline das campanhas no topo (clicar = lente), barras da campanha no
+// calendário, fila "Conteúdos para agendar" priorizada com janela sugerida pela Hive,
+// painel lateral da peça com sugestões. Foco em QUANDO cada peça vai ao ar.
 //
 // - Grid do mês (date-fns/ptBR). Posts com data aparecem no dia.
 // - Bandeja de stand-by (aprovados sem data) → arraste pro dia (ou "IA distribui").
@@ -9,16 +11,16 @@
 // Regras da distribuição automática saem de user_settings.distribution_prefs.
 
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   addDays, eachDayOfInterval, endOfMonth, endOfWeek, format, isSameDay, isSameMonth,
-  isToday, startOfMonth, startOfWeek,
+  isToday, parseISO, startOfMonth, startOfWeek,
 } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import type { LucideIcon } from 'lucide-react';
 import {
   CalendarClock, Check, ChevronLeft, ChevronRight, Edit3, Facebook, Filter, Instagram,
-  Linkedin, Loader2, Music2, PauseCircle, Settings2, Sparkles, Wand2, Youtube,
+  Lightbulb, Linkedin, Loader2, Music2, PauseCircle, Settings2, Sparkles, Wand2, X, Youtube,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -28,6 +30,11 @@ import { Label } from '@/components/ui/label';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
+import { CampaignTimeline } from '@/components/agenda/CampaignTimeline';
+import { ScheduleQueue, type QueueGroup } from '@/components/agenda/ScheduleQueue';
+import { campaignApi, cycleApi } from '@/lib/campaignApi';
+import { formatRange } from '@/lib/campaign/dates';
+import { scheduleQueue, suggestionsFor, type HiveSuggestion } from '@/lib/campaign/priority';
 import { usePostStore } from '@/store/postStore';
 import { useAuthStore } from '@/store/authStore';
 import { beeApi } from '@/lib/api';
@@ -38,8 +45,8 @@ import {
   type GuidedPlatformCfg, type MergedPrefs,
 } from '@/lib/schedule';
 import {
-  PLATFORM_COLORS, PLATFORM_LABELS, type BeeEditorial, type DistributionPrefs,
-  type Platform, type UserPost,
+  PLATFORM_COLORS, PLATFORM_LABELS, type BeeEditorial, type Campaign, type CampaignCycle,
+  type DistributionPrefs, type Platform, type UserPost,
 } from '@/types';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -70,6 +77,10 @@ function PlatformIcon({ platform, className }: { platform: Platform; className?:
 
 const dayKey = (d: Date) => format(d, 'yyyy-MM-dd');
 
+// Um arrasto de peça (chip, bloco ou item da fila) carrega o id em text/plain. Checar
+// o dataTransfer (e não o estado React) deixa o 1º dragover aceitar o drop.
+const isPostDrag = (e: React.DragEvent) => e.dataTransfer.types.includes('text/plain');
+
 // Data em que o post "acontece" no calendário.
 function eventDate(p: UserPost): Date | null {
   if (p.scheduled_date) return new Date(p.scheduled_date);
@@ -88,8 +99,22 @@ export function Agenda() {
   const [view, setView] = useState<'month' | 'week' | 'day'>('month');
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overKey, setOverKey] = useState<string | null>(null);
-  const [selected, setSelected] = useState<UserPost | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = posts.find((p) => p.id === selectedId) ?? null;
+  const setSelected = (p: UserPost | null) => { setSelectedId(p?.id ?? null); setFullView(false); };
+  const [fullView, setFullView] = useState(false);
   const [distributing, setDistributing] = useState(false);
+
+  // Campanhas: timeline + LENTE (?campaign=). "Seguir para programação" chega aqui com a lente.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const lens = searchParams.get('campaign');
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [cycles, setCycles] = useState<CampaignCycle[]>([]);
+  const setLens = (id: string | null) => {
+    const n = new URLSearchParams(searchParams);
+    if (id) n.set('campaign', id); else n.delete('campaign');
+    setSearchParams(n, { replace: true });
+  };
 
   // Filtros: guardamos o que está ESCONDIDO (vazio = tudo visível).
   const [hiddenPlatforms, setHiddenPlatforms] = useState<Set<string>>(new Set());
@@ -114,7 +139,31 @@ export function Agenda() {
   useEffect(() => {
     void load();
     void beeApi.listEditorials().then(setEditorials).catch(console.error);
+    void campaignApi.list().then(setCampaigns).catch(console.error);
+    void cycleApi.listAll().then(setCycles).catch(console.error);
   }, [load]);
+
+  // Esc fecha o painel lateral da peça.
+  useEffect(() => {
+    if (!selectedId) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setSelectedId(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedId]);
+
+  const campaignById = useMemo(() => new Map(campaigns.map((c) => [c.id, c])), [campaigns]);
+  const cycleById = useMemo(() => new Map(cycles.map((c) => [c.id, c])), [cycles]);
+  // Campanhas que aparecem no calendário (barras): em andamento/planejadas, respeitando a lente.
+  const barCampaigns = useMemo(
+    () => campaigns.filter((c) => c.start_date && c.end_date && c.status !== 'ended' && c.status !== 'draft' && (!lens || c.id === lens)),
+    [campaigns, lens],
+  );
+
+  // Ao entrar com a lente, abre o calendário no começo da campanha (se ainda vai começar).
+  useEffect(() => {
+    const c = lens ? campaignById.get(lens) : undefined;
+    if (c?.start_date && parseISO(c.start_date) > new Date()) setCursor(parseISO(c.start_date));
+  }, [lens, campaignById]);
 
   const prefs = useMemo(() => mergePrefs(settings?.distribution_prefs), [settings?.distribution_prefs]);
 
@@ -129,7 +178,8 @@ export function Agenda() {
   const colorOf = (p: UserPost) => edMap.get(editorialOf(p) ?? '')?.color ?? NEUTRAL;
 
   const isVisible = (p: UserPost) =>
-    !hiddenPlatforms.has(p.platform) && !hiddenEditorials.has(editorialOf(p) ?? '__none__');
+    !hiddenPlatforms.has(p.platform) && !hiddenEditorials.has(editorialOf(p) ?? '__none__') &&
+    (!lens || p.campaign_id === lens);
 
   // Plataformas e editorias presentes nos posts (pra montar os filtros — derivado).
   const presentPlatforms = useMemo(() => {
@@ -153,8 +203,33 @@ export function Agenda() {
   const standby = useMemo(
     () => posts.filter((p) => p.status === 'approved' && !p.scheduled_date && isVisible(p)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [posts, hiddenPlatforms, hiddenEditorials],
+    [posts, hiddenPlatforms, hiddenEditorials, lens],
   );
+
+  // Fila estratégica: ordem de entrada em circulação + janela sugerida pela Hive.
+  const queueInfo = useMemo(
+    () => scheduleQueue(standby, { campaigns, cycles, scheduled: posts.filter((p) => p.scheduled_date && p.status !== 'archived') }),
+    [standby, campaigns, cycles, posts],
+  );
+  const byPriority = (a: UserPost, b: UserPost) => {
+    const ia = queueInfo.get(a.id), ib = queueInfo.get(b.id);
+    if (ia && ib && ia.windowStart !== ib.windowStart) return ia.windowStart < ib.windowStart ? -1 : 1;
+    if (ia && ib && a.campaign_id === b.campaign_id && ia.rank !== ib.rank) return ia.rank - ib.rank;
+    const sa = a.virality_score ?? -1, sb = b.virality_score ?? -1;
+    if (sb !== sa) return sb - sa;
+    return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+  };
+  const queueGroups = useMemo<QueueGroup[]>(() => {
+    const m = new Map<string, UserPost[]>();
+    for (const p of standby) { const k = p.campaign_id ?? '__none__'; m.set(k, [...(m.get(k) ?? []), p]); }
+    const groups = [...m.entries()].map(([k, items]): QueueGroup => {
+      const c = k === '__none__' ? undefined : campaignById.get(k);
+      const sorted = items.map((post) => ({ post, info: queueInfo.get(post.id) })).sort((a, b) => (a.info?.rank ?? 99) - (b.info?.rank ?? 99));
+      return { id: c?.id ?? null, name: c?.name ?? 'Sem campanha', color: c?.color ?? NEUTRAL, items: sorted };
+    });
+    const first = (g: QueueGroup) => g.items.reduce((min, i) => (i.info && i.info.windowStart < min ? i.info.windowStart : min), '9999');
+    return groups.sort((a, b) => (a.id === null ? 1 : b.id === null ? -1 : first(a).localeCompare(first(b))));
+  }, [standby, queueInfo, campaignById]);
 
   // Dias exibidos: mês (semanas completas), semana (7 dias) ou dia (1).
   const days = useMemo(() => {
@@ -186,7 +261,7 @@ export function Agenda() {
     }
     return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [posts, hiddenPlatforms, hiddenEditorials]);
+  }, [posts, hiddenPlatforms, hiddenEditorials, lens]);
 
   // ---- Ações ----
   async function moveToDay(postId: string, day: Date) {
@@ -244,7 +319,7 @@ export function Agenda() {
   async function backToStandby(post: UserPost) {
     try {
       await update(post.id, { status: 'approved', scheduled_date: null });
-      toast.info('Voltou pro stand-by.');
+      toast.info('Removido da agenda — voltou pra fila.');
       setSelected(null);
     } catch (e) {
       console.error(e);
@@ -254,12 +329,8 @@ export function Agenda() {
 
   // Distribuição LOCAL (regra determinística) — usada como fallback se a IA falhar.
   function localDistribute(toPlace: UserPost[]): Array<{ postId: string; date: Date }> {
-    const ordered = [...toPlace].sort((a, b) => {
-      const sa = a.virality_score ?? -1;
-      const sb = b.virality_score ?? -1;
-      if (sb !== sa) return sb - sa;
-      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-    });
+    // Ordem = prioridade da fila (janela + posição na campanha), não só viralidade.
+    const ordered = [...toPlace].sort(byPriority);
     const lastByEditorial: Record<string, Date> = {};
     const countByDay: Record<string, number> = {};
     const countByWeekPlatform: Record<string, number> = {};
@@ -287,7 +358,7 @@ export function Agenda() {
   async function handleAutoDistribute() {
     const toPlace = posts.filter((p) => p.status === 'approved' && !p.scheduled_date && isVisible(p));
     if (toPlace.length === 0) {
-      toast.info('Nada em stand-by pra distribuir.');
+      toast.info('Nada na fila pra distribuir.');
       return;
     }
     setDistributing(true);
@@ -306,6 +377,11 @@ export function Agenda() {
           editorial_name: edMap.get(editorialOf(p) ?? '')?.name,
           title: (p.carousel_text?.quote as string | undefined) || p.title || p.caption || undefined,
           virality_score: p.virality_score ?? undefined,
+          campaign_name: p.campaign_id ? campaignById.get(p.campaign_id)?.name : undefined,
+          priority: queueInfo.get(p.id)?.rank,
+          priority_label: queueInfo.get(p.id)?.label,
+          window_start: queueInfo.get(p.id)?.windowStart,
+          window_end: queueInfo.get(p.id)?.windowEnd,
         })),
         occupied,
         prefs: {
@@ -409,12 +485,7 @@ export function Agenda() {
     const toPlace = standby;
     if (!toPlace.length) { setWizardOpen(false); return; }
 
-    const ordered = [...toPlace].sort((a, b) => {
-      const sa = a.virality_score ?? -1;
-      const sb = b.virality_score ?? -1;
-      if (sb !== sa) return sb - sa;
-      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-    });
+    const ordered = [...toPlace].sort(byPriority);
 
     const lastByEditorial: Record<string, Date> = {};
     const countByDay: Record<string, number> = {};
@@ -550,6 +621,24 @@ export function Agenda() {
     );
   }
 
+  // Sugestão da Hive aplicada direto do painel (mover dia / mover horário).
+  async function applySuggestion(post: UserPost, sg: HiveSuggestion) {
+    const when = eventDate(post);
+    if (sg.action.kind === 'move_day') {
+      const [h, m] = (when ? format(when, 'HH:mm') : cadenceFor(prefs, post.platform).times[0]).split(':').map(Number);
+      await moveToDayTime(post.id, parseISO(sg.action.day), h, m);
+    } else if (when) {
+      const [h, m] = sg.action.time.split(':').map(Number);
+      await moveToDayTime(post.id, when, h, m);
+    }
+  }
+
+  // Campanhas ativas num dia (barras do calendário).
+  const campaignsOn = (day: Date) => {
+    const k = dayKey(day);
+    return barCampaigns.filter((c) => c.start_date! <= k && k <= c.end_date!);
+  };
+
   // Rótulo e navegação dependem da visão (mês / semana / dia).
   const headerLabel = view === 'month'
     ? format(cursor, "MMMM 'de' yyyy", { locale: ptBR })
@@ -573,7 +662,6 @@ export function Agenda() {
     if (new Date(iso).getTime() < Date.now()) { toast.error('Não dá pra agendar no passado.'); return; }
     try {
       await update(selected.id, { status: 'scheduled', scheduled_date: iso });
-      setSelected((s) => (s ? { ...s, scheduled_date: iso, status: 'scheduled' } : s));
       toast.success('Reagendado.');
     } catch (e) {
       console.error(e);
@@ -626,8 +714,8 @@ export function Agenda() {
               key={i}
               className={cn('border-b', minute === 0 ? 'border-border/70' : 'border-border/25', overKey === ck && 'bg-accent/20')}
               style={{ height: SLOT_H }}
-              onDragOver={(e) => { if (draggingId) e.preventDefault(); }}
-              onDragEnter={() => draggingId && setOverKey(ck)}
+              onDragOver={(e) => { if (isPostDrag(e)) e.preventDefault(); }}
+              onDragEnter={(e) => isPostDrag(e) && setOverKey(ck)}
               onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOverKey((x) => (x === ck ? null : x)); }}
               onDrop={(e) => {
                 e.preventDefault(); setOverKey(null);
@@ -664,6 +752,24 @@ export function Agenda() {
             ))}
           </div>
         </div>
+        {barCampaigns.some((c) => daysToShow.some((d) => campaignsOn(d).includes(c))) && (
+          <div className="flex border-b border-border bg-card/10 py-1">
+            <div className="w-12 shrink-0" />
+            <div className="grid flex-1 gap-y-0.5" style={gridCols}>
+              {barCampaigns.map((c) => {
+                const idx = daysToShow.map((d, i) => (campaignsOn(d).includes(c) ? i : -1)).filter((i) => i >= 0);
+                if (!idx.length) return null;
+                return (
+                  <button key={c.id} type="button" onClick={() => setLens(lens === c.id ? null : c.id)} data-testid="campaign-bar"
+                    className="mx-0.5 truncate rounded px-1.5 text-left text-[10px] font-semibold leading-4 text-white"
+                    style={{ gridColumn: `${idx[0] + 1} / ${idx[idx.length - 1] + 2}`, backgroundColor: c.color ?? NEUTRAL }} title={c.name}>
+                    {c.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
         <div className="flex max-h-[64vh] overflow-y-auto">
           <div className="w-12 shrink-0" style={{ height: SLOTS * SLOT_H }}>
             {Array.from({ length: GRID_END - GRID_START }).map((_, h) => (
@@ -691,13 +797,14 @@ export function Agenda() {
     const tall = view === 'week' ? 'min-h-[58vh]' : view === 'day' ? 'min-h-[62vh]' : 'min-h-[104px]';
     return (
       <div
+        data-testid={`day-${k}`}
         className={cn(
           'border-b border-r border-border p-1 flex flex-col gap-1 transition-colors', tall,
           !inMonth && 'bg-muted/30',
           over && 'bg-accent/10 ring-1 ring-inset ring-accent',
         )}
-        onDragOver={(e) => { if (draggingId) e.preventDefault(); }}
-        onDragEnter={() => draggingId && setOverKey(k)}
+        onDragOver={(e) => { if (isPostDrag(e)) e.preventDefault(); }}
+        onDragEnter={(e) => isPostDrag(e) && setOverKey(k)}
         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOverKey((x) => (x === k ? null : x)); }}
         onDrop={(e) => {
           e.preventDefault(); setOverKey(null);
@@ -716,6 +823,18 @@ export function Agenda() {
             {format(day, 'd')}
           </span>
         </div>
+        {campaignsOn(day).map((c) => {
+          const k2 = dayKey(day);
+          const showName = k2 === c.start_date || day.getDay() === 0;
+          return (
+            <button key={c.id} type="button" onClick={() => setLens(lens === c.id ? null : c.id)} data-testid="campaign-bar"
+              className={cn('-mx-1 h-3.5 truncate px-1 text-left text-[9px] font-semibold leading-[14px] text-white',
+                k2 === c.start_date && 'ml-0 rounded-l', k2 === c.end_date && 'mr-0 rounded-r')}
+              style={{ backgroundColor: c.color ?? NEUTRAL }} title={c.name}>
+              {showName ? c.name : '\u00a0'}
+            </button>
+          );
+        })}
         <div className={cn('space-y-1 overflow-y-auto', view === 'month' && 'flex-1')}>
           {dayEvents.length === 0 && view !== 'month'
             ? <p className="py-4 text-center text-[11px] text-muted-foreground">Sem posts</p>
@@ -730,10 +849,12 @@ export function Agenda() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-bold flex items-center gap-2">
-            <CalendarClock className="h-6 w-6 text-accent" /> Agenda de Conteúdo
+            <CalendarClock className="h-6 w-6 text-accent" /> Agenda
           </h1>
           <p className="text-sm text-muted-foreground">
-            Arraste os posts em stand-by pro dia, ou deixe a IA distribuir.
+            {lens && campaignById.get(lens)
+              ? <>Programação da campanha <b className="text-foreground" data-testid="lens-name">{campaignById.get(lens)!.name}</b>.</>
+              : 'Planeje, visualize e ajuste a publicação dos seus conteúdos.'}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -745,19 +866,21 @@ export function Agenda() {
           </Button>
           <Button variant="accent" size="sm" onClick={() => void handleAutoDistribute()} disabled={distributing}>
             {distributing ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1" />}
-            IA distribui
+            IA distribuir
           </Button>
         </div>
       </header>
 
-      <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
+      <CampaignTimeline campaigns={campaigns.filter((c) => c.status !== 'draft')} lens={lens} onLens={setLens} />
+
+      <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
         <div className="space-y-4">
         {/* Bandeja de stand-by (drop pra devolver ao stand-by) */}
         <aside
           className={cn('space-y-2 rounded-lg border border-dashed p-3 transition-colors',
             overKey === '__standby__' ? 'border-accent bg-accent/5' : 'border-border')}
-          onDragOver={(e) => { if (draggingId) e.preventDefault(); }}
-          onDragEnter={() => draggingId && setOverKey('__standby__')}
+          onDragOver={(e) => { if (isPostDrag(e)) e.preventDefault(); }}
+          onDragEnter={(e) => isPostDrag(e) && setOverKey('__standby__')}
           onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOverKey((k) => (k === '__standby__' ? null : k)); }}
           onDrop={(e) => {
             e.preventDefault(); setOverKey(null);
@@ -766,17 +889,13 @@ export function Agenda() {
             if (post && eventDate(post)) void backToStandby(post);
           }}
         >
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <PauseCircle className="h-4 w-4 text-muted-foreground" /> Stand-by
-            <Badge variant="secondary" className="ml-auto">{standby.length}</Badge>
-          </div>
-          <p className="text-[11px] text-muted-foreground">Aprovados sem data. Arraste pro dia.</p>
-          <div className="space-y-1.5 max-h-[42vh] overflow-y-auto pr-1">
-            {standby.length === 0 ? (
-              <p className="py-6 text-center text-xs text-muted-foreground">Nada em stand-by.</p>
-            ) : (
-              standby.map((p) => <PostChip key={p.id} post={p} compact />)
-            )}
+          <div className="max-h-[70vh] overflow-y-auto pr-1">
+            <ScheduleQueue
+              groups={queueGroups} lens={lens} draggingId={draggingId}
+              onDragStart={(p) => setDraggingId(p.id)}
+              onDragEnd={() => { setDraggingId(null); setOverKey(null); }}
+              onSelect={(p) => setSelected(p)}
+            />
           </div>
         </aside>
 
@@ -879,99 +998,110 @@ export function Agenda() {
         </div>
       </div>
 
-      {/* Popup: conteúdo completo do post */}
-      <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(null)}>
-        <DialogContent className="sm:max-w-lg">
-          {selected && (() => {
-            const slug = editorialOf(selected);
-            const ed = slug ? edMap.get(slug) : undefined;
-            const when = eventDate(selected);
-            const quote = selected.carousel_text?.quote as string | undefined;
-            return (
-              <>
-                <DialogHeader>
-                  <DialogTitle className="flex items-center gap-2">
-                    <span className="inline-block h-3 w-3 rounded-full" style={{ backgroundColor: colorOf(selected) }} />
-                    {ed?.name ?? selected.title ?? 'Post'}
-                  </DialogTitle>
-                  <DialogDescription className="flex flex-wrap items-center gap-2 pt-1">
+      {/* Painel lateral da peça (Tela 13): contexto da campanha, data/hora, sugestões da Hive e ações. */}
+      {selected && (() => {
+        const slug = editorialOf(selected);
+        const ed = slug ? edMap.get(slug) : undefined;
+        const when = eventDate(selected);
+        const quote = selected.carousel_text?.quote as string | undefined;
+        const camp = selected.campaign_id ? campaignById.get(selected.campaign_id) : undefined;
+        const cyc = selected.cycle_id ? cycleById.get(selected.cycle_id) : undefined;
+        const info = queueInfo.get(selected.id);
+        const tips = suggestionsFor(selected, cyc);
+        const imgs = Object.values(selected.rendered_slides ?? {}).filter(Boolean);
+        const shown = imgs.length ? imgs : Object.values(selected.generated_images ?? {}).filter(Boolean);
+        const isPublished = selected.status === 'published';
+        return (
+          <>
+            <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setSelected(null)} aria-hidden />
+            <aside role="dialog" aria-label="Detalhes da peça" data-testid="piece-panel"
+              className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-border bg-background shadow-2xl">
+              <div className="flex items-start justify-between gap-2 border-b p-4">
+                <div className="min-w-0">
+                  {camp ? (
+                    <p className="flex items-center gap-2 text-xs font-semibold">
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: camp.color ?? NEUTRAL }} />
+                      <span className="truncate" data-testid="panel-campaign">{camp.name}</span>
+                      {cyc && <span className="shrink-0 font-normal text-muted-foreground">· Ciclo {String(cyc.idx).padStart(2, '0')} · {formatRange(cyc.start_date, cyc.end_date)}</span>}
+                    </p>
+                  ) : <p className="text-xs text-muted-foreground">Sem campanha{ed ? ` · ${ed.name}` : ''}</p>}
+                  <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <span className="inline-flex items-center gap-1"><PlatformIcon platform={selected.platform} className="h-3.5 w-3.5" />{PLATFORM_LABELS[selected.platform]}</span>
                     {selected.codigo && <Badge variant="outline" className="font-mono text-[10px]">{selected.codigo}</Badge>}
-                    {when && <span>📅 {format(when, "d 'de' MMM 'às' HH:mm", { locale: ptBR })}</span>}
                     {selected.virality_score != null && <span>🚀 {selected.virality_score}/100</span>}
-                  </DialogDescription>
-                </DialogHeader>
-
-                <div className="space-y-3 py-2 max-h-[60vh] overflow-y-auto">
-                  {/* Post FINAL: a imagem renderizada (rendered_slides). Cai pra
-                      imagem de IA gerada, e só então pro texto, se não houver. */}
-                  {(() => {
-                    const imgs = Object.values(selected.rendered_slides ?? {}).filter(Boolean);
-                    const shown = imgs.length ? imgs : Object.values(selected.generated_images ?? {}).filter(Boolean);
-                    if (!shown.length) {
-                      return (
-                        <p className="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
-                          Este post ainda não tem imagem final renderizada. Abra em “Editar” pra gerar.
-                        </p>
-                      );
-                    }
-                    return (
-                      <div className={cn('flex gap-2', shown.length > 1 ? 'overflow-x-auto pb-1 snap-x' : '')}>
-                        {shown.map((url, i) => (
-                          <img
-                            key={i}
-                            src={url}
-                            alt={`Slide ${i + 1}`}
-                            className={cn(
-                              'rounded-md border border-border object-contain snap-center',
-                              shown.length > 1 ? 'h-auto max-h-[52vh] w-auto shrink-0' : 'mx-auto max-h-[52vh] w-full',
-                            )}
-                          />
-                        ))}
-                      </div>
-                    );
-                  })()}
-                  {when && (
-                    <div className="space-y-1 rounded-md border border-border p-2">
-                      <Label className="text-xs text-muted-foreground">Reagendar (data e hora)</Label>
-                      <Input
-                        type="datetime-local"
-                        className="h-8 text-xs"
-                        min={nowLocalInput()}
-                        value={isoToLocalInput(selected.scheduled_date)}
-                        onChange={(e) => void rescheduleSelected(e.target.value)}
-                      />
-                    </div>
-                  )}
-                  {quote && (
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Título / Frase</Label>
-                      <p className="font-display text-base font-medium leading-relaxed">"{quote}"</p>
-                    </div>
-                  )}
-                  {selected.caption && (
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Legenda / Texto</Label>
-                      <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{selected.caption}</p>
-                    </div>
-                  )}
+                    <Badge variant="secondary" className="text-[10px]">{isPublished ? 'Publicado' : when ? 'Agendado' : 'Para agendar'}</Badge>
+                  </p>
                 </div>
+                <Button variant="ghost" size="icon" onClick={() => setSelected(null)} aria-label="Fechar"><X className="h-4 w-4" /></Button>
+              </div>
 
-                <DialogFooter className="gap-2 sm:justify-between">
-                  {when ? (
-                    <Button variant="ghost" onClick={() => void backToStandby(selected)}>
-                      <PauseCircle className="h-4 w-4 mr-1" /> Voltar pro stand-by
-                    </Button>
-                  ) : <span />}
-                  <Button variant="accent" onClick={() => navigate(`/posts/${selected.id}`)}>
-                    <Edit3 className="h-4 w-4 mr-1" /> Editar
+              <div className="flex-1 space-y-4 overflow-y-auto p-4">
+                {shown.length ? (
+                  <div className={cn('flex gap-2', shown.length > 1 ? 'overflow-x-auto pb-1 snap-x' : '')}>
+                    {shown.map((url, i) => (
+                      <img key={i} src={url} alt={`Slide ${i + 1}`}
+                        className={cn('rounded-md border border-border object-contain snap-center', fullView ? 'max-h-none' : 'max-h-[38vh]', shown.length > 1 ? 'w-auto shrink-0' : 'mx-auto w-full')} />
+                    ))}
+                  </div>
+                ) : (
+                  <p className="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
+                    Esta peça ainda não tem imagem final renderizada. Abra em “Editar” pra gerar.
+                  </p>
+                )}
+                {quote && <p className="font-display text-base font-medium leading-relaxed">"{quote}"</p>}
+
+                {!isPublished && (
+                  <div className="space-y-1 rounded-md border border-border p-2.5" data-testid="panel-move">
+                    <Label className="text-xs text-muted-foreground">{when ? 'Mover (data e hora)' : 'Agendar (data e hora)'}</Label>
+                    <Input type="datetime-local" className="h-8 text-xs" min={nowLocalInput()}
+                      value={isoToLocalInput(selected.scheduled_date)} onChange={(e) => void rescheduleSelected(e.target.value)} />
+                  </div>
+                )}
+
+                {!when && info && (
+                  <div className="flex items-start gap-2 rounded-md border bg-accent/5 p-2.5 text-xs">
+                    <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />
+                    <div className="flex-1">
+                      <p><b>Hive sugere:</b> {formatRange(info.windowStart, info.windowEnd)} · {info.label} prioridade ({info.rank}ª da campanha)</p>
+                      <Button size="sm" variant="outline" className="mt-2 h-7 text-xs" data-testid="panel-schedule-window"
+                        onClick={() => void moveToDay(selected.id, parseISO(info.windowStart))}>Agendar na janela sugerida</Button>
+                    </div>
+                  </div>
+                )}
+
+                {tips.length > 0 && (
+                  <div className="space-y-2" data-testid="panel-suggestions">
+                    <p className="flex items-center gap-1.5 text-xs font-semibold"><Sparkles className="h-3.5 w-3.5 text-accent" /> Hive sugere</p>
+                    {tips.map((t) => (
+                      <div key={t.id} className="flex items-start gap-2 rounded-md border p-2.5 text-xs" data-testid="panel-suggestion">
+                        <div className="flex-1"><p className="font-semibold">{t.title}</p><p className="text-muted-foreground">{t.detail}</p></div>
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => void applySuggestion(selected, t)}>Aplicar</Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {selected.caption && (
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Legenda / Texto</Label>
+                    <p className={cn('whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground', !fullView && 'line-clamp-6')} data-testid="panel-caption">{selected.caption}</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 border-t p-3">
+                <Button variant="accent" size="sm" onClick={() => navigate(`/posts/${selected.id}`)}><Edit3 className="mr-1 h-4 w-4" /> Editar</Button>
+                <Button variant="outline" size="sm" onClick={() => setFullView((v) => !v)} data-testid="panel-full">{fullView ? 'Ver resumo' : 'Ver versão completa'}</Button>
+                {when && !isPublished && (
+                  <Button variant="ghost" size="sm" className="ml-auto" onClick={() => void backToStandby(selected)} data-testid="panel-unschedule">
+                    <PauseCircle className="mr-1 h-4 w-4" /> Remover da agenda
                   </Button>
-                </DialogFooter>
-              </>
-            );
-          })()}
-        </DialogContent>
-      </Dialog>
+                )}
+              </div>
+            </aside>
+          </>
+        );
+      })()}
 
       {/* Diálogo: configuração da distribuição automática */}
       <Dialog open={configOpen} onOpenChange={setConfigOpen}>
