@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { contentApi } from '@/lib/campaignApi';
+import { isAvulso } from '@/lib/campaign/avulso';
 import { developIdeas, discardContent, editContent, finishValidation, reviseWithHive, validateContent } from '@/lib/campaign/develop';
 import {
   CAMPAIGN_TYPE_LABELS, FUNCTION_COLORS, FUNCTION_LABELS,
@@ -89,12 +90,12 @@ export function DevelopStep({ campaign, cycle, ideas, editorials, accounts, onId
     return (
       <div className="space-y-5" data-testid="develop-intro">
         <div>
-          <p className="flex items-center gap-2 text-sm font-semibold text-emerald-600"><CheckCircle2 className="h-4 w-4" /> Pauta aprovada</p>
-          <h1 className="mt-1 font-display text-2xl font-bold">Agora a Hive vai transformar as ideias aprovadas em conteúdos.</h1>
+          <p className="flex items-center gap-2 text-sm font-semibold text-emerald-600"><CheckCircle2 className="h-4 w-4" /> {isAvulso(campaign) ? 'Ideia registrada' : 'Pauta aprovada'}</p>
+          <h1 className="mt-1 font-display text-2xl font-bold">{isAvulso(campaign) ? 'Agora a Hive vai transformar sua ideia em conteúdo.' : 'Agora a Hive vai transformar as ideias aprovadas em conteúdos.'}</h1>
           <p className="mt-1 text-sm text-muted-foreground">Cada conteúdo desenvolve uma linha de pensamento completa antes de ganhar formatos, canais e peças.</p>
         </div>
         <div className="rounded-2xl border bg-card p-5">
-          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{approvedIdeas.length} ideias aprovadas</p>
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{approvedIdeas.length} {approvedIdeas.length === 1 ? 'ideia aprovada' : 'ideias aprovadas'}</p>
           <ol className="space-y-2 text-sm">
             {approvedIdeas.map((i, n) => {
               const done = (contents ?? []).some((c) => c.idea_id === i.id);
@@ -147,7 +148,7 @@ export function DevelopStep({ campaign, cycle, ideas, editorials, accounts, onId
           </ul>
         </div>
         <div className="flex justify-end">
-          <Button variant="accent" size="lg" onClick={() => setJustApproved(null)}>{last ? 'Ver resumo do ciclo' : 'Próximo conteúdo'} <ArrowRight className="h-4 w-4" /></Button>
+          <Button variant="accent" size="lg" onClick={() => setJustApproved(null)}>{last ? (isAvulso(campaign) ? 'Ver resumo' : 'Ver resumo do ciclo') : 'Próximo conteúdo'} <ArrowRight className="h-4 w-4" /></Button>
         </div>
       </div>
     );
@@ -162,7 +163,7 @@ export function DevelopStep({ campaign, cycle, ideas, editorials, accounts, onId
       <div className="space-y-5" data-testid="develop-done">
         <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-6">
           <p className="flex items-center gap-2 font-display text-xl font-semibold"><CheckCircle2 className="h-5 w-5 text-emerald-600" /> {validated.length} conteúdos aprovados</p>
-          <p className="mt-1 text-sm text-muted-foreground">As linhas de pensamento deste ciclo estão validadas.</p>
+          <p className="mt-1 text-sm text-muted-foreground">{isAvulso(campaign) ? 'A linha de pensamento está validada.' : 'As linhas de pensamento deste ciclo estão validadas.'}</p>
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4" data-testid="develop-stats">
             {[[validated.length, 'conteúdos'], [potential, 'peças potenciais'], [already, 'já aprovadas no formato de validação'], [potential - already, 'desdobramentos a desenvolver']].map(([n, l]) => (
               <div key={String(l)} className="rounded-xl border bg-card p-3"><p className="font-display text-2xl font-bold">{n}</p><p className="text-xs text-muted-foreground">{l}</p></div>
@@ -190,7 +191,7 @@ export function DevelopStep({ campaign, cycle, ideas, editorials, accounts, onId
         <h1 className="mt-1 font-display text-2xl font-bold">{c.title}</h1>
         <p className="mt-1 flex flex-wrap items-center gap-x-3 text-sm text-muted-foreground">
           {f && <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: FUNCTION_COLORS[f] }} />Função estratégica: <b className="text-foreground">{FUNCTION_LABELS[f]}</b></span>}
-          <span>Origem: {CAMPAIGN_TYPE_LABELS[campaign.type]} · Ciclo {String(cycle.idx).padStart(2, '0')}</span>
+          <span>Origem: {isAvulso(campaign) ? 'Conteúdo avulso' : `${CAMPAIGN_TYPE_LABELS[campaign.type]} · Ciclo ${String(cycle.idx).padStart(2, '0')}`}</span>
         </p>
       </div>
 

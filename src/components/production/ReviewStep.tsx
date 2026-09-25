@@ -1,5 +1,6 @@
 // Etapa 6 — TELAS 12, 12A, 12B, 12C: produção visual do ciclo, galeria, escolha
 // da proposta, edição/aprovação da peça e conclusão (→ programação).
+import { isAvulso } from '@/lib/campaign/avulso';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -191,7 +192,7 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
       <div className="space-y-5" data-testid="gallery">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Ciclo {String(cycle.idx).padStart(2, '0')} · {formatRange(cycle.start_date, cycle.end_date)}</p>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{isAvulso(campaign) ? 'Conteúdo avulso' : `Ciclo ${String(cycle.idx).padStart(2, '0')} · ${formatRange(cycle.start_date, cycle.end_date)}`}</p>
             <h1 className="font-display text-2xl font-bold" data-testid="gallery-counts">{units.length} peças · {approvedCount} aprovadas · {pending.length} para revisar</h1>
           </div>
         </div>
@@ -199,12 +200,12 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-5" data-testid="production-done">
             <div>
               <p className="flex items-center gap-2 font-display text-lg font-semibold"><CheckCircle2 className="h-5 w-5 text-emerald-600" /> Produção concluída</p>
-              <p className="text-sm text-muted-foreground">{approvedCount} de {units.length} peças aprovadas. Todos os conteúdos previstos para este ciclo estão prontos.</p>
+              <p className="text-sm text-muted-foreground">{approvedCount} de {units.length} peças aprovadas. {isAvulso(campaign) ? 'Tudo pronto para programar.' : 'Todos os conteúdos previstos para este ciclo estão prontos.'}</p>
             </div>
             <Button variant="accent" onClick={() => act('finish', async () => {
               const c = cycle.status === 'ready' ? cycle : await finishProduction(cycle);
               onCycleChange(c);
-              navigate(`/agenda?campaign=${campaign.id}`);
+              navigate(isAvulso(campaign) ? '/agenda' : `/agenda?campaign=${campaign.id}`);
             })} disabled={!!busy}>Seguir para programação <ArrowRight className="h-4 w-4" /></Button>
           </div>
         )}
@@ -293,13 +294,13 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
             <p className="text-sm text-muted-foreground">{piece.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} · Imagem — {unit?.content.title}</p></div>
         </div>
         <div className="space-y-2 rounded-2xl border bg-card p-4">
-          <p className="text-sm font-medium">Progresso do ciclo</p>
+          <p className="text-sm font-medium">{isAvulso(campaign) ? 'Progresso' : 'Progresso do ciclo'}</p>
           <div className="h-2 w-full overflow-hidden rounded-full bg-secondary"><div className="h-full bg-emerald-500" style={{ width: `${(approvedCount / Math.max(1, units.length)) * 100}%` }} /></div>
           <p className="text-xs text-muted-foreground" data-testid="cycle-progress">{approvedCount} de {units.length} peças aprovadas</p>
         </div>
         <div className="flex flex-wrap gap-2">
           {remaining.length > 0 && <Button variant="accent" onClick={() => nextPending(unit?.key)}>Próxima peça para revisar <ArrowRight className="h-4 w-4" /></Button>}
-          <Button variant="outline" onClick={() => setView({ kind: 'gallery' })}>Ver produção do ciclo</Button>
+          <Button variant="outline" onClick={() => setView({ kind: 'gallery' })}>{isAvulso(campaign) ? 'Ver produção' : 'Ver produção do ciclo'}</Button>
         </div>
       </div>
     );

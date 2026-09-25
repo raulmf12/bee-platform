@@ -3,7 +3,7 @@
 // alcançadas podem ser revisitadas pelo trilho.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ProductionStepper } from '@/components/production/ProductionStepper';
 import { CampaignCyclePicker } from '@/components/production/CampaignCyclePicker';
@@ -13,6 +13,7 @@ import { DevelopStep } from '@/components/production/DevelopStep';
 import { ReviewStep } from '@/components/production/ReviewStep';
 import { accountApi, campaignApi, cycleApi, ideaApi } from '@/lib/campaignApi';
 import { beeApi } from '@/lib/api';
+import { isAvulso } from '@/lib/campaign/avulso';
 import type { BeeEditorial, Campaign, CampaignCycle, CycleStatus, Idea, SocialAccount } from '@/types';
 
 const STEP_BY_STATUS: Record<CycleStatus, number> = {
@@ -35,17 +36,19 @@ export function Production() {
   const [editorials, setEditorials] = useState<BeeEditorial[]>([]);
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [viewStep, setViewStep] = useState<number | null>(null);
+  const [avulso, setAvulso] = useState<Campaign | null>(null);
 
   const campaignId = params.get('campaign') ?? undefined;
   const cycleId = params.get('cycle') ?? undefined;
-  const campaign = campaigns?.find((c) => c.id === campaignId);
+  const campaign = campaigns?.find((c) => c.id === campaignId) ?? (avulso && avulso.id === campaignId ? avulso : undefined);
+  const solo = isAvulso(campaign);
   const cycle = cycles.find((c) => c.id === cycleId);
   const rec = useMemo(() => recommendedCycle(cycles), [cycles]);
   const today = new Date().toISOString().slice(0, 10);
 
   useEffect(() => {
-    Promise.all([campaignApi.list(), accountApi.list(), beeApi.editorials()])
-      .then(([c, a, e]) => { setCampaigns(c.filter((x) => x.status === 'active')); setAccounts(a); setEditorials(e.filter((x) => x.is_active !== false)); })
+    Promise.all([campaignApi.list(), accountApi.list(), beeApi.editorials(), campaignApi.getAvulso()])
+      .then(([c, a, e, av]) => { setCampaigns(c.filter((x) => x.status === 'active')); setAccounts(a); setEditorials(e.filter((x) => x.is_active !== false)); setAvulso(av); })
       .catch(() => setCampaigns([]));
   }, []);
 
@@ -74,14 +77,14 @@ export function Production() {
 
   if (!campaigns) return <div className="flex h-64 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-accent" /></div>;
 
-  if (campaigns.length === 0) {
+  if (campaigns.length === 0 && !solo) {
     return (
       <div className="mx-auto max-w-xl p-10 text-center">
         <p className="font-display text-xl font-semibold">Nenhuma campanha ativa</p>
         <p className="mt-1 text-sm text-muted-foreground">A produção acontece dentro de uma campanha. Crie uma — ou faça um conteúdo avulso.</p>
         <div className="mt-5 flex justify-center gap-2">
           <Button variant="accent" onClick={() => navigate('/campanhas/nova')}>Criar campanha</Button>
-          <Button variant="outline" onClick={() => navigate('/posts/novo')}>Conteúdo avulso</Button>
+          <Button variant="outline" onClick={() => navigate('/criar/conteudo')}>Conteúdo avulso</Button>
         </div>
       </div>
     );
@@ -92,15 +95,25 @@ export function Production() {
 
   return (
     <div className="flex min-h-full flex-col">
-      <ProductionStepper current={step} reached={statusStep} onSelect={(i) => setViewStep(i === statusStep ? null : i)} />
+      <ProductionStepper current={step} reached={statusStep} onSelect={(i) => { if (!solo || i >= 4) setViewStep(i === statusStep ? null : i); }}
+        {...(solo ? { steps: ['Ideia', 'Desenvolvimento', 'Revisão'], offset: 3 } : {})} />
       <div className="mx-auto grid w-full max-w-7xl flex-1 gap-6 p-4 lg:grid-cols-[340px_1fr] lg:p-6">
         <aside>
-          <CampaignCyclePicker
-            campaigns={campaigns} campaignId={campaignId} cycles={cycles} cycleId={cycleId} recommendedCycleId={rec?.id}
-            onCampaign={(id) => setParams({ campaign: id })}
-            onCycle={(id) => setParams({ campaign: campaignId!, cycle: id })}
-            onAvulso={() => navigate('/posts/novo')}
-          />
+          {solo ? (
+            <section className="space-y-3 rounded-2xl border bg-card p-4" data-testid="avulso-card">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Sem campanha · conteúdo avulso</p>
+              <p className="font-display text-base font-semibold">{ideas[0]?.title ?? '…'}</p>
+              {ideas[0]?.summary && <p className="text-sm text-muted-foreground">{ideas[0].summary}</p>}
+              <Button variant="outline" size="sm" onClick={() => navigate('/criar/conteudo')}><Plus className="h-3.5 w-3.5" /> Criar outro conteúdo</Button>
+            </section>
+          ) : (
+            <CampaignCyclePicker
+              campaigns={campaigns} campaignId={campaignId} cycles={cycles} cycleId={cycleId} recommendedCycleId={rec?.id}
+              onCampaign={(id) => setParams({ campaign: id })}
+              onCycle={(id) => setParams({ campaign: campaignId!, cycle: id })}
+              onAvulso={() => navigate('/criar/conteudo')}
+            />
+          )}
         </aside>
         <main className="min-w-0">
           {!campaign || !cycle ? (

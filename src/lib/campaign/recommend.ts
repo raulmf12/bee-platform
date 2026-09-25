@@ -40,7 +40,7 @@ export function nextMoveFrom(campaigns: Campaign[], cycles: CampaignCycle[], tod
   return {
     title: 'Suas campanhas estão em dia',
     body: 'Que tal criar um conteúdo avulso a partir de uma ideia sua?',
-    cta: 'Criar um conteúdo', to: '/posts/novo',
+    cta: 'Criar um conteúdo', to: '/criar/conteudo',
   };
 }
 

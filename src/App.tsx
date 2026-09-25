@@ -35,6 +35,8 @@ import { HiveTesteM02 } from '@/pages/hive/HiveTesteM02'; // TEMP: apagar depois
 import { HiveTesteM01 } from '@/pages/hive/HiveTesteM01'; // TEMP: apagar depois
 import { Custos } from '@/pages/custos/Custos';
 import { ImageLab } from '@/pages/labs/ImageLab';
+import { Pipeline } from '@/pages/pipeline/Pipeline';
+import { OneContent } from '@/pages/criar/OneContent';
 import { CreateHub } from '@/pages/criar/CreateHub';
 import { Campaigns } from '@/pages/campanhas/Campaigns';
 import { NewCampaign } from '@/pages/campanhas/NewCampaign';
@@ -115,6 +117,7 @@ export default function App() {
           <Route path="posts" element={<Navigate to="/" replace />} />
           <Route path="posts/novo" element={<NewPost />} />
           <Route path="agenda" element={<Agenda />} />
+          <Route path="pipeline" element={<Pipeline />} />
           <Route path="hive/preview" element={<HivePreview />} />
           <Route path="hive/assets" element={<HiveAssets />} />
           <Route path="hive/marcos" element={<HiveMarcos />} />
@@ -124,6 +127,7 @@ export default function App() {
           <Route path="custos" element={<Custos />} />
           <Route path="labs/imagens" element={<ImageLab />} />
           <Route path="criar" element={<CreateHub />} />
+          <Route path="criar/conteudo" element={<OneContent />} />
           <Route path="campanhas" element={<Campaigns />} />
           <Route path="campanhas/nova" element={<NewCampaign />} />
           <Route path="campanhas/:id" element={<CampaignDetail />} />

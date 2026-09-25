@@ -112,7 +112,7 @@ export function Aprendizado() {
           </div>
           {gate.destravados > 0 && (
             <Button asChild variant="accent" size="sm">
-              <Link to="/linhas">Abrir campanha</Link>
+              <Link to="/campanhas">Abrir campanhas</Link>
             </Button>
           )}
         </CardContent>

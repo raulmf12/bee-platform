@@ -9,9 +9,9 @@ import { FUNCTION_LABELS, STRATEGIC_FUNCTIONS, type BeeEditorial, type IdeaChann
 export interface IdeaDraft { title: string; summary: string; strategic_function: StrategicFunction; editorial_slug: string; channels: IdeaChannel[] }
 
 // Edição inline de uma ideia (ou criação de uma nova, origin 'user').
-export function IdeaEditor({ initial, editorials, accounts, onSave, onCancel, saveLabel = 'Salvar ideia' }: {
+export function IdeaEditor({ initial, editorials, accounts, onSave, onCancel, saveLabel = 'Salvar ideia', busy }: {
   initial: IdeaDraft; editorials: BeeEditorial[]; accounts: SocialAccount[];
-  onSave: (d: IdeaDraft) => void | Promise<void>; onCancel: () => void; saveLabel?: string;
+  onSave: (d: IdeaDraft) => void | Promise<void>; onCancel: () => void; saveLabel?: string; busy?: boolean;
 }) {
   const [d, setD] = useState<IdeaDraft>(initial);
   const has = (a: SocialAccount) => d.channels.some((c) => c.account_id === a.id);
@@ -58,7 +58,7 @@ export function IdeaEditor({ initial, editorials, accounts, onSave, onCancel, sa
         </div>
       </div>
       <div className="flex gap-2 pt-1">
-        <Button variant="accent" size="sm" disabled={!d.title.trim() || d.channels.length === 0} onClick={() => onSave({ ...d, title: d.title.trim(), summary: d.summary.trim() })}>{saveLabel}</Button>
+        <Button variant="accent" size="sm" disabled={busy || !d.title.trim() || d.channels.length === 0} onClick={() => onSave({ ...d, title: d.title.trim(), summary: d.summary.trim() })}>{saveLabel}</Button>
         <Button variant="ghost" size="sm" onClick={onCancel}>Cancelar</Button>
       </div>
     </div>

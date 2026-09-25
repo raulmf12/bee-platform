@@ -47,9 +47,15 @@ export const accountApi = {
 // ---------------------------------------------------------------------------
 // CAMPANHAS
 // ---------------------------------------------------------------------------
+const isAvulsoRow = (c: Campaign) => (c.metadata as { kind?: string } | undefined)?.kind === 'avulso';
+
 export const campaignApi = {
+  // Campanhas de verdade. O contêiner dos conteúdos avulsos ("Sem campanha") fica de fora.
   async list(): Promise<Campaign[]> {
-    return db.select<Campaign>('campaigns', { order: 'created_at.desc' });
+    return (await db.select<Campaign>('campaigns', { order: 'created_at.desc' })).filter((c) => !isAvulsoRow(c));
+  },
+  async getAvulso(): Promise<Campaign | null> {
+    return (await db.select<Campaign>('campaigns', { 'metadata->>kind': 'eq.avulso', limit: '1' }))[0] ?? null;
   },
   async get(id: string): Promise<Campaign | null> {
     return db.selectOne<Campaign>('campaigns', { id: `eq.${id}` });
@@ -104,6 +110,9 @@ export const ideaApi = {
   },
   async listByCampaign(campaignId: string): Promise<Idea[]> {
     return db.select<Idea>('ideas', { campaign_id: `eq.${campaignId}`, order: 'created_at.desc' });
+  },
+  async listAll(): Promise<Idea[]> {
+    return db.select<Idea>('ideas', { order: 'position.asc' });
   },
   async listOpen(): Promise<Idea[]> {
     return db.select<Idea>('ideas', { status: 'in.(backlog,proposed,approved)', order: 'created_at.desc' });

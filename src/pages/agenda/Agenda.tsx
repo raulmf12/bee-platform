@@ -221,7 +221,8 @@ export function Agenda() {
   };
   const queueGroups = useMemo<QueueGroup[]>(() => {
     const m = new Map<string, UserPost[]>();
-    for (const p of standby) { const k = p.campaign_id ?? '__none__'; m.set(k, [...(m.get(k) ?? []), p]); }
+    // Conteúdo avulso (contêiner fora da lista) e peças sem campanha caem juntos em "Sem campanha".
+    for (const p of standby) { const k = p.campaign_id && campaignById.has(p.campaign_id) ? p.campaign_id : '__none__'; m.set(k, [...(m.get(k) ?? []), p]); }
     const groups = [...m.entries()].map(([k, items]): QueueGroup => {
       const c = k === '__none__' ? undefined : campaignById.get(k);
       const sorted = items.map((post) => ({ post, info: queueInfo.get(post.id) })).sort((a, b) => (a.info?.rank ?? 99) - (b.info?.rank ?? 99));

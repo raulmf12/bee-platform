@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
-  PenLine,
   Image as ImageIcon,
   Settings,
   Sparkles,
@@ -21,17 +20,16 @@ import {
   ChevronDown,
   ChevronRight,
   Lock,
-  PenTool,
   Library,
   Database,
   ScrollText,
-  UserCircle,
   DollarSign,
-  Layers
+  Layers,
+  Plus,
+  Workflow
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BeeLogo } from '@/components/shared/BeeLogo';
-import { aiApi } from '@/lib/api';
 
 type SubItem = {
   to: string;
@@ -49,77 +47,52 @@ type NavGroup = {
   items?: SubItem[];
 };
 
+// Menu da estrutura de campanhas: o fluxo principal solto no topo (Início →
+// Campanhas → Produção → Pipeline → Agenda); a base de conhecimento e a
+// inteligência em grupos. Saíram "Campanha de conteúdo" (linhas) e "Post
+// individual" — "Um conteúdo" agora nasce em Criar.
 const NAV_GROUPS: NavGroup[] = [
-  { 
-    label: 'Dashboard', 
-    to: '/', 
-    icon: LayoutDashboard 
-  },
+  { label: 'Início', to: '/', icon: LayoutDashboard },
+  { label: 'Campanhas', to: '/campanhas', icon: CalendarClock },
+  { label: 'Produção', to: '/producao', icon: Layers },
+  { label: 'Pipeline', to: '/pipeline', icon: Workflow },
+  { label: 'Agenda', to: '/agenda', icon: CalendarDays },
   {
-    label: 'Produção de conteúdo',
-    icon: PenTool,
-    items: [
-      { to: '/campanhas', label: 'Campanhas', icon: CalendarClock },
-      { to: '/criar', label: 'Criar', icon: PenLine },
-      { to: '/producao', label: 'Produção', icon: Layers },
-      { to: '/linhas', label: 'Campanha de conteúdo', icon: CalendarClock, gated: true },
-      { to: '/posts/novo', label: 'Post individual', icon: PenLine },
-      { to: '/agenda', label: 'Agenda', icon: CalendarDays },
-      { to: '/podcasts', label: 'Posts Vídeos', icon: Mic },
-      { to: '/templates', label: 'Templates', icon: Paintbrush },
-      { to: '/biblioteca', label: 'Biblioteca', icon: ImageIcon },
-    ]
-  },
-  {
-    label: 'Estrutura de conteúdo',
+    label: 'Base Hive',
     icon: Library,
     items: [
+      { to: '/genesis', label: 'Genesis', icon: BrainCircuit },
+      { to: '/diretrizes', label: 'Diretrizes de Criação', icon: ScrollText },
       { to: '/editoriais', label: 'Editoriais', icon: BookOpen },
       { to: '/arsenal', label: 'Arsenal', icon: Boxes },
+      { to: '/produtos', label: 'Produtos', icon: Package },
+      { to: '/conhecimento', label: 'Conhecimento', icon: Database },
+      { to: '/templates', label: 'Templates', icon: Paintbrush },
+      { to: '/biblioteca', label: 'Biblioteca', icon: ImageIcon },
+      { to: '/podcasts', label: 'Vídeos', icon: Mic },
     ]
   },
   {
     label: 'Inteligência',
-    icon: BrainCircuit,
+    icon: Brain,
     items: [
       { to: '/aprendizado', label: 'Aprendizado', icon: Brain },
+      { to: '/curadoria', label: 'Curadoria', icon: Sparkles },
       { to: '/feedback', label: 'Feedback contínuo', icon: MessageSquarePlus },
       { to: '/coach', label: 'Coach de voz', icon: MessagesSquare },
       { to: '/personas', label: 'Simular público', icon: Users },
-      { to: '/conhecimento', label: 'Conhecimento', icon: Database },
-      { to: '/curadoria', label: 'Curadoria', icon: Sparkles },
       { to: '/custos', label: 'Custos de API', icon: DollarSign },
       { to: '/labs/imagens', label: 'Teste de imagem', icon: ImageIcon },
     ]
   },
-  {
-    label: 'Perfil',
-    icon: UserCircle,
-    items: [
-      { to: '/genesis', label: 'Genesis', icon: BrainCircuit },
-      { to: '/diretrizes', label: 'Diretrizes de Criação', icon: ScrollText },
-      { to: '/produtos', label: 'Produtos', icon: Package },
-    ]
-  },
-  { 
-    label: 'Configurações', 
-    to: '/configuracoes', 
-    icon: Settings 
-  },
+  { label: 'Configurações', to: '/configuracoes', icon: Settings },
 ];
 
 export function Sidebar() {
   const location = useLocation();
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
-  // So pra decidir o cadeado. Falhou? Assume travado — e o estado inicial e
-  // o unico seguro pra uma funcao que publica sozinha.
-  const [unlocked, setUnlocked] = useState(false);
-
-  useEffect(() => {
-    void aiApi.gate()
-      .then((g) => setUnlocked(!!g.destravada))
-      .catch(() => setUnlocked(false));
-  }, []);
+  // Cadeado de itens `gated` (nenhum no menu atual — a antiga "Campanha de conteúdo" saiu).
+  const unlocked = true;
 
   // Abre automaticamente o grupo que contém a rota ativa
   useEffect(() => {
@@ -159,7 +132,11 @@ export function Sidebar() {
         <BeeLogo showTagline />
       </div>
 
-      <nav className="flex-1 overflow-y-auto space-y-2 px-3 py-4">
+      <nav className="flex-1 overflow-y-auto space-y-1 px-3 py-4">
+        <NavLink to="/criar" data-testid="nav-create"
+          className="mb-3 flex items-center justify-center gap-2 rounded-md bg-accent px-3 py-2 text-sm font-semibold text-accent-foreground transition-opacity hover:opacity-90">
+          <Plus className="h-4 w-4" /> Criar
+        </NavLink>
         {NAV_GROUPS.map((group) => {
           if (group.to) {
             // Item solto (Dashboard e Configurações)

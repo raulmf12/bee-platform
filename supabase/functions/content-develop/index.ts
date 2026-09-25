@@ -61,9 +61,11 @@ Deno.serve(async (req: Request) => {
       `/ideas?id=eq.${input.idea_id}&user_id=eq.${userId}&select=title,summary,strategic_function,editorial_slug,campaign_id,rationale&limit=1`);
     if (!idea) return errorResponse('Ideia não encontrada', 404);
     const fn: Fn = idea.strategic_function ?? 'presenca';
-    const [campaign] = idea.campaign_id
-      ? await fetchRest<Array<{ name: string; type: string; intent: string | null; moment: { label?: string } | null }>>(`/campaigns?id=eq.${idea.campaign_id}&select=name,type,intent,moment&limit=1`)
+    // Conteúdo avulso ("Um conteúdo") vive num contêiner metadata.kind='avulso': não é campanha.
+    const [campaignRow] = idea.campaign_id
+      ? await fetchRest<Array<{ name: string; type: string; intent: string | null; moment: { label?: string } | null; metadata: { kind?: string } | null }>>(`/campaigns?id=eq.${idea.campaign_id}&select=name,type,intent,moment,metadata&limit=1`)
       : [];
+    const campaign = campaignRow?.metadata?.kind === 'avulso' ? undefined : campaignRow;
     const [editorial] = idea.editorial_slug
       ? await fetchRest<Array<{ name: string }>>(`/bee_editorials?slug=eq.${idea.editorial_slug}&select=name&limit=1`)
       : [];

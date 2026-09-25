@@ -67,7 +67,7 @@ export function scheduleQueue(
     const cycleEnd = cycleOf(p)?.end_date;
     taken.add(key(p, start));
     infos.set(p.id, { rank: 0, label: 'Alta', windowStart: start, windowEnd: cycleEnd && end > cycleEnd && start <= cycleEnd ? cycleEnd : end });
-    const g = p.campaign_id ?? '__none__';
+    const g = campaignOf(p)?.id ?? '__none__'; // avulso/sem campanha = um grupo só
     byGroup.set(g, [...(byGroup.get(g) ?? []), p]);
   }
   // Ranking e rótulo DENTRO de cada campanha (é assim que a fila é lida).

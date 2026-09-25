@@ -22,7 +22,7 @@ export function CreateHub() {
       <div className="grid gap-3">
         <ChoiceCard testId="create-campaign" onClick={() => navigate('/campanhas/nova')} icon={<Layers className="h-5 w-5" />}
           title="Campanha de conteúdos" description="Uma estratégia que a Hive transforma em ciclos de ideias, conteúdos e peças." />
-        <ChoiceCard testId="create-content" onClick={() => navigate('/posts/novo')} icon={<PenLine className="h-5 w-5" />}
+        <ChoiceCard testId="create-content" onClick={() => navigate('/criar/conteudo')} icon={<PenLine className="h-5 w-5" />}
           title="Um conteúdo" description="Uma ideia pontual, fora de campanha." />
         <ChoiceCard testId="create-recommend" onClick={askHive} icon={loading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Sparkles className="h-5 w-5" />}
           title="Hive, recomende" description="Deixar a Hive analisar seu momento e sugerir o melhor próximo movimento." />
