@@ -44,8 +44,6 @@ export function AccountsPanel() {
   // Instagram (OAuth do Facebook)
   const [igOpen, setIgOpen] = useState(false);
   const [igLabel, setIgLabel] = useState('');
-  const [igChoices, setIgChoices] = useState<IgChoice[]>([]);
-  const [igPending, setIgPending] = useState<{ access_token: string; expires_at: string; label: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -77,6 +75,7 @@ export function AccountsPanel() {
 
   const redirectUri = typeof window !== 'undefined' ? `${window.location.origin}/configuracoes` : '';
 
+  // Salva (ou atualiza) UMA conta do Instagram encontrada no login.
   const saveIg = useCallback(async (choice: IgChoice, token: string, expiresAt: string, label: string) => {
     const existing = (await accountApi.list()).find(
       (a) => a.platform === 'instagram' && a.instagram_business_account_id === choice.instagram_business_account_id,
@@ -92,14 +91,10 @@ export function AccountsPanel() {
     // Reconectar a conta "via Integrações" a transforma numa conta com token
     // próprio (com a permissão de métricas). Peças antigas sem conta seguem
     // publicando por Integrações, como antes.
-    const saved = existing
-      ? await accountApi.update(existing.id, { ...fields, metadata: { ...(existing.metadata ?? {}), source: 'own' } })
-      : await accountApi.create({ platform: 'instagram', label, ...fields });
-    toast.success(`Instagram conectado · ${fields.handle} — trazendo o histórico…`);
-    setIgChoices([]); setIgPending(null);
-    await load();
-    void runImport(saved);
-  }, [load, runImport]);
+    return existing
+      ? accountApi.update(existing.id, { ...fields, metadata: { ...(existing.metadata ?? {}), source: 'own' } })
+      : accountApi.create({ platform: 'instagram', label, ...fields });
+  }, []);
 
   // Retorno do OAuth (?code&state) iniciado por ESTE painel.
   useEffect(() => {
@@ -107,7 +102,7 @@ export function AccountsPanel() {
     const code = params.get('code'); const state = params.get('state');
     const saved = sessionStorage.getItem(IG_ACCOUNT_STATE_KEY);
     if (!code || !state || state !== saved) return;
-    const label = sessionStorage.getItem(IG_ACCOUNT_LABEL_KEY) || 'Instagram';
+    const typed = sessionStorage.getItem(IG_ACCOUNT_LABEL_KEY) || '';
     sessionStorage.removeItem(IG_ACCOUNT_STATE_KEY);
     sessionStorage.removeItem(IG_ACCOUNT_LABEL_KEY);
     (async () => {
@@ -116,12 +111,17 @@ export function AccountsPanel() {
         const res = await edge.connectInstagram({ code, redirect_uri: redirectUri });
         const found = res.accounts ?? [];
         if (found.length === 0) throw new Error('Nenhum perfil do Instagram Business vinculado a esse login.');
-        if (found.length === 1) await saveIg(found[0], res.access_token, res.expires_at, label);
-        else {
-          setIgChoices(found);
-          setIgPending({ access_token: res.access_token, expires_at: res.expires_at, label });
-          toast.success(`${found.length} perfis encontrados — escolha qual vira "${label}".`);
+        // TODAS as contas que esse login administra entram de uma vez (o mesmo
+        // token publica em qualquer uma). Nome: o digitado (se for só uma) ou o
+        // nome da Página no Facebook.
+        const saved = [];
+        for (const c of found) {
+          const label = (found.length === 1 && typed) || c.page_name || (c.username ? `@${c.username}` : 'Instagram');
+          saved.push(await saveIg(c, res.access_token, res.expires_at, label));
         }
+        toast.success(`${saved.length === 1 ? 'Conta conectada' : `${saved.length} contas conectadas`}: ${found.map((c) => `@${c.username || c.page_name}`).join(', ')} — trazendo o histórico…`);
+        await load();
+        for (const a of saved) await runImport(a);
       } catch (e) {
         toast.error(`Falha ao conectar: ${(e as Error).message.slice(0, 200)}`);
       } finally {
@@ -133,7 +133,6 @@ export function AccountsPanel() {
   }, []);
 
   function startIgOAuth() {
-    if (!igLabel.trim()) { toast.error('Dê um nome pra conta (ex.: Bee Consulting).'); return; }
     const state = Math.random().toString(36).slice(2);
     sessionStorage.setItem(IG_ACCOUNT_STATE_KEY, state);
     sessionStorage.setItem(IG_ACCOUNT_LABEL_KEY, igLabel.trim());
@@ -281,20 +280,6 @@ export function AccountsPanel() {
           </div>
         )}
 
-        {igChoices.length > 1 && igPending && (
-          <div className="space-y-2 rounded-md border border-accent/40 bg-accent/5 p-3">
-            <p className="text-sm font-medium">Qual perfil vira "{igPending.label}"?</p>
-            <div className="flex flex-wrap gap-2">
-              {igChoices.map((c) => (
-                <Button key={c.instagram_business_account_id} size="sm" variant="outline"
-                  onClick={() => saveIg(c, igPending.access_token, igPending.expires_at, igPending.label)}>
-                  @{c.username || c.page_name}
-                </Button>
-              ))}
-            </div>
-          </div>
-        )}
-
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setLiOpen(true)} disabled={busy}>
             <Plus className="h-4 w-4" /> Adicionar conta do LinkedIn
@@ -347,12 +332,12 @@ export function AccountsPanel() {
           <DialogHeader>
             <DialogTitle>Conectar conta do Instagram</DialogTitle>
             <DialogDescription>
-              Você vai entrar com o Facebook que administra o perfil Business. Já pedimos acesso às métricas (Insights).
+              Entre com o Facebook que administra os perfis Business. Todas as contas do Instagram desse login são conectadas de uma vez, e o histórico de cada uma vem junto.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1">
-              <Label htmlFor="ig-label">Nome da conta</Label>
+              <Label htmlFor="ig-label">Nome da conta (opcional)</Label>
               <Input id="ig-label" value={igLabel} onChange={(e) => setIgLabel(e.target.value)} placeholder="Ex.: Bee Consulting" />
             </div>
             <div className="flex justify-end pt-2">

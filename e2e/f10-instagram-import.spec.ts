@@ -104,6 +104,36 @@ test.describe('F10 · importação do Instagram', () => {
     await expect(page).toHaveURL(/\/desempenho\/contas$/);
   });
 
+  test('login do Facebook com 2 contas: conecta e importa as duas de uma vez', async ({ page }) => {
+    const { id: userId } = e2eUser();
+    await mockEdge(page, 'instagram-connect', () => ({
+      success: true, access_token: 'tok-e2e', expires_at: '2026-12-01T00:00:00Z',
+      accounts: [
+        { instagram_business_account_id: 'ig-bee-e2e', username: 'marcospiccinibee', page_name: 'Marcos Bee' },
+        { instagram_business_account_id: 'ig-mm-e2e', username: 'marcosemarilia', page_name: 'Marcos e Marília' },
+      ],
+    }));
+    const imported: string[] = [];
+    await mockEdge(page, 'instagram-import', async (b) => {
+      imported.push(String(b.account_id));
+      await sql(`update social_accounts set metadata = metadata || '{"ig":{"imported_at":"2026-10-02T10:00:00Z","profile":{"followers_count":100,"media_count":5}}}'::jsonb where id='${b.account_id}'`);
+      return { success: true, username: null, processed: 5, inserted: 5, updated: 0, metrics: 5, insights: true, next: null, done: true, total: 5, errors: [] };
+    });
+    await page.goto('/configuracoes');
+    await page.evaluate(() => { sessionStorage.setItem('ig_account_oauth_state', 'st-e2e'); sessionStorage.setItem('ig_account_label', ''); });
+    await page.goto('/configuracoes?code=code-e2e&state=st-e2e');
+    await expect(page.getByText('2 contas conectadas: @marcospiccinibee, @marcosemarilia — trazendo o histórico…')).toBeVisible();
+    await expect(page.getByText('"Marcos e Marília": 5 posts lidos · 5 novos na base.')).toBeVisible({ timeout: 30_000 });
+    const rows = await sql<{ label: string; handle: string; status: string; tok: boolean }>(`select label, handle, status, instagram_access_token is not null tok from social_accounts where user_id='${userId}' order by label`);
+    expect(rows).toEqual([
+      { label: 'Marcos Bee', handle: '@marcospiccinibee', status: 'connected', tok: true },
+      { label: 'Marcos e Marília', handle: '@marcosemarilia', status: 'connected', tok: true },
+    ]);
+    expect(imported).toHaveLength(2);
+    await page.getByRole('tab', { name: 'Contas' }).click();
+    await expect(page.getByTestId('open-compare')).toBeVisible();
+  });
+
   test('comparativo: duas contas lado a lado, critérios, evolução e recomendação', async ({ page }) => {
     const bee = await seedAccount('Marcos Bee', 'marcospiccinibee', 2000, '2026-01-01');
     const mm = await seedAccount('Marcos e Marília', 'marcosemarilia', 800, '2026-02-01');
