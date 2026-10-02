@@ -72,7 +72,8 @@ export function SettingsPage() {
     if (!FB_APP_ID) { toast.error('Configure VITE_FACEBOOK_APP_ID no ambiente do app antes de conectar.'); return; }
     const state = Math.random().toString(36).slice(2);
     sessionStorage.setItem('ig_oauth_state', state);
-    const scope = 'instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement,business_management';
+    // instagram_manage_insights: alcance, salvos e compartilhamentos por post (Desempenho).
+    const scope = 'instagram_basic,instagram_content_publish,instagram_manage_insights,pages_show_list,pages_read_engagement,business_management';
     window.location.href =
       `https://www.facebook.com/v21.0/dialog/oauth?client_id=${FB_APP_ID}` +
       `&redirect_uri=${encodeURIComponent(igRedirectUri)}&state=${state}&response_type=code&scope=${encodeURIComponent(scope)}`;
