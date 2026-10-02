@@ -451,6 +451,11 @@ export const edge = {
   }> {
     return postEdge('instagram-import', input);
   },
+  async metaAdsSync(input: { force_structure?: boolean } = {}): Promise<{
+    success: boolean; status: string; done: boolean; queue_left: number; chunks: number; rows: number; summary?: Record<string, unknown>; error?: string;
+  }> {
+    return postEdge('meta-ads-sync', input);
+  },
   async metricsIngest(): Promise<{ success: boolean; results: Array<{ posts: number; saved: number; insights: boolean; errors: string[] }> }> {
     return postEdge('metrics-ingest', {});
   },

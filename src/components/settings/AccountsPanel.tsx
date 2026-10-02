@@ -14,12 +14,14 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { accountApi } from '@/lib/campaignApi';
 import { edge } from '@/lib/edge';
 import { importInstagramHistory, type ImportProgress } from '@/lib/instagramImport';
+import { getMetaConnection, saveMetaConnection, syncMetaAds, type MetaConnectionStatus } from '@/lib/metaAds';
 import { useAuthStore } from '@/store/authStore';
 import type { SocialAccount } from '@/types';
 
 // Insights entra no escopo pra coletar alcance/salvamentos (D3). Contas já
 // conectadas antes disso seguem publicando; só as métricas ficam limitadas.
-const IG_SCOPE = 'instagram_basic,instagram_content_publish,instagram_manage_insights,pages_show_list,pages_read_engagement,business_management';
+// ads_read: tráfego pago (BMs, contas de anúncio, campanhas e desempenho) — guardado pra uso futuro.
+const IG_SCOPE = 'instagram_basic,instagram_content_publish,instagram_manage_insights,pages_show_list,pages_read_engagement,business_management,ads_read';
 const FB_APP_ID = (import.meta.env.VITE_FACEBOOK_APP_ID as string | undefined) || '2082883022288225';
 export const IG_ACCOUNT_STATE_KEY = 'ig_account_oauth_state';
 const IG_ACCOUNT_LABEL_KEY = 'ig_account_label';
@@ -33,6 +35,9 @@ export function AccountsPanel() {
   const [busy, setBusy] = useState(false);
   // Importação do histórico do Instagram em andamento (por conta).
   const [importing, setImporting] = useState<Record<string, ImportProgress>>({});
+  // Tráfego pago (Meta Ads): só o status (os dados ficam no banco pra uso futuro).
+  const [meta, setMeta] = useState<MetaConnectionStatus | null>(null);
+  const [metaSync, setMetaSync] = useState<{ queue_left: number } | null>(null);
 
   // LinkedIn (token colado + URN)
   const [liOpen, setLiOpen] = useState(false);
@@ -56,6 +61,20 @@ export function AccountsPanel() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+  const loadMeta = useCallback(async () => { setMeta(await getMetaConnection().catch(() => null)); }, []);
+  useEffect(() => { void loadMeta(); }, [loadMeta]);
+
+  const runMetaSync = useCallback(async () => {
+    setMetaSync({ queue_left: 0 });
+    try {
+      const r = await syncMetaAds((p) => setMetaSync({ queue_left: p.queue_left }));
+      if (r?.status === 'no_ads_permission') toast.info('Tráfego pago: as BMs vieram, mas os anúncios precisam da permissão ads_read no app da Meta (depois reconecte).', { duration: 12000 });
+      else if (r?.error) toast.error(`Tráfego pago: ${r.error.slice(0, 160)}`);
+      else if (r && !r.done) toast.info('Tráfego pago: o histórico continua sendo trazido em segundo plano.');
+    } catch (e) {
+      toast.error(`Tráfego pago: ${(e as Error).message.slice(0, 160)}`);
+    } finally { setMetaSync(null); await loadMeta(); }
+  }, [loadMeta]);
 
   // Traz TODO o histórico da conta pra base (peças + métricas + retrato da conta).
   const runImport = useCallback(async (a: Pick<SocialAccount, 'id' | 'label'>) => {
@@ -122,7 +141,11 @@ export function AccountsPanel() {
         toast.success(`${saved.length === 1 ? 'Conta conectada' : `${saved.length} contas conectadas`}: ${found.map((c) => `@${c.username || c.page_name}`).join(', ')} — trazendo o histórico…`);
         if (found.length === 1) toast.info('Só 1 conta do Instagram foi liberada nesse login. Para trazer outra, conecte de novo e, no Facebook, em "Editar acesso", marque também a outra conta e a Página dela.', { duration: 12000 });
         await load();
+        // Mesmo login = mesmo token: guarda a conexão do tráfego pago (BMs, anúncios).
+        await saveMetaConnection(res.access_token, res.expires_at, IG_SCOPE.split(',')).catch((e) => console.error('[meta-ads]', e));
+        await loadMeta();
         for (const a of saved) await runImport(a);
+        await runMetaSync();
       } catch (e) {
         toast.error(`Falha ao conectar: ${(e as Error).message.slice(0, 200)}`);
       } finally {
@@ -284,6 +307,8 @@ export function AccountsPanel() {
           </div>
         )}
 
+        {(meta || metaSync) && <MetaAdsLine meta={meta} syncing={metaSync} onSync={() => void runMetaSync()} />}
+
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setLiOpen(true)} disabled={busy}>
             <Plus className="h-4 w-4" /> Adicionar conta do LinkedIn
@@ -373,5 +398,33 @@ function ImportLine({ a, progress }: { a: SocialAccount; progress?: ImportProgre
       {ig.profile?.media_count ?? '—'} posts · histórico de {new Date(ig.imported_at).toLocaleDateString('pt-BR')}
       {ig.insights_ok === false && <span className="text-amber-600"> · sem alcance (reconecte e aceite Insights)</span>}
     </p>
+  );
+}
+
+// Tráfego pago (Meta Ads): uma linha de status — os dados ficam guardados pra uso futuro.
+function MetaAdsLine({ meta, syncing, onSync }: { meta: MetaConnectionStatus | null; syncing: { queue_left: number } | null; onSync: () => void }) {
+  const s = meta?.sync_state?.summary ?? {};
+  const pending = (meta?.sync_state?.queue ?? []).length;
+  const spend = Object.entries(s.spend ?? {}).map(([cur, v]) => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: cur || 'BRL' })).join(' + ');
+  const fmt = (d?: string | null) => (d ? new Date(`${d}T12:00:00`).toLocaleDateString('pt-BR') : '');
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3 text-sm" data-testid="meta-ads-line">
+      <div className="min-w-0">
+        <p className="font-medium">Tráfego pago (Meta Ads)</p>
+        <p className="text-xs text-muted-foreground" data-testid="meta-ads-summary">
+          {s.businesses ?? 0} BMs · {s.ad_accounts ?? 0} contas de anúncio · {s.campaigns ?? 0} campanhas · {s.ads ?? 0} anúncios
+          {s.date_min && s.date_max ? ` · dados de ${fmt(s.date_min)} a ${fmt(s.date_max)}` : ''}{spend ? ` · investido: ${spend}` : ''}
+        </p>
+        {syncing ? <p className="text-xs text-accent">Sincronizando…{syncing.queue_left ? ` ${syncing.queue_left} meses de histórico na fila` : ''}</p>
+          : meta?.status === 'no_ads_permission' ? <p className="text-xs text-amber-600">Anúncios sem permissão: cadastre ads_read no app da Meta e reconecte.</p>
+          : meta?.status === 'expired' ? <p className="text-xs text-amber-600">Conexão do Facebook expirou: reconecte.</p>
+          : meta?.sync_state?.last_error ? <p className="text-xs text-amber-600">{meta.sync_state.last_error}</p>
+          : pending ? <p className="text-xs text-muted-foreground">Histórico em andamento ({pending} meses na fila) — continua sozinho a cada 30 min.</p>
+          : meta?.last_synced_at ? <p className="text-xs text-muted-foreground">Atualizado em {new Date(meta.last_synced_at).toLocaleString('pt-BR')}.</p> : null}
+      </div>
+      <Button size="sm" variant="outline" disabled={!!syncing} onClick={onSync} data-testid="meta-ads-sync">
+        {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Sincronizar agora
+      </Button>
+    </div>
   );
 }

@@ -83,7 +83,27 @@ Deno.serve(async (req: Request) => {
         console.error('[instagram-refresh] conta falhou', a.id, (e as Error).message);
       }
     }
-    return jsonResponse({ success: true, refreshed, total: rows.length + accs.length, results });
+    // Conexão do tráfego pago (Meta Ads): mesmo tipo de token longo.
+    const mcRes = await fetch(`${SUPABASE_URL}/rest/v1/meta_connections?select=id,user_id,access_token,token_expires_at` +
+      `&or=(token_expires_at.is.null,token_expires_at.lte.${cutoff})`, { headers: svcHeaders() });
+    const mcs: Array<{ id: string; user_id: string; access_token: string }> = mcRes.ok ? await mcRes.json() : [];
+    for (const m of mcs) {
+      try {
+        const ex = await fetch(`${GRAPH}/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${m.access_token}`);
+        const data = await ex.json();
+        if (!ex.ok || !data.access_token) throw new Error(data.error?.message ?? `HTTP ${ex.status}`);
+        const expiresAt = new Date(Date.now() + Number(data.expires_in ?? 60 * 24 * 3600) * 1000).toISOString();
+        await fetch(`${SUPABASE_URL}/rest/v1/meta_connections?id=eq.${m.id}`, {
+          method: 'PATCH', headers: { ...svcHeaders(), Prefer: 'return=minimal' },
+          body: JSON.stringify({ access_token: data.access_token, token_expires_at: expiresAt }),
+        });
+        refreshed++;
+        results.push({ user_id: m.user_id, ok: true });
+      } catch (e) {
+        results.push({ user_id: m.user_id, ok: false, error: `meta ads: ${(e as Error).message.slice(0, 200)}` });
+      }
+    }
+    return jsonResponse({ success: true, refreshed, total: rows.length + accs.length + mcs.length, results });
   } catch (e) {
     console.error('[instagram-refresh outer]', e);
     return jsonResponse({ success: false, error: String(e) }, 500);

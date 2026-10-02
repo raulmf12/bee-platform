@@ -119,6 +119,23 @@ test.describe('F10 · importação do Instagram', () => {
       await sql(`update social_accounts set metadata = metadata || '{"ig":{"imported_at":"2026-10-02T10:00:00Z","profile":{"followers_count":100,"media_count":5}}}'::jsonb where id='${b.account_id}'`);
       return { success: true, username: null, processed: 5, inserted: 5, updated: 0, metrics: 5, insights: true, next: null, done: true, total: 5, errors: [] };
     });
+    const syncCalls: Array<Record<string, unknown>> = [];
+    await mockEdge(page, 'meta-ads-sync', (b) => {
+      syncCalls.push(b);
+      return { success: true, status: 'connected', done: true, queue_left: 0, chunks: 3, rows: 42,
+        summary: { businesses: 2, ad_accounts: 3, campaigns: 7, adsets: 9, ads: 15, insight_rows: 42, date_min: '2024-01-05', date_max: '2026-10-01', spend: { BRL: 1234.5 } } };
+    });
+    // O botão manda pro Facebook pedindo também ads_read e reabrindo a escolha de contas.
+    let fbUrl = '';
+    await page.route('https://www.facebook.com/**', (route) => { fbUrl = route.request().url(); return route.fulfill({ status: 200, body: 'ok' }); });
+    await page.goto('/configuracoes');
+    await page.getByRole('tab', { name: 'Contas' }).click();
+    await page.getByRole('button', { name: /Conectar conta do Instagram/ }).click();
+    await page.getByRole('button', { name: /Continuar com o Facebook/ }).click();
+    await expect.poll(() => fbUrl).toContain('dialog/oauth');
+    const scope = new URL(fbUrl).searchParams.get('scope')!;
+    expect(scope.split(',')).toEqual(expect.arrayContaining(['instagram_manage_insights', 'business_management', 'ads_read']));
+    expect(new URL(fbUrl).searchParams.get('auth_type')).toBe('rerequest');
     await page.goto('/configuracoes');
     await page.evaluate(() => { sessionStorage.setItem('ig_account_oauth_state', 'st-e2e'); sessionStorage.setItem('ig_account_label', ''); });
     await page.goto('/configuracoes?code=code-e2e&state=st-e2e');
@@ -130,6 +147,12 @@ test.describe('F10 · importação do Instagram', () => {
       { label: 'Marcos e Marília', handle: '@marcosemarilia', status: 'connected', tok: true },
     ]);
     expect(imported).toHaveLength(2);
+    // Tráfego pago: conexão guardada (mesmo token do login) + sincronização disparada.
+    const [mc] = await sql<{ status: string; tok: boolean; scopes: string[] }>(`select status, access_token = 'tok-e2e' tok, scopes from meta_connections where user_id='${userId}'`);
+    expect(mc).toMatchObject({ status: 'connected', tok: true });
+    expect(mc.scopes).toContain('ads_read');
+    await expect.poll(() => syncCalls.length).toBeGreaterThan(0);
+    expect(syncCalls[0]).toEqual({ force_structure: true });
     await page.getByRole('tab', { name: 'Contas' }).click();
     await expect(page.getByTestId('open-compare')).toBeVisible();
   });
@@ -151,5 +174,18 @@ test.describe('F10 · importação do Instagram', () => {
     await expect(page.getByTestId('monthly-chart')).toBeVisible();
     await expect(page.getByTestId('top-post')).toHaveCount(6);
     if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/f10-compare.png`, fullPage: true });
+  });
+
+  test('tráfego pago: linha de status em Contas (sem o token no navegador)', async ({ page }) => {
+    const { id: userId } = e2eUser();
+    await sql(`insert into meta_connections (user_id, access_token, status, last_synced_at, sync_state) values ('${userId}', 'tok-secreto-e2e', 'no_ads_permission', now(),
+      '{"summary":{"businesses":2,"ad_accounts":0,"campaigns":0,"ads":0},"last_error":"Sem permissão de anúncios (ads_read)."}'::jsonb)`);
+    const bodies: string[] = [];
+    page.on('response', async (r) => { if (r.url().includes('/rest/v1/meta_connections')) bodies.push(await r.text()); });
+    await page.goto('/configuracoes?tab=contas');
+    await page.getByRole('tab', { name: 'Contas' }).click();
+    await expect(page.getByTestId('meta-ads-summary')).toContainText('2 BMs · 0 contas de anúncio');
+    await expect(page.getByTestId('meta-ads-line')).toContainText('cadastre ads_read no app da Meta');
+    expect(bodies.join('')).not.toContain('tok-secreto-e2e');
   });
 });
