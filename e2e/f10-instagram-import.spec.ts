@@ -140,11 +140,11 @@ test.describe('F10 · importação do Instagram', () => {
     await page.evaluate(() => { sessionStorage.setItem('ig_account_oauth_state', 'st-e2e'); sessionStorage.setItem('ig_account_label', ''); });
     await page.goto('/configuracoes?code=code-e2e&state=st-e2e');
     await expect(page.getByText('2 contas conectadas: @marcospiccinibee, @marcosemarilia — trazendo o histórico…')).toBeVisible();
-    await expect(page.getByText('"Marcos e Marília": 5 posts lidos · 5 novos na base.')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('"@marcosemarilia": 5 posts lidos · 5 novos na base.')).toBeVisible({ timeout: 30_000 });
     const rows = await sql<{ label: string; handle: string; status: string; tok: boolean }>(`select label, handle, status, instagram_access_token is not null tok from social_accounts where user_id='${userId}' order by label`);
     expect(rows).toEqual([
-      { label: 'Marcos Bee', handle: '@marcospiccinibee', status: 'connected', tok: true },
-      { label: 'Marcos e Marília', handle: '@marcosemarilia', status: 'connected', tok: true },
+      { label: '@marcosemarilia', handle: '@marcosemarilia', status: 'connected', tok: true },
+      { label: '@marcospiccinibee', handle: '@marcospiccinibee', status: 'connected', tok: true },
     ]);
     expect(imported).toHaveLength(2);
     // Tráfego pago: conexão guardada (mesmo token do login) + sincronização disparada.

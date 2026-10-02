@@ -116,7 +116,8 @@ export async function importAccount(userId: string, accountId: string, opts: { c
   if (!opts.cursor) {
     const snap = await snapshot(creds.token, creds.igId);
     meta.ig = snap;
-    if (snap.profile?.username && !account.handle) account.handle = `@${snap.profile.username}`;
+    // Nome da conta = username atual do Instagram (acompanha se for trocado lá).
+    if (snap.profile?.username) { account.handle = `@${snap.profile.username}`; account.label = `@${snap.profile.username}`; }
   }
   out.username = meta.ig?.profile?.username ?? account.handle?.replace(/^@/, '') ?? null;
   out.total = meta.ig?.profile?.media_count ?? null;
@@ -194,7 +195,7 @@ export async function importAccount(userId: string, accountId: string, opts: { c
   if (!opts.cursor || out.done) {
     meta.ig = { ...(meta.ig ?? {}), ...(out.done ? { imported_at: new Date().toISOString() } : {}), insights_ok: out.insights };
     await rest(`/social_accounts?id=eq.${accountId}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' },
-      body: JSON.stringify({ metadata: meta, ...(account.handle ? { handle: account.handle } : {}) }) });
+      body: JSON.stringify({ metadata: meta, ...(account.handle ? { handle: account.handle, label: account.label } : {}) }) });
   }
   return out;
 }

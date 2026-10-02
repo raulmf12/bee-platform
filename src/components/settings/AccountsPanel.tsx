@@ -131,11 +131,10 @@ export function AccountsPanel() {
         const found = res.accounts ?? [];
         if (found.length === 0) throw new Error('Nenhum perfil do Instagram Business vinculado a esse login.');
         // TODAS as contas que esse login administra entram de uma vez (o mesmo
-        // token publica em qualquer uma). Nome: o digitado (se for só uma) ou o
-        // nome da Página no Facebook.
+        // token publica em qualquer uma). Nome = @username do Instagram.
         const saved = [];
         for (const c of found) {
-          const label = (found.length === 1 && typed) || c.page_name || (c.username ? `@${c.username}` : 'Instagram');
+          const label = c.username ? `@${c.username}` : (typed || c.page_name || 'Instagram');
           saved.push(await saveIg(c, res.access_token, res.expires_at, label));
         }
         toast.success(`${saved.length === 1 ? 'Conta conectada' : `${saved.length} contas conectadas`}: ${found.map((c) => `@${c.username || c.page_name}`).join(', ')} — trazendo o histórico…`);
