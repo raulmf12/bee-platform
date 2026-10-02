@@ -445,6 +445,12 @@ export const edge = {
 
   // --- Produção (F4): desenvolver/validar conteúdo-mãe ---
   // --- Desempenho (F8) ---
+  async instagramImport(input: { account_id: string; cursor?: string | null; mode?: 'full' | 'recent' }): Promise<{
+    success: boolean; username: string | null; processed: number; inserted: number; updated: number; metrics: number;
+    insights: boolean; next: string | null; done: boolean; total: number | null; errors: string[];
+  }> {
+    return postEdge('instagram-import', input);
+  },
   async metricsIngest(): Promise<{ success: boolean; results: Array<{ posts: number; saved: number; insights: boolean; errors: string[] }> }> {
     return postEdge('metrics-ingest', {});
   },

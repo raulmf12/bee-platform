@@ -11,6 +11,7 @@
 import { corsHeaders, errorResponse, isServiceCall, jsonResponse, preflight, userIdFromAuth } from '../_shared/security.ts';
 import { fetchRest, svcHeaders } from '../_shared/gemini.ts';
 import { igMediaId, igMetricRow, type IgFields, type IgInsight } from '../_shared/metrics.ts';
+import { importAccount } from '../_shared/instagram-import.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -86,10 +87,21 @@ Deno.serve(async (req: Request) => {
       // Cron: todo usuário com peça publicada no Instagram nos últimos 60 dias.
       const since = new Date(Date.now() - 60 * 86_400_000).toISOString();
       const rows = await fetchRest<Array<{ user_id: string }>>(`/user_posts?platform=eq.instagram&status=eq.published&published_at=gte.${since}&select=user_id&limit=1000`);
-      users = [...new Set(rows.map((r) => r.user_id))];
+      const accs = await fetchRest<Array<{ user_id: string }>>(`/social_accounts?platform=eq.instagram&status=eq.connected&select=user_id&limit=1000`);
+      users = [...new Set([...rows, ...accs].map((r) => r.user_id))];
     }
     const results = [];
-    for (const u of users) results.push(await ingestUser(u));
+    for (const u of users) {
+      // Antes: traz posts novos feitos direto no Instagram (últimas 25 mídias de
+      // cada conta conectada) e renova o retrato das contas.
+      const accounts = await fetchRest<Array<{ id: string }>>(`/social_accounts?user_id=eq.${u}&platform=eq.instagram&status=eq.connected&select=id`);
+      const synced = [];
+      for (const a of accounts) {
+        try { const r = await importAccount(u, a.id, { mode: 'recent' }); synced.push({ account_id: a.id, inserted: r.inserted, insights: r.insights, errors: r.errors.length }); }
+        catch (e) { synced.push({ account_id: a.id, error: (e as Error).message.slice(0, 160) }); }
+      }
+      results.push({ ...(await ingestUser(u)), synced });
+    }
     return jsonResponse({ success: true, users: results.length, results });
   } catch (e) {
     console.error('[metrics-ingest]', e);

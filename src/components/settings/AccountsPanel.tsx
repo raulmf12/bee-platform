@@ -3,7 +3,8 @@
 // Marcos, LinkedIn · Marcos, Instagram · Bee Consulting.
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Instagram, Linkedin, Loader2, Plus, Star, Trash2, Download, CheckCircle2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Instagram, Linkedin, Loader2, Plus, Star, Trash2, Download, CheckCircle2, RefreshCw, Scale } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,6 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { accountApi } from '@/lib/campaignApi';
 import { edge } from '@/lib/edge';
+import { importInstagramHistory, type ImportProgress } from '@/lib/instagramImport';
 import { useAuthStore } from '@/store/authStore';
 import type { SocialAccount } from '@/types';
 
@@ -29,6 +31,8 @@ export function AccountsPanel() {
   const [accounts, setAccounts] = useState<SocialAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  // Importação do histórico do Instagram em andamento (por conta).
+  const [importing, setImporting] = useState<Record<string, ImportProgress>>({});
 
   // LinkedIn (token colado + URN)
   const [liOpen, setLiOpen] = useState(false);
@@ -55,6 +59,22 @@ export function AccountsPanel() {
 
   useEffect(() => { void load(); }, [load]);
 
+  // Traz TODO o histórico da conta pra base (peças + métricas + retrato da conta).
+  const runImport = useCallback(async (a: Pick<SocialAccount, 'id' | 'label'>) => {
+    setImporting((m) => ({ ...m, [a.id]: { processed: 0, total: null, inserted: 0, updated: 0, insights: true, errors: [], done: false } }));
+    try {
+      const r = await importInstagramHistory(a.id, (p) => setImporting((m) => ({ ...m, [a.id]: p })));
+      toast.success(`"${a.label}": ${r.processed} posts lidos · ${r.inserted} novos na base${r.updated ? ` · ${r.updated} já existentes atualizados` : ''}.`);
+      if (!r.insights) toast.info(`"${a.label}" veio sem alcance/salvos: reconecte a conta e aceite a permissão de métricas (Insights).`);
+      if (r.errors.length) toast.warning(`${r.errors.length} post(s) não importaram — tente "Atualizar histórico" de novo.`);
+    } catch (e) {
+      toast.error(`Falha ao importar "${a.label}": ${(e as Error).message.slice(0, 200)}`);
+    } finally {
+      setImporting((m) => { const n = { ...m }; delete n[a.id]; return n; });
+      await load();
+    }
+  }, [load]);
+
   const redirectUri = typeof window !== 'undefined' ? `${window.location.origin}/configuracoes` : '';
 
   const saveIg = useCallback(async (choice: IgChoice, token: string, expiresAt: string, label: string) => {
@@ -69,12 +89,17 @@ export function AccountsPanel() {
       scopes: IG_SCOPE.split(','),
       status: 'connected' as const,
     };
-    if (existing) await accountApi.update(existing.id, fields);
-    else await accountApi.create({ platform: 'instagram', label, ...fields });
-    toast.success(`Instagram conectado · ${fields.handle}`);
+    // Reconectar a conta "via Integrações" a transforma numa conta com token
+    // próprio (com a permissão de métricas). Peças antigas sem conta seguem
+    // publicando por Integrações, como antes.
+    const saved = existing
+      ? await accountApi.update(existing.id, { ...fields, metadata: { ...(existing.metadata ?? {}), source: 'own' } })
+      : await accountApi.create({ platform: 'instagram', label, ...fields });
+    toast.success(`Instagram conectado · ${fields.handle} — trazendo o histórico…`);
     setIgChoices([]); setIgPending(null);
     await load();
-  }, [load]);
+    void runImport(saved);
+  }, [load, runImport]);
 
   // Retorno do OAuth (?code&state) iniciado por ESTE painel.
   useEffect(() => {
@@ -218,6 +243,7 @@ export function AccountsPanel() {
                     <p className="truncate text-sm font-medium">
                       {a.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} · {a.label}
                     </p>
+                    {a.platform === 'instagram' && <ImportLine a={a} progress={importing[a.id]} />}
                     <p className="truncate text-xs text-muted-foreground">
                       {a.metadata?.source === 'integrations' ? 'via Integrações' : (a.handle ?? (a.platform === 'linkedin' ? (a.linkedin_author_urn ?? 'sem URN') : (a.instagram_business_account_id ?? 'sem perfil')))}
                       {a.platform === 'instagram' && (a.metadata?.source === 'integrations' ? settings?.instagram_token_expires_at : a.instagram_token_expires_at)
@@ -233,6 +259,12 @@ export function AccountsPanel() {
                   {!a.is_default && (
                     <Button size="sm" variant="outline" onClick={() => makeDefault(a)}>Tornar padrão</Button>
                   )}
+                  {a.platform === 'instagram' && (
+                    <Button size="sm" variant="outline" disabled={!!importing[a.id]} onClick={() => void runImport(a)} data-testid="import-history">
+                      {importing[a.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                      {(a.metadata as { ig?: { imported_at?: string } })?.ig?.imported_at ? 'Atualizar histórico' : 'Importar histórico'}
+                    </Button>
+                  )}
                   <Button size="icon" variant="ghost" aria-label={`Remover ${a.label}`} onClick={() => remove(a)}>
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -240,6 +272,13 @@ export function AccountsPanel() {
               </li>
             ))}
           </ul>
+        )}
+
+        {accounts.filter((a) => a.platform === 'instagram').length >= 2 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-accent/40 bg-accent/5 p-3 text-sm">
+            <span>Você tem {accounts.filter((a) => a.platform === 'instagram').length} contas do Instagram. Compare o desempenho delas lado a lado.</span>
+            <Button asChild size="sm" variant="accent"><Link to="/desempenho/contas" data-testid="open-compare"><Scale className="h-3.5 w-3.5" /> Comparar contas</Link></Button>
+          </div>
         )}
 
         {igChoices.length > 1 && igPending && (
@@ -323,5 +362,27 @@ export function AccountsPanel() {
         </DialogContent>
       </Dialog>
     </Card>
+  );
+}
+
+// Situação da importação de uma conta do Instagram (progresso ou último retrato).
+function ImportLine({ a, progress }: { a: SocialAccount; progress?: ImportProgress }) {
+  const ig = (a.metadata as { ig?: { imported_at?: string; insights_ok?: boolean; profile?: { followers_count?: number; media_count?: number } } })?.ig;
+  if (progress) {
+    const pct = progress.total ? Math.min(100, Math.round((progress.processed / progress.total) * 100)) : null;
+    return (
+      <div className="mt-1 w-56 space-y-1" data-testid="import-progress">
+        <p className="text-xs text-accent">Importando histórico… {progress.processed}{progress.total ? ` de ${progress.total}` : ''} posts</p>
+        <div className="h-1 overflow-hidden rounded-full bg-secondary"><div className="h-full bg-accent transition-all" style={{ width: `${pct ?? 15}%` }} /></div>
+      </div>
+    );
+  }
+  if (!ig?.imported_at) return <p className="text-xs text-amber-600">Histórico ainda não importado.</p>;
+  return (
+    <p className="text-xs text-muted-foreground" data-testid="import-status">
+      {ig.profile?.followers_count != null ? `${ig.profile.followers_count.toLocaleString('pt-BR')} seguidores · ` : ''}
+      {ig.profile?.media_count ?? '—'} posts · histórico de {new Date(ig.imported_at).toLocaleDateString('pt-BR')}
+      {ig.insights_ok === false && <span className="text-amber-600"> · sem alcance (reconecte e aceite Insights)</span>}
+    </p>
   );
 }
