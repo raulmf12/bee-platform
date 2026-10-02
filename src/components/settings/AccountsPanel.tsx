@@ -120,6 +120,7 @@ export function AccountsPanel() {
           saved.push(await saveIg(c, res.access_token, res.expires_at, label));
         }
         toast.success(`${saved.length === 1 ? 'Conta conectada' : `${saved.length} contas conectadas`}: ${found.map((c) => `@${c.username || c.page_name}`).join(', ')} — trazendo o histórico…`);
+        if (found.length === 1) toast.info('Só 1 conta do Instagram foi liberada nesse login. Para trazer outra, conecte de novo e, no Facebook, em "Editar acesso", marque também a outra conta e a Página dela.', { duration: 12000 });
         await load();
         for (const a of saved) await runImport(a);
       } catch (e) {
@@ -138,7 +139,10 @@ export function AccountsPanel() {
     sessionStorage.setItem(IG_ACCOUNT_LABEL_KEY, igLabel.trim());
     window.location.href =
       `https://www.facebook.com/v21.0/dialog/oauth?client_id=${FB_APP_ID}` +
-      `&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&response_type=code&scope=${encodeURIComponent(IG_SCOPE)}`;
+      `&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&response_type=code&scope=${encodeURIComponent(IG_SCOPE)}` +
+      // O Facebook lembra quais contas foram liberadas e pula a tela; isto força
+      // a tela de novo, pra poder marcar outras contas do Instagram.
+      '&auth_type=rerequest';
   }
 
   async function testLinkedIn() {
