@@ -123,6 +123,17 @@ test.describe('F12 · motor fotográfico do Marcos', () => {
 
     await page.getByRole('button', { name: /Revisar produção/ }).click();
     await page.getByRole('button', { name: /Revisar propostas|Revisar peça|Revisar/ }).first().click();
+    // Outras opções de IMAGEM: mesmo design (M02-A) e mesma frase, foto nova pelo motor.
+    const gensBefore = calls.filter((c) => c.action === 'generate').length;
+    await page.getByTestId('vary-image').click();
+    await expect(page.getByTestId('proposal')).toHaveCount(3, { timeout: 60_000 });
+    await expect(page.getByTestId('proposal-tag').nth(1)).toHaveText('Nova imagem · mesmo design');
+    expect(calls.filter((c) => c.action === 'generate').length).toBe(gensBefore + 2);
+    const alts = await sql<{ variant: string; quote: string; gid: string }>(`select visual_decision->>'variant' variant, carousel_text->>'quote' quote, visual_decision->'asset'->>'photo_generation_id' gid from user_posts where cycle_id='${camp.cycleIds[0]}' and piece_role='unfold' and status<>'archived' order by alternative_rank`);
+    expect(alts.map((a) => a.variant)).toEqual(['M02-A', 'M02-A', 'M02-A']);
+    expect(new Set(alts.map((a) => a.quote)).size).toBe(1);
+    expect(new Set(alts.map((a) => a.gid)).size).toBe(3);                 // uma foto diferente por opção
+    await page.getByRole('button', { name: 'Escolher opção 1' }).click();
     const review = page.getByTestId('marcos-photo-review');
     await expect(review).toBeVisible();
     await expect(review.getByTestId('photo-candidate')).toBeVisible();

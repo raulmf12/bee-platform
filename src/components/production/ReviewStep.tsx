@@ -14,7 +14,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { contentApi, ideaApi, pieceApi } from '@/lib/campaignApi';
 import { formatRange } from '@/lib/campaign/dates';
 import {
-  AI_IMAGE_VARIANT, adjustPieceText, approvePiece, choosePiece, editPieceText, finishProduction, produceCycle, productionTodo, swapPieceImage,
+  AI_IMAGE_VARIANT, adjustPieceText, approvePiece, choosePiece, createAlternatives, editPieceText, finishProduction, imageKind, produceCycle, productionTodo, swapPieceImage,
 } from '@/lib/campaign/produce';
 import { loadHiveDesign } from '@/lib/hive/loadDesign';
 import { useAuthStore } from '@/store/authStore';
@@ -156,6 +156,28 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
     if (n) openUnit(n); else setView({ kind: 'gallery' });
   }
 
+  // Outras opções com a MESMA frase: só design, só imagem ou os dois (12B).
+  function varyBar(base: UserPost, unitPieces: UserPost[]) {
+    const v = (base.visual_decision as { variant?: string } | null)?.variant;
+    const noImage = imageKind(v) === 'none';
+    const run = (mode: 'design' | 'image' | 'both') => act(`vary-${mode}`, async () => {
+      const news = await createAlternatives(currentUser!.id, base, unitPieces, mode);
+      const groupId = news[0]?.alternative_group ?? base.alternative_group ?? base.id;
+      setPieces((ps) => [...ps.map((x) => (x.id === base.id ? { ...x, alternative_group: groupId, alternative_rank: x.alternative_rank ?? 0 } : x)), ...news]);
+      setView({ kind: 'choose', group: groupId });
+      toast.success(`${news.length} opç${news.length === 1 ? 'ão nova' : 'ões novas'} com a mesma frase.`);
+    });
+    const label = (mode: string, text: string) => (busy === `vary-${mode}` ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Gerando…</> : text);
+    return (
+      <div className="flex flex-wrap items-center gap-2" data-testid="vary-bar">
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Ver outras opções (mesma frase):</span>
+        <Button size="sm" variant="outline" disabled={!!busy} onClick={() => run('design')} data-testid="vary-design">{label('design', 'Outras opções de design')}</Button>
+        <Button size="sm" variant="outline" disabled={!!busy || noImage} title={noImage ? 'Este design não usa imagem' : undefined} onClick={() => run('image')} data-testid="vary-image">{label('image', 'Outras opções de imagem')}</Button>
+        <Button size="sm" variant="outline" disabled={!!busy} onClick={() => run('both')} data-testid="vary-both">{label('both', 'Variar os dois')}</Button>
+      </div>
+    );
+  }
+
   if (!contents || !checked) return <div className="flex h-40 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-accent" /></div>;
 
   // ---------------- TELA 12 — produção (em andamento ou resumo) ----------------
@@ -242,7 +264,9 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
     const desc = (p: UserPost) => {
       const vd = p.visual_decision as { variant?: string; explanation?: { variant_reason?: string } } | null;
       const seed = p.metadata?.hive_seed as { variant_reason?: string } | undefined;
-      return { variant: vd?.variant, name: vd?.variant ? `${vd.variant} · ${variantNames[vd.variant] ?? ''}` : '', why: seed?.variant_reason || vd?.explanation?.variant_reason || '' };
+      const alt = p.metadata?.alt_mode as string | undefined;
+      const altWhy = alt === 'design' ? 'Mesma frase, outro layout.' : alt === 'image' ? 'Mesma frase e mesmo design, imagem nova.' : alt === 'both' ? 'Mesma frase, design e imagem novos.' : '';
+      return { variant: vd?.variant, name: vd?.variant ? `${vd.variant} · ${variantNames[vd.variant] ?? ''}` : '', why: altWhy || seed?.variant_reason || vd?.explanation?.variant_reason || '' };
     };
     return (
       <div className="space-y-5" data-testid="choose-view">
@@ -253,13 +277,16 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
           <p className="text-sm text-muted-foreground">{u.main.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} · {accountLabel(u.main.account_id)} · Imagem</p>
         </div>
         <p className="text-sm font-semibold uppercase tracking-wider">Escolha a direção</p>
+        {varyBar(u.main, u.pieces)}
         <div className="grid gap-4 md:grid-cols-3">
           {u.pieces.map((p, i) => {
             const d = desc(p);
             const rec = p.is_recommended || (i === 0 && !u.pieces.some((x) => x.is_recommended));
             return (
               <div key={p.id} className={`flex flex-col gap-3 rounded-2xl border p-3 ${rec ? 'border-accent bg-accent/5 md:col-span-1' : 'bg-card'}`} data-testid="proposal">
-                <span className={`self-start rounded-full px-2 py-0.5 text-[11px] font-semibold ${rec ? 'bg-accent text-accent-foreground' : 'bg-secondary'}`}>{rec ? 'Recomendação da Hive' : `Alternativa ${String(i + 1).padStart(2, '0')}`}</span>
+                <span className={`self-start rounded-full px-2 py-0.5 text-[11px] font-semibold ${rec ? 'bg-accent text-accent-foreground' : 'bg-secondary'}`} data-testid="proposal-tag">
+                  {rec ? 'Recomendação da Hive' : ({ design: imageKind(d.variant) === 'none' ? 'Novo design' : 'Novo design · mesma imagem', image: 'Nova imagem · mesmo design', both: 'Design e imagem novos' } as Record<string, string>)[String(p.metadata?.alt_mode ?? '')] ?? `Alternativa ${String(i + 1).padStart(2, '0')}`}
+                </span>
                 <Preview piece={p} className="aspect-[4/5]" />
                 <div className="flex-1 space-y-1 text-sm">
                   <p className="font-semibold">Opção {String(i + 1).padStart(2, '0')}{d.name ? ` · ${d.name}` : ''}</p>
@@ -326,6 +353,7 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
           )}
         </div>
       </div>
+      {!isApproved && unit && varyBar(piece, unit.pieces)}
       {!isApproved && photoGenId && (
         <MarcosPhotoReview key={photoGenId} generationId={photoGenId} busy={!!busy} compact
           onApprove={() => act('approve', async () => { const a = await approvePiece(piece); replacePiece(a); setView({ kind: 'approved', pieceId: a.id }); })}
@@ -380,11 +408,7 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
                 })}>{busy === 'adjust' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Ajustar'}</Button>
               </div>
               <div className="flex flex-wrap gap-2">
-                {AI_IMAGE_VARIANT(variant) && (
-                  <Button size="sm" variant="outline" disabled={!!busy} onClick={() => act('swap', async () => replacePiece(await swapPieceImage(currentUser!.id, piece)))}>
-                    <RefreshCw className="h-3.5 w-3.5" /> Trocar só a imagem
-                  </Button>
-                )}
+
                 <Button size="sm" variant="ghost" asChild><Link to={`/posts/${piece.id}`} state={{ from: `/producao?campaign=${campaign.id}&cycle=${cycle.id}` }}><ExternalLink className="h-3.5 w-3.5" /> Abrir no editor completo</Link></Button>
               </div>
             </section>

@@ -91,7 +91,7 @@ export async function createUnfold(userId: string, cycle: CampaignCycle, t: Unfo
   const gen = await edge.generateContent({
     editorial_slug: content.editorial_slug ?? idea?.editorial_slug ?? 'provocacao-de-crenca',
     target_platform: channel.platform,
-    variations: channel.platform === 'instagram' ? 3 : 1,
+    variations: 1, // a frase é a mesma em todas as opções; outras opções variam design/imagem sob pedido
     ...(validation
       ? { reference_post_id: validation.id }
       : {
@@ -99,7 +99,8 @@ export async function createUnfold(userId: string, cycle: CampaignCycle, t: Unfo
         briefing: `CONTEÚDO JÁ VALIDADO pelo autor (adapte para ${channel.platform}, mesma linha de pensamento):\nFrase: ${content.body.frase ?? ''}\nTexto:\n${content.body.texto ?? ''}`,
       }),
   });
-  const alts = distinctAlternatives(gen.variations?.length ? gen.variations : [gen]);
+  // Uma peça recomendada por desdobramento; outras opções (design/imagem) só sob pedido, com a MESMA frase.
+  const alts = distinctAlternatives(gen.variations?.length ? gen.variations : [gen]).slice(0, 1);
   const generation = await aiApi.createGeneration({
     editorial_slug: content.editorial_slug ?? undefined, platform: channel.platform, target_avatar: 'ambos',
     briefing: `Desdobramento de: ${content.title}`, variations_count: alts.length,
@@ -215,7 +216,11 @@ export async function approvePiece(piece: UserPost): Promise<UserPost> {
     status: 'approved', image_status: 'approved', image_approved: true,
     metadata: { ...piece.metadata, review_stage: 'done', ...(AI_IMAGE_VARIANT(variant) ? { bg_approved: true } : {}) },
   });
-  const variation = await db.selectOne<AiVariation>('ai_variations', { post_id: `eq.${piece.id}` });
+  // Opção nova (outro design/imagem) tem a MESMA frase da peça de origem: o
+  // aprendizado mede a edição humana contra a variação pristina da origem.
+  const altOf = piece.metadata?.alt_of as string | undefined;
+  const variation = await db.selectOne<AiVariation>('ai_variations', { post_id: `eq.${piece.id}` })
+    ?? (altOf ? await db.selectOne<AiVariation>('ai_variations', { post_id: `eq.${altOf}` }) : null);
   if (variation && piece.piece_role === 'unfold') {
     void aiApi.recordReview({
       post_id: piece.id, variation, quote_final: (approved.carousel_text?.quote as string | undefined) ?? '', caption_final: approved.caption ?? '',
@@ -226,4 +231,65 @@ export async function approvePiece(piece: UserPost): Promise<UserPost> {
 
 export async function finishProduction(cycle: CampaignCycle): Promise<CampaignCycle> {
   return cycleApi.update(cycle.id, { status: 'ready' });
+}
+
+// ---------------- Outras opções (12B): design, imagem ou os dois — mesma frase ----------------
+export type VaryMode = 'design' | 'image' | 'both';
+const FAMILY_ORDER = ['M01-A', 'M01-B', 'M01-C', 'M01-D', 'M01-E', 'M02-A', 'M02-B', 'M02-C', 'M02-D'];
+// Que tipo de imagem cada design carrega: nenhuma, fundo (M01-D/E) ou foto do Marcos (M02).
+export function imageKind(variant?: string | null): 'none' | 'bg' | 'photo' {
+  if (!variant) return 'none';
+  if (variant.startsWith('M02-')) return 'photo';
+  if (variant === 'M01-D' || variant === 'M01-E') return 'bg';
+  return 'none';
+}
+
+// Designs candidatos para uma nova opção. design = mesmo tipo de imagem (a imagem
+// atual continua servindo); both = qualquer design ainda não oferecido.
+export function variantCandidates(base: string, used: string[], mode: VaryMode): string[] {
+  const pool = FAMILY_ORDER.filter((v) => v !== base && !used.includes(v));
+  if (mode === 'design') {
+    const kind = imageKind(base);
+    const sameFamily = base.startsWith('M03') || base.startsWith('M04') ? [] : pool.filter((v) => imageKind(v) === kind);
+    return sameFamily;
+  }
+  if (mode === 'both') {
+    const kind = imageKind(base);
+    return [...pool.filter((v) => imageKind(v) !== kind), ...pool.filter((v) => imageKind(v) === kind)];
+  }
+  return [];
+}
+
+// Cria `count` opções novas a partir da peça-base (mesma frase e legenda), no mesmo
+// grupo de alternativas, e produz os visuais. Devolve as peças novas.
+export async function createAlternatives(userId: string, base: UserPost, group: UserPost[], mode: VaryMode, count = 2): Promise<UserPost[]> {
+  const baseVariant = (base.visual_decision as { variant?: string } | null)?.variant ?? null;
+  if (!baseVariant) throw new Error('A peça ainda não tem design para variar.');
+  if (mode === 'image' && imageKind(baseVariant) === 'none') throw new Error('Este design não usa imagem — peça outras opções de design.');
+  const used = group.map((p) => (p.visual_decision as { variant?: string } | null)?.variant).filter(Boolean) as string[];
+  const variants = mode === 'image' ? Array.from({ length: count }, () => baseVariant) : variantCandidates(baseVariant, used, mode).slice(0, count);
+  if (!variants.length) throw new Error(mode === 'design' ? 'Não há outro design compatível com esta imagem.' : 'Todos os designs já foram oferecidos.');
+  const groupId = base.alternative_group ?? crypto.randomUUID();
+  if (!base.alternative_group) await updatePiece(base.id, { alternative_group: groupId, alternative_rank: 0 });
+  let rank = Math.max(0, ...group.map((p) => p.alternative_rank ?? 0));
+  const seedBase = seedFromDecision(base.visual_decision);
+  const created: UserPost[] = [];
+  for (const variant of variants) {
+    const meta = { ...(base.metadata ?? {}), alt_mode: mode, alt_of: base.id } as Record<string, unknown>;
+    delete meta.bg_approved;
+    const rows = await db.insert<UserPost>('user_posts', {
+      user_id: base.user_id, platform: base.platform, format: base.format, status: 'pending_approval',
+      title: base.title, caption: base.caption, carousel_text: base.carousel_text, virality_score: base.virality_score ?? null, virality_reason: base.virality_reason ?? null,
+      text_approved: base.text_approved ?? true, content_id: base.content_id ?? null, campaign_id: base.campaign_id ?? null, cycle_id: base.cycle_id ?? null,
+      account_id: base.account_id ?? null, piece_role: base.piece_role ?? null,
+      alternative_group: groupId, alternative_rank: ++rank, is_recommended: false, metadata: meta,
+    });
+    const piece = rows[0];
+    if (!piece) continue;
+    const seed: HiveSeed = { ...(seedBase as HiveSeed), variant, manifestation: variant.split('-')[0], human_presence_adds_meaning: variant.startsWith('M02-'),
+      variant_reason: mode === 'design' ? 'outra opção de design (mesma imagem)' : mode === 'image' ? 'outra opção de imagem (mesmo design)' : 'outra opção de design e imagem' };
+    // design: reaproveita a foto/fundo da base; image/both: imagem nova.
+    created.push(await renderPiece(userId, { ...piece, visual_decision: mode === 'design' ? (base.visual_decision ?? undefined) : undefined }, { seed, forceBg: mode !== 'design' }));
+  }
+  return created;
 }

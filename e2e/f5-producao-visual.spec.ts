@@ -29,26 +29,37 @@ test.describe('F5 · produção visual do ciclo', () => {
     await expect(page.getByTestId('production-summary')).toContainText('1já aprovadas');
     await expect(page.getByTestId('production-summary')).toContainText('2novas peças para revisar');
     expect(calls.gen).toHaveLength(2);
-    expect(calls.gen[0]).toMatchObject({ target_platform: 'instagram', variations: 3 });
+    expect(calls.gen[0]).toMatchObject({ target_platform: 'instagram', variations: 1 });
 
-    // banco: validação aprovada com M01-A; 2 grupos × 3 alternativas renderizadas
+    // banco: validação aprovada com M01-A; 1 peça recomendada por desdobramento
     const [v] = await sql<{ status: string; slide1: string; variant: string }>(`select status, rendered_slides->>'slide1' as slide1, visual_decision->>'variant' as variant from user_posts where id='${seeded[0].pieceId}'`);
     expect(v).toMatchObject({ status: 'approved', variant: 'M01-A' });
     expect(v.slide1).toContain('/storage/v1/object/public/');
     const unf = await sql<{ alternative_group: string; alternative_rank: number; is_recommended: boolean; slide1: string | null }>(
       `select alternative_group, alternative_rank, is_recommended, rendered_slides->>'slide1' as slide1 from user_posts where cycle_id='${cycleId}' and piece_role='unfold' order by alternative_group, alternative_rank`);
-    expect(unf).toHaveLength(6);
-    expect(new Set(unf.map((u) => u.alternative_group)).size).toBe(2);
+    expect(unf).toHaveLength(2);
     expect(unf.filter((u) => u.is_recommended)).toHaveLength(2);
     for (const u of unf) expect(u.slide1).toBeTruthy();
 
     await page.getByRole('button', { name: /Revisar produção/ }).click();
     await expect(page.getByTestId('gallery-counts')).toHaveText('3 peças · 1 aprovadas · 2 para revisar');
 
-    // 12B: escolher a alternativa 02 do primeiro desdobramento
+    // 12B: a recomendada abre direto; pedir OUTRAS OPÇÕES DE DESIGN (mesma frase) e escolher a 02
     await page.getByRole('button', { name: /Revisar propostas/ }).first().click();
-    await expect(page.getByTestId('proposal')).toHaveCount(3);
+    await expect(page.getByTestId('edit-view')).toBeVisible();
+    await expect(page.getByTestId('vary-image')).toBeDisabled();          // M01-A não usa imagem
+    const quoteBefore = await page.getByTestId('piece-quote').textContent();
+    await page.getByTestId('vary-design').click();
+    await expect(page.getByTestId('proposal')).toHaveCount(3, { timeout: 60_000 });
     await expect(page.getByTestId('proposal').first()).toContainText('Recomendação da Hive');
+    await expect(page.getByTestId('proposal-tag').nth(1)).toHaveText('Novo design');
+    await expect(page.getByTestId('proposal').nth(1)).toContainText('Mesma frase, outro layout.');
+    const opts = await sql<{ quote: string; variant: string }>(`select carousel_text->>'quote' quote, visual_decision->>'variant' variant from user_posts where cycle_id='${cycleId}' and piece_role='unfold' and alternative_group = (select alternative_group from user_posts where cycle_id='${cycleId}' and piece_role='unfold' and alternative_rank = 2 limit 1) order by alternative_rank`);
+    expect(opts).toHaveLength(3);
+    expect(new Set(opts.map((o) => o.quote)).size).toBe(1);               // a mesma frase em todas
+    expect(opts[0].quote).toBe(quoteBefore);
+    expect(new Set(opts.map((o) => o.variant)).size).toBe(3);             // designs diferentes
+    if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/vary-choose.png` });
     await page.getByRole('button', { name: 'Escolher opção 2' }).click();
     await expect(page.getByTestId('edit-view')).toBeVisible();
     const archived = await sql(`select 1 from user_posts where cycle_id='${cycleId}' and piece_role='unfold' and status='archived'`);
@@ -76,7 +87,6 @@ test.describe('F5 · produção visual do ciclo', () => {
     await page.getByRole('button', { name: 'Aprovar peça' }).click();
     await expect(page.getByTestId('cycle-progress')).toHaveText('2 de 3 peças aprovadas');
     await page.getByRole('button', { name: /Próxima peça para revisar/ }).click();
-    await page.getByRole('button', { name: 'Escolher opção 1' }).click();
     await page.getByRole('button', { name: 'Aprovar peça' }).click();
     await expect(page.getByTestId('cycle-progress')).toHaveText('3 de 3 peças aprovadas');
     await page.getByRole('button', { name: 'Ver produção do ciclo' }).click();
@@ -117,7 +127,7 @@ test.describe('F5 · produção visual do ciclo', () => {
     await expect(page.getByTestId('production-summary')).toBeVisible({ timeout: 60_000 });
     expect(calls.gen).toHaveLength(2);
     const unf = await sql(`select 1 from user_posts where cycle_id='${cycleId}' and piece_role='unfold'`);
-    expect(unf).toHaveLength(6);
+    expect(unf).toHaveLength(2);
   });
 
   test('@live produção visual real (validação M01-A + alternativas do Instagram)', async ({ page }) => {
