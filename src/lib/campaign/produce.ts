@@ -92,6 +92,7 @@ export async function createUnfold(userId: string, cycle: CampaignCycle, t: Unfo
     editorial_slug: content.editorial_slug ?? idea?.editorial_slug ?? 'provocacao-de-crenca',
     target_platform: channel.platform,
     variations: 1, // a frase é a mesma em todas as opções; outras opções variam design/imagem sob pedido
+    acj_content_id: content.id, // o desdobramento preserva o movimento do conteúdo-mãe (herança ACJ)
     ...(validation
       ? { reference_post_id: validation.id }
       : {

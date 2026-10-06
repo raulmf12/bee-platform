@@ -4,9 +4,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { FUNCTION_LABELS, STRATEGIC_FUNCTIONS, type BeeEditorial, type IdeaChannel, type SocialAccount, type StrategicFunction } from '@/types';
+import { ACJ_META } from '@/lib/acj/library';
+import { ACJ_IDS, FUNCTION_LABELS, STRATEGIC_FUNCTIONS, type AcjId, type BeeEditorial, type IdeaChannel, type SocialAccount, type StrategicFunction } from '@/types';
 
-export interface IdeaDraft { title: string; summary: string; strategic_function: StrategicFunction; editorial_slug: string; channels: IdeaChannel[] }
+export interface IdeaDraft { title: string; summary: string; strategic_function: StrategicFunction; editorial_slug: string; channels: IdeaChannel[]; acj_primary?: AcjId | null; acj_secondary?: AcjId | null }
 
 // Edição inline de uma ideia (ou criação de uma nova, origin 'user').
 export function IdeaEditor({ initial, editorials, accounts, onSave, onCancel, saveLabel = 'Salvar ideia', busy }: {
@@ -42,6 +43,26 @@ export function IdeaEditor({ initial, editorials, accounts, onSave, onCancel, sa
           <select id="idea-ed" value={d.editorial_slug} onChange={(e) => setD({ ...d, editorial_slug: e.target.value })}
             className="w-full rounded-md border border-input bg-background p-2 text-sm">
             {editorials.map((e) => <option key={e.slug} value={e.slug}>{e.name}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1">
+          <Label htmlFor="idea-acj">Movimento relacional (ACJ primária)</Label>
+          <select id="idea-acj" value={d.acj_primary ?? ''} onChange={(e) => {
+            const v = (e.target.value || null) as AcjId | null;
+            setD({ ...d, acj_primary: v, acj_secondary: d.acj_secondary === v ? null : d.acj_secondary });
+          }} className="w-full rounded-md border border-input bg-background p-2 text-sm">
+            <option value="">— Sem ACJ (a Hive atribui ao desenvolver)</option>
+            {ACJ_IDS.map((id) => <option key={id} value={id}>{id} {ACJ_META[id].name} — {ACJ_META[id].short}</option>)}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="idea-acj2">ACJ secundária (opcional)</Label>
+          <select id="idea-acj2" value={d.acj_secondary ?? ''} disabled={!d.acj_primary} onChange={(e) => setD({ ...d, acj_secondary: (e.target.value || null) as AcjId | null })}
+            className="w-full rounded-md border border-input bg-background p-2 text-sm disabled:opacity-50">
+            <option value="">— Nenhuma</option>
+            {ACJ_IDS.filter((id) => id !== d.acj_primary).map((id) => <option key={id} value={id}>{id} {ACJ_META[id].name}</option>)}
           </select>
         </div>
       </div>

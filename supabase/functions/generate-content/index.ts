@@ -27,6 +27,7 @@ import {
   checkRateLimit,
 } from '../_shared/security.ts';
 import { embedText } from '../_shared/embed.ts';
+import { contractPromptBlock, type AcjContract } from '../_shared/acj.ts';
 
 // Cadeia: Flash primeiro (sem thinking tokens que cortam saida), Pro como fallback.
 // Mesmo padrao da generate-caption-from-video — comprovadamente mais estavel pra JSON.
@@ -52,6 +53,10 @@ interface GenerateInput {
   // tarefa principal (o arsenal não é sorteado, como no reaproveitar). Opcional:
   // sem ele o comportamento é o de sempre.
   mother_idea?: { title: string; direction?: string; strategic_function?: string };
+  // ACJ: contrato relacional do conteúdo-mãe. acj_context = bloco pronto (content-develop,
+  // antes de o contrato existir); acj_content_id = busca o contrato vigente (desdobramentos).
+  acj_context?: string;
+  acj_content_id?: string;
   target_platform?: 'linkedin' | 'instagram';
   // Rotação forçada de template (Instagram): template-alvo deste post, definido
   // pelo cliente pra garantir variedade. Quando setado, é OBRIGATÓRIO.
@@ -1221,7 +1226,16 @@ Deno.serve(async (req: Request) => {
     const templates = await loadTemplateCatalog(userId, input.target_platform);
 
     const sys = buildSystemPrompt(ctx, ragContext, input, referencePost, pastArsenalPosts, templates);
-    const usr = buildUserPrompt(input, ctx.arsenalItem);
+    let usr = buildUserPrompt(input, ctx.arsenalItem);
+    // ACJ: o movimento relacional orienta a escrita (e a forma, como mais um sinal).
+    let acjBlock = input.acj_context?.trim() ?? '';
+    if (!acjBlock && input.acj_content_id) {
+      const [ct] = await fetchRest<AcjContract[]>(`/acj_content_contracts?content_id=eq.${input.acj_content_id}&user_id=eq.${userId}&status=neq.superseded&select=*&order=version.desc&limit=1`).catch(() => []);
+      if (ct) acjBlock = contractPromptBlock(ct);
+    }
+    if (acjBlock) {
+      usr = `${usr}\n\n${acjBlock}${templates ? '\nPara a FORMA (template): a ACJ é só mais uma dimensão de leitura — não existe template fixo para uma ACJ.' : ''}`;
+    }
 
     const wanted = variationCount(input);
     const { text, usage, model_used } = await callGemini(apiKey, sys, usr, outputBudget(wanted));

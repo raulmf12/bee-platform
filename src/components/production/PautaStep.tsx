@@ -1,14 +1,17 @@
 // Etapa 4 — TELA 09: Pauta recomendada para este ciclo.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { ArrowRight, Loader2, Pencil, Plus, RefreshCw, Repeat2, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { IdeaEditor, type IdeaDraft } from './IdeaEditor';
+import { AcjChip } from '@/components/acj/AcjChip';
+import { acjCycleApi } from '@/lib/acj/api';
+import { ACJ_META, acjColor } from '@/lib/acj/library';
 import { approvePauta, generatePauta, swapIdea } from '@/lib/campaign/pauta';
 import { ideaApi } from '@/lib/campaignApi';
 import {
-  FUNCTION_COLORS, FUNCTION_SHORT, STRATEGIC_FUNCTIONS,
-  type BeeEditorial, type Campaign, type CampaignCycle, type Idea, type SocialAccount,
+  ACJ_IDS, FUNCTION_COLORS, FUNCTION_SHORT, STRATEGIC_FUNCTIONS,
+  type AcjCyclePlan, type BeeEditorial, type Campaign, type CampaignCycle, type Idea, type SocialAccount,
 } from '@/types';
 
 const platformsLabel = (idea: Idea) => {
@@ -22,6 +25,8 @@ export function PautaStep({ campaign, cycle, ideas, editorials, accounts, onChan
 }) {
   const [editing, setEditing] = useState<string | 'new' | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [acjPlan, setAcjPlan] = useState<AcjCyclePlan | null>(null);
+  useEffect(() => { acjCycleApi.current(cycle.id).then(setAcjPlan).catch(() => setAcjPlan(null)); }, [cycle.id]);
   const live = ideas.filter((i) => i.status !== 'discarded');
   const approved = cycle.status !== 'pauta_ready' && cycle.status !== 'planned';
   const pieces = live.reduce((a, i) => a + i.channels.length, 0);
@@ -101,7 +106,7 @@ export function PautaStep({ campaign, cycle, ideas, editorials, accounts, onChan
           <li key={idea.id} data-testid="idea-card">
             {editing === idea.id ? (
               <IdeaEditor editorials={editorials} accounts={campaignAccounts}
-                initial={{ title: idea.title, summary: idea.summary ?? '', strategic_function: idea.strategic_function ?? 'presenca', editorial_slug: idea.editorial_slug ?? editorials[0]?.slug ?? '', channels: idea.channels }}
+                initial={{ title: idea.title, summary: idea.summary ?? '', strategic_function: idea.strategic_function ?? 'presenca', editorial_slug: idea.editorial_slug ?? editorials[0]?.slug ?? '', channels: idea.channels, acj_primary: idea.acj_primary ?? null, acj_secondary: idea.acj_secondary ?? null }}
                 onSave={(d) => save(idea, d)} onCancel={() => setEditing(null)} />
             ) : (
               <div className="rounded-2xl border bg-card p-4">
@@ -114,6 +119,11 @@ export function PautaStep({ campaign, cycle, ideas, editorials, accounts, onChan
                   <span className="text-muted-foreground" data-testid="idea-pieces">{idea.channels.length} peça{idea.channels.length > 1 ? 's' : ''} sugerida{idea.channels.length > 1 ? 's' : ''}</span>
                   {idea.origin === 'user' && <span className="rounded bg-secondary px-1.5 py-0.5">Sua ideia</span>}
                 </p>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs" data-testid="idea-acj">
+                  <AcjChip id={idea.acj_primary} />
+                  {idea.acj_secondary && <AcjChip id={idea.acj_secondary} secondary size="xs" />}
+                  {idea.acj_role && <span className="text-muted-foreground">Papel na jornada: {idea.acj_role}</span>}
+                </div>
                 {!approved && (
                   <div className="mt-3 flex flex-wrap gap-1">
                     <Button size="sm" variant="ghost" onClick={() => swap(idea)} disabled={!!busy} aria-label={`Trocar ideia ${idx + 1}`}>
@@ -131,7 +141,7 @@ export function PautaStep({ campaign, cycle, ideas, editorials, accounts, onChan
 
       {!approved && (editing === 'new' ? (
         <IdeaEditor editorials={editorials} accounts={campaignAccounts} saveLabel="Adicionar à pauta"
-          initial={{ title: '', summary: '', strategic_function: 'presenca', editorial_slug: editorials[0]?.slug ?? '', channels: campaignAccounts.slice(0, 1).map((a) => ({ account_id: a.id, platform: a.platform })) }}
+          initial={{ title: '', summary: '', strategic_function: 'presenca', editorial_slug: editorials[0]?.slug ?? '', channels: campaignAccounts.slice(0, 1).map((a) => ({ account_id: a.id, platform: a.platform })), acj_primary: ACJ_IDS.find((id) => (acjPlan?.counts?.[id] ?? 0) > live.filter((i) => i.acj_primary === id).length) ?? null }}
           onSave={(d) => save(null, d)} onCancel={() => setEditing(null)} />
       ) : (
         <div className="flex flex-wrap gap-2">
@@ -141,6 +151,19 @@ export function PautaStep({ campaign, cycle, ideas, editorials, accounts, onChan
           </Button>
         </div>
       ))}
+
+      <section className="rounded-2xl border bg-card p-4" data-testid="pauta-acj">
+        <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Como esta pauta conduz a jornada (ACJ)</h3>
+        <ul className="space-y-1.5 text-sm">
+          {ACJ_IDS.map((id) => ({ id, n: live.filter((i) => i.acj_primary === id).length, planned: acjPlan?.counts?.[id] })).filter((x) => x.n > 0 || (x.planned ?? 0) > 0).map(({ id, n, planned }) => (
+            <li key={id} className="flex justify-between"><span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: acjColor(id) }} />{id} {ACJ_META[id].name} <span className="text-xs text-muted-foreground">“{ACJ_META[id].short}”</span></span>
+              <span>{n} ideia{n === 1 ? '' : 's'}{planned !== undefined && planned !== n ? <span className="ml-1 text-xs text-muted-foreground">(plano: {planned})</span> : null}</span></li>
+          ))}
+          {live.some((i) => !i.acj_primary) && (
+            <li className="text-xs text-amber-700 dark:text-amber-400" data-testid="pauta-acj-missing">{live.filter((i) => !i.acj_primary).length} ideia(s) sem ACJ — a Hive atribui ao desenvolver o conteúdo (fica registrado como atribuição tardia).</li>
+          )}
+        </ul>
+      </section>
 
       <section className="rounded-2xl border bg-card p-4" data-testid="pauta-strategy">
         <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Como esta pauta cumpre sua estratégia</h3>

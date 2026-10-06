@@ -13,6 +13,8 @@ import { WizardShell, ChoiceCard } from '@/components/campaign/WizardShell';
 import { HiveNote } from '@/components/campaign/HiveNote';
 import { MixBars } from '@/components/campaign/MixBars';
 import { StrategyMatrix } from '@/components/campaign/StrategyMatrix';
+import { AcjPlanCard } from '@/components/acj/AcjPlanCard';
+import { acjPlanApi } from '@/lib/acj/api';
 import { edge } from '@/lib/edge';
 import { accountApi, campaignApi } from '@/lib/campaignApi';
 import { productApi } from '@/lib/api';
@@ -20,7 +22,7 @@ import { useAuthStore } from '@/store/authStore';
 import { normalizeMix, phasesToMatrix } from '@/lib/campaign/strategy';
 import { activateCampaign, defaultCadence, defaultCampaignName, type DraftStrategy } from '@/lib/campaign/activate';
 import { buildCycleRanges, formatDay, mondayOf } from '@/lib/campaign/dates';
-import type { BeeProduct, Campaign, CampaignCycle, CampaignMoment, CampaignType, SocialAccount, StrategicFunction } from '@/types';
+import type { AcjPlanDraft, BeeProduct, Campaign, CampaignCycle, CampaignMoment, CampaignType, SocialAccount, StrategicFunction } from '@/types';
 
 type Step = 'tipo' | 'momento' | 'estrategia' | 'duracao' | 'definida' | 'ativa';
 const STEPS: Step[] = ['tipo', 'momento', 'estrategia', 'duracao', 'definida', 'ativa'];
@@ -52,6 +54,10 @@ export function NewCampaign() {
   const [name, setName] = useState('');
   const [showMatrix, setShowMatrix] = useState(false);
   const [result, setResult] = useState<{ campaign: Campaign; cycles: CampaignCycle[] } | null>(null);
+  // Plano ACJ: preparado em segundo plano na estratégia definida; aprovação é um clique SEPARADO.
+  const [acjPlan, setAcjPlan] = useState<AcjPlanDraft | null>(null);
+  const [acjState, setAcjState] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [acjApproved, setAcjApproved] = useState(false);
 
   useEffect(() => {
     accountApi.list().then((a) => setAccounts(a.filter((x) => x.status === 'connected'))).catch(() => setAccounts([]));
@@ -128,6 +134,22 @@ export function NewCampaign() {
     setWeeks(w);
     if (!name) setName(defaultCampaignName(type, currentUser?.name, product?.name));
     setStep('definida');
+    void prepareAcj(w);
+  }
+
+  async function prepareAcj(w: number) {
+    if (!strategy) return;
+    setAcjState('loading'); setAcjApproved(false);
+    try {
+      const r = await edge.acjCampaignPlan({
+        adoption: 'native',
+        draft: { name: name || undefined, type, intent: intent.trim() || undefined, moment: moment ? { label: moment.label, summary: moment.summary } : null,
+          strategy: { mix: normalizeMix(strategy.mix), rationale: strategy.rationale, phases: strategy.phases }, weeks: w, product_id: productId || null },
+      });
+      setAcjPlan(r.plan); setAcjState('idle');
+    } catch {
+      setAcjState('error');
+    }
   }
 
   async function activate() {
@@ -139,6 +161,10 @@ export function NewCampaign() {
         type, name: name || defaultCampaignName(type, currentUser?.name, product?.name), intent, moment, strategy, weeks,
         productId: productId || null, accounts, cadence: defaultCadence(accounts, settings?.distribution_prefs), existingCount,
       });
+      if (acjPlan) {
+        // Sem travar a ativação: se falhar, o plano pode ser gerado no detalhe da campanha.
+        await acjPlanApi.create(r.campaign.id, acjPlan, { approve: acjApproved }).catch((e) => toast.error(`Plano ACJ não foi salvo: ${(e as Error).message.slice(0, 120)}`));
+      }
       setResult(r);
       setStep('ativa');
     } catch (e) {
@@ -333,6 +359,24 @@ export function NewCampaign() {
             )}
           </div>
         </div>
+        <section className="space-y-3 rounded-2xl border bg-card p-5" data-testid="wizard-acj">
+          <div>
+            <p className="font-display text-base font-semibold">Esta campanha também possui uma arquitetura relacional</p>
+            <p className="text-xs text-muted-foreground">A estratégia diz o que a campanha precisa produzir; a ACJ diz que movimentos a jornada precisa. A Hive recalibra conforme aprende.</p>
+          </div>
+          {acjState === 'loading' && <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> A Hive está desenhando a jornada relacional…</p>}
+          {acjState === 'error' && (
+            <p className="text-sm text-amber-600">Não consegui preparar o plano ACJ agora. <button type="button" className="underline" onClick={() => prepareAcj(weeks)}>Tentar de novo</button> — ou gere depois no detalhe da campanha.</p>
+          )}
+          {acjPlan && acjState !== 'loading' && (
+            <AcjPlanCard plan={acjPlan} status={acjApproved ? 'approved' : 'recommended'}
+              actions={(
+                <Button variant={acjApproved ? 'outline' : 'accent'} size="sm" onClick={() => setAcjApproved((v) => !v)} data-testid="wizard-acj-approve">
+                  {acjApproved ? <><Check className="h-4 w-4" /> Plano ACJ aprovado — desfazer</> : 'Aprovar plano ACJ'}
+                </Button>
+              )} />
+          )}
+        </section>
         {showMatrix && (
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">A Hive distribuirá os movimentos estratégicos ao longo do período:</p>

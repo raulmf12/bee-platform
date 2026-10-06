@@ -13,6 +13,7 @@ import {
 } from '../_shared/security.ts';
 import { callGeminiJson, fetchRest } from '../_shared/gemini.ts';
 import { retrieveContext } from '../_shared/bee-context.ts';
+import { acjCatalog, acjDef, normAcj, type AcjId } from '../_shared/acj.ts';
 
 type Fn = 'presenca' | 'posicionamento' | 'autoridade' | 'relacionamento' | 'produtos';
 const FNS: Fn[] = ['presenca', 'posicionamento', 'autoridade', 'relacionamento', 'produtos'];
@@ -35,10 +36,28 @@ interface Plan {
   channels: Array<{ account_id: string; platform: 'linkedin' | 'instagram'; label: string; contents: number }>;
   totals: { contents: number; pieces: number };
 }
-interface RawIdea { title?: string; summary?: string; strategic_function?: string; editorial_slug?: string; platforms?: string[]; rationale?: string }
+interface RawIdea { title?: string; summary?: string; strategic_function?: string; editorial_slug?: string; platforms?: string[]; rationale?: string; acj_primary?: string; acj_secondary?: string | null; acj_role?: string; acj_rationale?: string }
 export interface OutIdea {
   title: string; summary: string; strategic_function: Fn; editorial_slug: string;
   channels: Array<{ account_id: string; platform: 'linkedin' | 'instagram' }>; suggested_pieces: number; rationale: string;
+  acj_primary: AcjId | null; acj_secondary: AcjId | null; acj_role: string; acj_rationale: string;
+}
+
+// ACJ primária: mesma lógica das funções — respeita a escolha da IA quando ela
+// cabe na composição do ciclo e reatribui o mínimo possível para bater a conta.
+function enforceAcj(ideas: RawIdea[], needs: Array<{ acj: AcjId; count: number }>): AcjId[] {
+  const remaining = new Map(needs.map((n) => [n.acj, n.count]));
+  const out: Array<AcjId | null> = ideas.map((i) => {
+    const a = normAcj(i.acj_primary);
+    if (a && (remaining.get(a) ?? 0) > 0) { remaining.set(a, remaining.get(a)! - 1); return a; }
+    return null;
+  });
+  return out.map((a) => {
+    if (a) return a;
+    const next = [...remaining.entries()].find(([, c]) => c > 0);
+    if (next) { remaining.set(next[0], next[1] - 1); return next[0]; }
+    return needs[0]?.acj ?? 'ACJ-01';
+  });
 }
 
 // Reatribui funções pra bater EXATAMENTE com as necessidades do plano, mexendo no
@@ -109,8 +128,11 @@ Deno.serve(async (req: Request) => {
     const [campaign] = await fetchRest<Array<{ name: string; type: string; intent: string | null; moment: { label?: string; summary?: string } | null; strategy: { mix?: Record<string, number> } | null; product_id: string | null; duration_weeks: number | null }>>(
       `/campaigns?id=eq.${cycle.campaign_id}&select=name,type,intent,moment,strategy,product_id,duration_weeks&limit=1`);
 
-    const cycleIdeas = await fetchRest<Array<{ id: string; title: string; strategic_function: Fn; channels: OutIdea['channels']; status: string }>>(
-      `/ideas?cycle_id=eq.${cycle.id}&status=neq.discarded&select=id,title,strategic_function,channels,status`);
+    const cycleIdeas = await fetchRest<Array<{ id: string; title: string; strategic_function: Fn; channels: OutIdea['channels']; status: string; acj_primary: string | null }>>(
+      `/ideas?cycle_id=eq.${cycle.id}&status=neq.discarded&select=id,title,strategic_function,channels,status,acj_primary`);
+    // Composição relacional do ciclo (ACJ). Escolhida ANTES das ideias: orienta a gênese.
+    const [acjPlan] = await fetchRest<Array<{ counts: Record<string, number>; rationale: string | null; gaps: string[]; saturation_flags: string[] }>>(
+      `/acj_cycle_plans?cycle_id=eq.${cycle.id}&status=eq.active&select=counts,rationale,gaps,saturation_flags&order=version.desc&limit=1`).catch(() => []);
     const swapTarget = mode === 'swap' ? cycleIdeas.find((i) => i.id === input.idea_id) : undefined;
     if (mode === 'swap' && !swapTarget) return errorResponse('Ideia a trocar não encontrada', 404);
 
@@ -137,6 +159,14 @@ Deno.serve(async (req: Request) => {
     if (mode === 'swap') needs = [{ function: swapTarget!.strategic_function ?? 'presenca', count: 1 }];
     else needs = plan.needs;
     const total = needs.reduce((a, n) => a + n.count, 0);
+    let acjNeeds: Array<{ acj: AcjId; count: number }> = [];
+    if (mode === 'swap') {
+      const a = normAcj(swapTarget!.acj_primary);
+      if (a) acjNeeds = [{ acj: a, count: 1 }];
+    } else if (acjPlan) {
+      acjNeeds = Object.entries(acjPlan.counts ?? {}).map(([k, v]) => ({ acj: normAcj(k)!, count: Number(v) || 0 })).filter((n) => n.acj && n.count > 0);
+      if (acjNeeds.reduce((a, n) => a + n.count, 0) !== total) acjNeeds = [];
+    }
 
     const themeQuery = [campaign?.intent, campaign?.moment?.label, ...needs.map((n) => FN_LABEL[n.function])].filter(Boolean).join(' · ');
     const rag = await retrieveContext(apiKey, themeQuery, campaign?.intent ?? undefined, userId).catch(() => '');
@@ -145,6 +175,7 @@ Deno.serve(async (req: Request) => {
       'Você é a Hive, a inteligência estratégica de conteúdo da Bee Consulting. Monta a PAUTA de um ciclo semanal: ideias-mãe que valem a pena desenvolver — NÃO escreve posts ainda.',
       'Uma ideia-mãe define TERRITÓRIO e DIREÇÃO de pensamento. O título é uma pergunta ou frase provocativa na voz do autor (ex.: "Por que bons líderes repetem velhos padrões?", "E se aquilo que chamamos de resistência for apenas coerência?"). O resumo diz em 1–2 frases que linha de pensamento explorar.',
       'Cada ideia cumpre UMA função estratégica e usa UM editorial (o formato de pensamento) da lista. Ideias distintas entre si, sem repetir temas recentes, sem clichê de coach/marketing.',
+      'Cada ideia também tem UMA ACJ primária (Arquitetura de Conexão e Jornada): o MOVIMENTO RELACIONAL que ela deve produzir na pessoa. Decida o movimento PRIMEIRO e depois a ideia que o realiza naturalmente — a ACJ não é etiqueta posta depois. ACJ não é editoria nem função estratégica (Relacionamento ≠ Conexão; Autoridade ≠ Aprofundamento). Secundária só se acrescentar função distinta; nunca ACJ-00.',
       'Use os FATOS REAIS DO AUTOR quando ajudarem a dar concretude; nunca invente casos.',
       core[0] ? `PROPÓSITO DA MARCA: ${core[0].produto_real} — ${core[0].frase_organizadora}` : '',
       core[0]?.voz_como_escreve ? `COMO O AUTOR ESCREVE: ${core[0].voz_como_escreve}` : '',
@@ -163,6 +194,9 @@ Deno.serve(async (req: Request) => {
       'EDITORIAIS DISPONÍVEIS (use o slug):',
       ...editorials.map((e) => `- ${e.slug}: ${e.name}${e.objetivo ? ` — ${e.objetivo}` : e.description ? ` — ${e.description.slice(0, 120)}` : ''}`),
       '',
+      acjNeeds.length ? `\nMOVIMENTOS RELACIONAIS DO CICLO (ACJ primária), com esta distribuição:\n${acjNeeds.map((n) => `- ${n.count}× ${n.acj} ${acjDef(n.acj)?.name}: ${acjDef(n.acj)?.purpose}`).join('\n')}${acjPlan?.rationale ? `\nPor quê: ${acjPlan.rationale}` : ''}` : '',
+      `\nBIBLIOTECA ACJ:\n${acjCatalog()}`,
+      '',
       `CANAIS DO CICLO: ${plan.channels.map((c) => `${c.platform} · ${c.label} (${c.contents}/semana)`).join('; ')}. Em "platforms", diga onde a ideia tem mais potencial.`,
       arsenal.length ? `\nÂNGULOS DO ARSENAL (inspiração, não fonte de fatos):\n${arsenal.map((a) => `- ${a.title}${a.summary ? `: ${a.summary.slice(0, 110)}` : ''}`).join('\n')}` : '',
       backlog.length ? `\nIDEIAS DO BACKLOG DO AUTOR (pode aproveitar se couber):\n${backlog.map((b) => `- ${b.title}${b.summary ? `: ${b.summary}` : ''}`).join('\n')}` : '',
@@ -170,7 +204,7 @@ Deno.serve(async (req: Request) => {
       avoid.length ? `\nNÃO REPITA estes temas/títulos recentes:\n${avoid.map((t) => `- ${t.slice(0, 120)}`).join('\n')}` : '',
       '',
       'Devolva JSON puro:',
-      '{ "ideas": [ { "title": "...", "summary": "...", "strategic_function": "presenca|posicionamento|autoridade|relacionamento|produtos", "editorial_slug": "...", "platforms": ["linkedin","instagram"], "rationale": "<por que esta ideia agora, 1 frase>" } ] }',
+      '{ "ideas": [ { "title": "...", "summary": "...", "strategic_function": "presenca|posicionamento|autoridade|relacionamento|produtos", "editorial_slug": "...", "platforms": ["linkedin","instagram"], "rationale": "<por que esta ideia agora, 1 frase>", "acj_primary": "ACJ-0X", "acj_secondary": null, "acj_role": "<papel na jornada: ponto de entrada, ponte para…, sustentação…>", "acj_rationale": "<como a ideia realiza o movimento, 1 frase>" } ] }',
     ].filter((l) => l !== '').join('\n');
 
     const { data, model_used, usage } = await callGeminiJson<{ ideas?: RawIdea[] }>(apiKey, sys, usr, { temperature: 0.85, maxOutputTokens: 4000 });
@@ -180,12 +214,16 @@ Deno.serve(async (req: Request) => {
 
     const fns = mode === 'swap' ? raw.map(() => swapTarget!.strategic_function ?? 'presenca') : enforceFunctions(raw, needs);
     const channels = mode === 'swap' ? raw.map(() => swapTarget!.channels ?? []) : balanceChannels(raw, plan.channels);
+    const acjs = acjNeeds.length ? enforceAcj(raw, acjNeeds) : raw.map((r) => normAcj(r.acj_primary));
     const ideas: OutIdea[] = raw.map((r, i) => {
       const f = fns[i];
       const slug = edSlugs.has(r.editorial_slug ?? '') ? r.editorial_slug! : (edSlugs.has(FN_DEFAULT_EDITORIAL[f]) ? FN_DEFAULT_EDITORIAL[f] : editorials[0]?.slug ?? '');
       return {
         title: r.title!.trim(), summary: (r.summary ?? '').trim(), strategic_function: f, editorial_slug: slug,
         channels: channels[i], suggested_pieces: channels[i].length, rationale: (r.rationale ?? '').trim(),
+        acj_primary: acjs[i] ?? null,
+        acj_secondary: (() => { const sec = normAcj(r.acj_secondary); return sec && acjs[i] && sec !== acjs[i] ? sec : null; })(),
+        acj_role: (r.acj_role ?? '').trim(), acj_rationale: (r.acj_rationale ?? '').trim(),
       };
     });
 

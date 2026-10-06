@@ -75,3 +75,17 @@ export async function seedValidatedContents(
   }
   return out;
 }
+
+// Plano ACJ da campanha (4 fases do mock) — aprovado por padrão.
+export async function seedAcjPlan(campaignId: string, opts: { status?: 'approved' | 'recommended'; adoption?: 'native' | 'late' } = {}): Promise<string> {
+  const { id: userId } = e2eUser();
+  const { acjPlanResponse } = await import('./mocks');
+  const p = acjPlanResponse({ adoption: opts.adoption }).plan;
+  const status = opts.status ?? 'approved';
+  const j = (v: unknown) => `'${JSON.stringify(v).replace(/'/g, "''")}'::jsonb`;
+  const [r] = await sql<{ id: string }>(`insert into acj_campaign_plans (user_id, campaign_id, version, status, adoption, audience_state, desired_state, journey_needs, target_mix, phases,
+      sequence_hypotheses, success_signals, recalibration_rules, exclusions, summary, confidence, human_decisions_required, source_acj_version ${status === 'approved' ? ', approved_by, approved_at' : ''})
+    values ('${userId}', '${campaignId}', 1, '${status}', '${opts.adoption ?? 'native'}', 'a', 'b', ${j(p.journey_needs)}, ${j(p.target_mix)}, ${j(p.phases)},
+      ${j(p.sequence_hypotheses)}, ${j(p.success_signals)}, ${j(p.recalibration_rules)}, ${j(p.exclusions)}, ${j(p.summary)}, 'medium', ${j(p.human_decisions_required)}, 'v' ${status === 'approved' ? `, '${userId}', now()` : ''}) returning id`);
+  return r.id;
+}

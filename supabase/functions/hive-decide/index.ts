@@ -31,6 +31,7 @@ import {
   internalUserId,
   checkRateLimit,
 } from '../_shared/security.ts';
+import { acjVisualContext, loadPostAcj } from '../_shared/acj.ts';
 
 const MODEL_CHAIN = [
   Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.5-flash',
@@ -332,6 +333,7 @@ Deno.serve(async (req: Request) => {
       poles?: { a?: string; b?: string } | null;
       human_presence_adds_meaning?: boolean;
       image_scene_hint?: string;
+      acj_note?: unknown;
       mode_reason?: string; asset_reason?: string;
     };
     let parsed: ParsedDecision;
@@ -391,8 +393,11 @@ Deno.serve(async (req: Request) => {
         return m ? `- ${m.id} (${m.nome} · ${m.operacao}) | usar: ${JSON.stringify(m.quando_usar)} | NAO: ${JSON.stringify(m.quando_nao)}` : `- ${id}`;
       });
 
+      // ACJ do post (snapshot herdado do conteúdo-mãe): compatibilidade, nunca equivalência.
+      const acjCtx = acjVisualContext(await loadPostAcj(input.post_id, userId));
       const usr = [
         `TEXTO APROVADO (nao altere):\n"""${text}"""`,
+        ...(acjCtx ? ['', acjCtx, 'Se houver ACJ, inclua "acj_note": como a forma escolhida ajuda a manifestar o movimento e qual o risco de simulá-lo (1 frase cada).'] : []),
         `plataforma: ${input.platform ?? 'instagram'}`,
         `Fotos REAIS do Marcos disponiveis na biblioteca: ${realMarcosCount}. (Se 0, as variacoes que exigem Marcos reconhecivel — M02-A/M02-B — NAO devem vencer.)`,
         '',
@@ -526,6 +531,7 @@ Deno.serve(async (req: Request) => {
         variant_reason: variantScores[winner].reason,
         highlight_reason: highlight?.reason ?? null,
         asset_reason: String(parsed.asset_reason ?? ''),
+        ...(parsed.acj_note ? { acj_note: typeof parsed.acj_note === 'string' ? parsed.acj_note : JSON.stringify(parsed.acj_note) } : {}),
         image_source: chosenAsset ? `foto real (${chosenAsset.origin})` : imageGeneration ? 'gerada (sem foto real adequada)' : 'grafico/textura',
       },
       text_check: { chars: text.length, limit: charsLimit, needs_editorial_review: needsReview },

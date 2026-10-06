@@ -2,6 +2,7 @@
 // Usa fetch direto pra evitar pendurar como o supabase.functions.invoke faz.
 
 import { SUPABASE_KEY, SUPABASE_URL, supabase } from './supabase';
+import type { AcjContractFields, AcjId, AcjPlanDraft, AcjSignalReading, AcjValidation } from '@/types';
 
 async function authHeader(): Promise<HeadersInit> {
   const { data } = await supabase.auth.getSession();
@@ -26,6 +27,8 @@ export interface GenerateContentInput {
   force_variant?: string;
   // Campanhas: desenvolver uma ideia-mãe aprovada (a ideia é a tarefa; sem arsenal).
   mother_idea?: { title: string; direction?: string; strategic_function?: string };
+  // ACJ: o generate-content busca o contrato vigente do conteúdo-mãe e escreve a serviço do movimento.
+  acj_content_id?: string;
   // Quantas variacoes gerar numa unica chamada (1..5).
   // As 5 saem no MESMO pedido de proposito: o prompt (persona + arsenal +
   // exemplos + Camada 0 da Alma) e enorme e a saida e curta, entao 5 variacoes
@@ -438,9 +441,29 @@ export const edge = {
       strategic_function: 'presenca' | 'posicionamento' | 'autoridade' | 'relacionamento' | 'produtos';
       editorial_slug: string; channels: Array<{ account_id: string; platform: 'linkedin' | 'instagram' }>;
       suggested_pieces: number; rationale: string;
+      acj_primary?: AcjId | null; acj_secondary?: AcjId | null; acj_role?: string; acj_rationale?: string;
     }>;
   }> {
     return postEdge('cycle-pauta', input);
+  },
+
+  // ACJ-00 (docs/acj): plano da campanha, atribuição, portão do movimento e leitura de sinais.
+  async acjCampaignPlan(input: {
+    campaign_id?: string; adoption?: 'native' | 'late'; instruction?: string; current?: { target_mix?: Record<string, number> };
+    draft?: { name?: string; type: string; intent?: string; moment?: { label: string; summary: string } | null; strategy: { mix: Record<string, number>; rationale?: string; phases?: unknown }; weeks: number; product_id?: string | null };
+  }): Promise<{ success: boolean; plan: AcjPlanDraft }> {
+    return postEdge('acj-orchestrator', { action: 'campaign_plan', ...input });
+  },
+  async acjAssign(input: { title: string; summary?: string; strategic_function?: string; editorial_slug?: string; cycle_id?: string }): Promise<{
+    success: boolean; assignment: { acj_primary: AcjId; acj_secondary: AcjId | null; acj_role: string; acj_rationale: string; acj_confidence: string; human_decision_required: boolean };
+  }> {
+    return postEdge('acj-orchestrator', { action: 'assign', ...input });
+  },
+  async acjValidate(input: { contract: Partial<AcjContractFields>; body: { frase?: string; texto?: string } }): Promise<{ success: boolean; validation: AcjValidation }> {
+    return postEdge('acj-orchestrator', { action: 'validate', ...input });
+  },
+  async acjReadSignals(input: { post_id: string }): Promise<{ success: boolean; reading: Omit<AcjSignalReading, 'id' | 'user_id' | 'created_at'> }> {
+    return postEdge('acj-orchestrator', { action: 'read_signals', ...input });
   },
 
   // --- Produção (F4): desenvolver/validar conteúdo-mãe ---
@@ -464,12 +487,14 @@ export const edge = {
   },
 
   async contentDevelop(input: {
-    idea_id: string; mode?: 'develop' | 'adjust' | 'new_version';
+    idea_id: string; content_id?: string; mode?: 'develop' | 'adjust' | 'new_version';
     current?: { frase?: string; texto?: string }; instruction?: string;
   }): Promise<{
     success: boolean; frase: string; texto: string;
     considered: { base: string; coerencia: string; formato: string };
     meta: { headline_type: string | null; analogy: string | null; virality_score: number | null; virality_reason: string | null; qa_score: number | null };
+    // Contrato ACJ (novo ou reaproveitado) + portão "o movimento aconteceu?" — o cliente persiste.
+    acj?: { contract: AcjContractFields & { id?: string }; reused: boolean; campaign_plan_id: string | null; cycle_plan_id: string | null; validation?: AcjValidation | null; error?: string } | null;
   }> {
     return postEdge('content-develop', input);
   },

@@ -22,6 +22,7 @@ import { TemplateEditor } from '@/pages/templates/TemplateEditor';
 import { Genesis } from '@/pages/genesis/Genesis';
 import { Directives } from '@/pages/directives/Directives';
 import { Aprendizado } from '@/pages/aprendizado/Aprendizado';
+import { RegistroVivo } from '@/pages/aprendizado/RegistroVivo';
 import { Coach } from '@/pages/coach/Coach';
 import { Feedback } from '@/pages/feedback/Feedback';
 import { Personas } from '@/pages/personas/Personas';
@@ -112,6 +113,7 @@ export default function App() {
           <Route path="alma" element={<Navigate to="/genesis" replace />} />
           <Route path="templates" element={<Templates />} />
           <Route path="aprendizado" element={<Aprendizado />} />
+          <Route path="jornada" element={<RegistroVivo />} />
           <Route path="coach" element={<Coach />} />
           <Route path="feedback" element={<Feedback />} />
           <Route path="personas" element={<Personas />} />

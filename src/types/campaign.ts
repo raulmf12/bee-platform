@@ -155,6 +155,12 @@ export interface Idea {
   status: IdeaStatus;
   position: number;
   rationale?: string | null;
+  // ACJ: movimento relacional escolhido ANTES da ideia (pauta) — primária + secundária opcional.
+  acj_primary?: import('./acj').AcjId | null;
+  acj_secondary?: import('./acj').AcjId | null;
+  acj_role?: string | null;
+  acj_rationale?: string | null;
+  acj_confidence?: string | null;
   created_at: string;
   updated_at: string;
 }

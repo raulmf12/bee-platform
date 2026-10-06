@@ -11,6 +11,8 @@
 // Regras da distribuição automática saem de user_settings.distribution_prefs.
 
 import { useEffect, useMemo, useState } from 'react';
+import { acjCycleApi } from '@/lib/acj/api';
+import { acjCirculationAlerts } from '@/lib/acj/circulation';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   addDays, eachDayOfInterval, endOfMonth, endOfWeek, format, isSameDay, isSameMonth,
@@ -112,6 +114,8 @@ export function Agenda() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [cycles, setCycles] = useState<CampaignCycle[]>([]);
   const [metrics, setMetrics] = useState<PostMetrics[]>([]);
+  const [acjCyclePlans, setAcjCyclePlans] = useState<Array<{ cycle_id: string; counts: Record<string, number> }>>([]);
+  useEffect(() => { acjCycleApi.listActive().then(setAcjCyclePlans).catch(() => setAcjCyclePlans([])); }, []);
   const setLens = (id: string | null) => {
     const n = new URLSearchParams(searchParams);
     if (id) n.set('campaign', id); else n.delete('campaign');
@@ -154,6 +158,10 @@ export function Agenda() {
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedId]);
 
+  const acjAlerts = useMemo(
+    () => acjCirculationAlerts(posts.filter((p) => !lens || p.campaign_id === lens), { cycles, cyclePlans: acjCyclePlans }),
+    [posts, cycles, acjCyclePlans, lens],
+  );
   const campaignById = useMemo(() => new Map(campaigns.map((c) => [c.id, c])), [campaigns]);
   const cycleById = useMemo(() => new Map(cycles.map((c) => [c.id, c])), [cycles]);
   // Melhor horário aprendido dos seus resultados (senão, o guia da plataforma).
@@ -878,6 +886,17 @@ export function Agenda() {
       </header>
 
       <CampaignTimeline campaigns={campaigns.filter((c) => c.status !== 'draft')} lens={lens} onLens={setLens} />
+
+      {acjAlerts.length > 0 && (
+        <section className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4" data-testid="agenda-acj-alerts">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">Jornada relacional (ACJ) — recomendações da Hive</p>
+          <ul className="space-y-1.5 text-sm">
+            {acjAlerts.slice(0, 5).map((a) => (
+              <li key={a.id} data-testid="agenda-acj-alert" data-kind={a.kind}><b>{a.title}</b> <span className="text-muted-foreground">— {a.detail}</span></li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
         <div className="space-y-4">

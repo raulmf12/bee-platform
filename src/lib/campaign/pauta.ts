@@ -2,9 +2,23 @@
 // A edge `cycle-pauta` pensa; o cliente persiste (mesmo padrão do app).
 import { edge } from '@/lib/edge';
 import { cycleApi, ideaApi } from '@/lib/campaignApi';
-import type { CampaignCycle, CyclePlan, Idea } from '@/types';
+import { acjCycleApi } from '@/lib/acj/api';
+import { countsToMix, type AcjCycleDraft } from '@/lib/acj/cyclePlan';
+import type { AcjCampaignPlan, CampaignCycle, CyclePlan, Idea } from '@/types';
 
-export async function confirmPlan(cycle: CampaignCycle, plan: CyclePlan): Promise<CampaignCycle> {
+// Confirma o planejamento. Com plano ACJ na campanha, grava também o Plano ACJ do
+// ciclo (versão nova; a anterior é arquivada pelo banco) — a pauta lê dele.
+export async function confirmPlan(cycle: CampaignCycle, plan: CyclePlan, acj?: { campaignPlan: AcjCampaignPlan; draft: AcjCycleDraft } | null): Promise<CampaignCycle> {
+  if (acj) {
+    const { campaignPlan, draft } = acj;
+    await acjCycleApi.create({
+      cycle_id: cycle.id, campaign_plan_id: campaignPlan.id, campaign_plan_version: campaignPlan.version,
+      cycle_mix: countsToMix(draft.counts, campaignPlan.target_mix), counts: draft.counts, realized: draft.realized,
+      gaps: draft.gaps, saturation_flags: draft.saturation_flags, priorities: draft.priorities,
+      circulation_rules: { phase: draft.phase?.phase ?? null, bridges: draft.phase?.bridges ?? null },
+      rationale: draft.rationale, plan_status_at_creation: campaignPlan.status,
+    });
+  }
   return cycleApi.update(cycle.id, { plan, status: 'planned' });
 }
 
@@ -25,6 +39,10 @@ export async function generatePauta(cycle: CampaignCycle, mode: 'full' | 'refres
     channels: i.channels,
     suggested_pieces: i.suggested_pieces,
     rationale: i.rationale,
+    acj_primary: i.acj_primary ?? null,
+    acj_secondary: i.acj_secondary ?? null,
+    acj_role: i.acj_role || null,
+    acj_rationale: i.acj_rationale || null,
     origin: 'hive' as const,
     status: 'proposed' as const,
     position: kept.length + idx,
@@ -40,6 +58,8 @@ export async function swapIdea(cycle: CampaignCycle, idea: Idea): Promise<Idea> 
   if (!n) throw new Error('A Hive não trouxe uma alternativa.');
   return ideaApi.update(idea.id, {
     title: n.title, summary: n.summary, editorial_slug: n.editorial_slug, rationale: n.rationale, origin: 'hive',
+    // Troca mantém o movimento (ACJ) da ideia original, como mantém a função.
+    acj_primary: idea.acj_primary ?? n.acj_primary ?? null, acj_role: n.acj_role || idea.acj_role || null, acj_rationale: n.acj_rationale || null,
   });
 }
 

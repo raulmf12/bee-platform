@@ -1,14 +1,18 @@
 // Etapa 3 — Planejamento do ciclo (maquete "Produção de Conteúdos").
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { format, parseISO } from 'date-fns';
 import { ArrowLeft, ArrowRight, CheckCircle2, Info, Instagram, Linkedin, Loader2, Minus, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { HiveNote } from '@/components/campaign/HiveNote';
+import { AcjCyclePanel } from '@/components/acj/AcjCyclePanel';
+import { acjCycleApi, acjPlanApi } from '@/lib/acj/api';
+import { buildAcjCyclePlan, countAcj, sumCounts, type AcjCounts } from '@/lib/acj/cyclePlan';
+import { cycleApi, ideaApi } from '@/lib/campaignApi';
 import { buildCyclePlan, publishingDays } from '@/lib/campaign/plan';
 import { confirmPlan, generatePauta } from '@/lib/campaign/pauta';
 import { formatRange } from '@/lib/campaign/dates';
-import { FUNCTION_COLORS, FUNCTION_SHORT, STRATEGIC_FUNCTIONS, type Campaign, type CampaignCycle, type CyclePlan, type Idea, type SocialAccount, type StrategicFunction } from '@/types';
+import { FUNCTION_COLORS, FUNCTION_SHORT, STRATEGIC_FUNCTIONS, type AcjCampaignPlan, type AcjCyclePlan, type Campaign, type CampaignCycle, type CyclePlan, type Idea, type SocialAccount, type StrategicFunction } from '@/types';
 
 function Stepper({ value, onChange, min = 0, label }: { value: number; onChange: (v: number) => void; min?: number; label: string }) {
   return (
@@ -36,6 +40,28 @@ export function PlanStep({ campaign, cycle, accounts, isCurrent, onBack, onDone 
   const [busy, setBusy] = useState(false);
   const labelOf = (id: string) => accounts.find((a) => a.id === id);
 
+  // ACJ: plano da campanha + o que já foi planejado nos ciclos anteriores (lacuna/saturação).
+  const [acjCtx, setAcjCtx] = useState<{ campaignPlan: AcjCampaignPlan | null; realized: AcjCounts; lastCycle: AcjCounts; saved: AcjCyclePlan | null } | null>(null);
+  const [acjManual, setAcjManual] = useState<AcjCounts | null>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const [campaignPlan, ideas, cycles, saved] = await Promise.all([
+        acjPlanApi.current(campaign.id), ideaApi.listByCampaign(campaign.id), cycleApi.listByCampaign(campaign.id), acjCycleApi.current(cycle.id),
+      ]);
+      const idxOf = new Map(cycles.map((c) => [c.id, c.idx]));
+      const before = ideas.filter((i) => (idxOf.get(i.cycle_id ?? '') ?? Infinity) < cycle.idx);
+      const last = ideas.filter((i) => idxOf.get(i.cycle_id ?? '') === cycle.idx - 1);
+      if (alive) setAcjCtx({ campaignPlan, realized: countAcj(before), lastCycle: countAcj(last), saved });
+    })().catch(() => alive && setAcjCtx({ campaignPlan: null, realized: {}, lastCycle: {}, saved: null }));
+    return () => { alive = false; };
+  }, [campaign.id, cycle.id, cycle.idx]);
+  const acjBase = useMemo(() => (acjCtx?.campaignPlan ? buildAcjCyclePlan({
+    plan: acjCtx.campaignPlan, weeks: campaign.duration_weeks ?? 8, cycleIdx: cycle.idx, contents: plan.totals.contents,
+    realized: acjCtx.realized, lastCycle: acjCtx.lastCycle,
+  }) : null), [acjCtx, campaign.duration_weeks, cycle.idx, plan.totals.contents]);
+  const acjDraft = acjBase ? { ...acjBase, counts: acjManual ?? acjBase.counts } : null;
+
   function setNeed(f: StrategicFunction, count: number) {
     const others = plan.needs.filter((n) => n.function !== f);
     const needs = (count > 0 ? [...others, { function: f, count }] : others)
@@ -56,13 +82,14 @@ export function PlanStep({ campaign, cycle, accounts, isCurrent, onBack, onDone 
 
   const invalid = plan.totals.contents === 0 ? 'O ciclo precisa de ao menos um conteúdo.'
     : plan.totals.pieces < plan.totals.contents ? 'Cada conteúdo precisa de ao menos uma peça: aumente as peças das contas ou reduza os conteúdos.'
-      : null;
+      : acjDraft && !readOnly && sumCounts(acjDraft.counts) !== plan.totals.contents ? `A jornada relacional (ACJ) soma ${sumCounts(acjDraft.counts)} de ${plan.totals.contents} conteúdos: ajuste-a.`
+        : null;
 
   async function confirm() {
     if (invalid) { toast.error(invalid); return; }
     setBusy(true);
     try {
-      const planned = await confirmPlan(cycle, plan);
+      const planned = await confirmPlan(cycle, plan, acjCtx?.campaignPlan && acjDraft ? { campaignPlan: acjCtx.campaignPlan, draft: acjDraft } : null);
       const r = await generatePauta(planned, 'full');
       onDone(r.cycle, r.ideas);
     } catch (e) {
@@ -130,6 +157,11 @@ export function PlanStep({ campaign, cycle, accounts, isCurrent, onBack, onDone 
           </div>
         </section>
       </div>
+
+      {acjCtx && (
+        <AcjCyclePanel campaignId={campaign.id} campaignPlan={acjCtx.campaignPlan} draft={readOnly ? null : acjDraft} saved={readOnly ? acjCtx.saved : null}
+          adjusting={adjusting} contents={plan.totals.contents} onChange={setAcjManual} />
+      )}
 
       {invalid && adjusting && <p className="text-sm font-medium text-amber-600" data-testid="plan-invalid">{invalid}</p>}
 

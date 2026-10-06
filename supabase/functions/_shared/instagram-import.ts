@@ -9,7 +9,7 @@
 // Paginado: cada chamada processa UMA página (PAGE mídias) e devolve o cursor.
 import { svcHeaders } from './gemini.ts';
 import { igMetricRow, type IgInsight } from './metrics.ts';
-import { igFormat, imageSources, importedCode, insightMetricsFor, mediaIdFromUrl, quoteFromCaption, type IgMedia } from './instagram-map.ts';
+import { commentRows, igFormat, imageSources, importedCode, insightMetricsFor, mediaIdFromUrl, quoteFromCaption, type IgComment, type IgMedia } from './instagram-map.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const GRAPH = 'https://graph.facebook.com/v21.0';
@@ -22,6 +22,22 @@ type Row = Record<string, any>;
 export interface ImportResult {
   account_id: string; username: string | null; processed: number; inserted: number; updated: number;
   metrics: number; insights: boolean; next: string | null; done: boolean; total: number | null; errors: string[];
+  comments: number; comments_ok: boolean | null;
+}
+
+// Comentários (sinal qualitativo da ACJ). Precisa de instagram_manage_comments; sem a
+// permissão, segue sem comentários (best-effort) e avisa uma vez.
+async function importComments(m: IgMedia, token: string, ctx: { userId: string; postId: string; accountId: string; ownUsername?: string | null }): Promise<{ count: number; denied: boolean }> {
+  if (!(m.comments_count && m.comments_count > 0)) return { count: 0, denied: false };
+  const r = await graph<{ data: IgComment[] }>(`${m.id}/comments?fields=id,text,timestamp,username,like_count,replies{id,text,timestamp,username,like_count}&limit=50`, token);
+  if (!r.ok) return { count: 0, denied: r.code === 10 || r.code === 200 || /permission/i.test(r.error) };
+  const rows = commentRows(r.data.data ?? [], ctx);
+  if (rows.length) {
+    await rest(`/post_comments?on_conflict=platform,external_id`, {
+      method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(rows),
+    });
+  }
+  return { count: rows.length, denied: false };
 }
 
 async function rest<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -109,7 +125,7 @@ export async function importAccount(userId: string, accountId: string, opts: { c
   if (!account) throw new Error('Conta do Instagram não encontrada.');
   const creds = await igCredentials(userId, account);
   if (!creds) throw new Error(`A conta "${account.label}" está sem token do Instagram. Conecte-a de novo.`);
-  const out: ImportResult = { account_id: accountId, username: null, processed: 0, inserted: 0, updated: 0, metrics: 0, insights: true, next: null, done: false, total: null, errors: [] };
+  const out: ImportResult = { account_id: accountId, username: null, processed: 0, inserted: 0, updated: 0, metrics: 0, insights: true, next: null, done: false, total: null, errors: [], comments: 0, comments_ok: null };
 
   // 1ª página: retrato da conta (vai pro comparativo).
   const meta: Row = { ...(account.metadata ?? {}) };
@@ -135,6 +151,7 @@ export async function importAccount(userId: string, accountId: string, opts: { c
   }
 
   let insightsDenied = false;
+  let commentsDenied = false;
   for (const m of page.data.data) {
     out.processed++;
     try {
@@ -185,6 +202,11 @@ export async function importAccount(userId: string, accountId: string, opts: { c
           raw: { fields: { like_count: m.like_count, comments_count: m.comments_count, permalink: m.permalink }, insights: insights ?? null, insights_error: insightsDenied ? 'sem permissão de insights' : null } }),
       });
       out.metrics++;
+      if (!commentsDenied) {
+        const cm = await importComments(m, creds.token, { userId, postId, accountId, ownUsername: out.username });
+        if (cm.denied) { commentsDenied = true; out.comments_ok = false; } else if (m.comments_count) out.comments_ok = true;
+        out.comments += cm.count;
+      }
     } catch (e) {
       out.errors.push(`${m.id}: ${(e as Error).message.slice(0, 200)}`);
     }
@@ -193,7 +215,7 @@ export async function importAccount(userId: string, accountId: string, opts: { c
   out.next = opts.mode === 'recent' ? null : (page.data.paging?.next ? page.data.paging.cursors?.after ?? null : null);
   out.done = !out.next;
   if (!opts.cursor || out.done) {
-    meta.ig = { ...(meta.ig ?? {}), ...(out.done ? { imported_at: new Date().toISOString() } : {}), insights_ok: out.insights };
+    meta.ig = { ...(meta.ig ?? {}), ...(out.done ? { imported_at: new Date().toISOString() } : {}), insights_ok: out.insights, ...(out.comments_ok !== null ? { comments_ok: out.comments_ok } : {}) };
     await rest(`/social_accounts?id=eq.${accountId}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' },
       body: JSON.stringify({ metadata: meta, ...(account.handle ? { handle: account.handle, label: account.label } : {}) }) });
   }

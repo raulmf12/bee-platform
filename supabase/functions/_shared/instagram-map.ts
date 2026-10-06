@@ -57,3 +57,18 @@ export function mediaIdFromUrl(url?: string | null): string | null {
   const m = url?.match(/instagram\.com\/(?:p|reel)\/(\d{6,})\/?/);
   return m ? m[1] : null;
 }
+
+// Comentários de uma mídia (com respostas) → linhas de post_comments.
+// is_own = escrito pela própria conta (respostas do Marcos não são sinal da audiência).
+export interface IgComment { id: string; text?: string; timestamp?: string; username?: string; like_count?: number; replies?: { data?: IgComment[] } }
+export function commentRows(
+  comments: IgComment[], ctx: { userId: string; postId: string; accountId: string; ownUsername?: string | null },
+): Array<Record<string, unknown>> {
+  const own = (u?: string) => !!u && !!ctx.ownUsername && u.toLowerCase() === ctx.ownUsername.replace(/^@/, '').toLowerCase();
+  const row = (c: IgComment, parent: string | null) => ({
+    user_id: ctx.userId, post_id: ctx.postId, account_id: ctx.accountId, platform: 'instagram', external_id: c.id,
+    parent_external_id: parent, text: c.text ?? '', author_username: c.username ?? null, is_own: own(c.username),
+    like_count: c.like_count ?? null, commented_at: c.timestamp ?? null,
+  });
+  return comments.flatMap((c) => [row(c, null), ...(c.replies?.data ?? []).map((r) => row(r, c.id))]);
+}

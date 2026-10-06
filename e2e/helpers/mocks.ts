@@ -61,6 +61,45 @@ export async function mockCampaignAI(page: Page, calls: { moment: Array<Record<s
     ? { ...MOMENT, moment: { ...MOMENT.moment, label: 'Consolidação de autoridade', summary: 'Leitura ajustada a partir do que você contou.' } }
     : MOMENT), calls.moment);
   await mockEdge(page, 'campaign-strategy', strategyResponse, calls.strategy);
+  await mockAcj(page);
+  return calls;
+}
+
+// ACJ-00 (acj-orchestrator): plano determinístico, atribuição, portão e leitura de sinais.
+export function acjPlanResponse(body: Record<string, unknown> = {}) {
+  const adjust = !!body.instruction;
+  const mix = adjust ? { 'ACJ-01': 20, 'ACJ-02': 20, 'ACJ-03': 35, 'ACJ-04': 15, 'ACJ-05': 10 } : { 'ACJ-01': 35, 'ACJ-02': 30, 'ACJ-03': 15, 'ACJ-04': 12, 'ACJ-05': 8 };
+  const ph = (n: number, m: Record<string, number>, p: string[]) => ({ phase: n, label: `Fase E2E ${n}`, entry_state: 'e', priority_movement: `Movimento ${n}`, acj_primary: p, bridges: 'ponte', exit_state: 's', mix: m });
+  return {
+    success: true,
+    plan: {
+      audience_state: 'Líderes sentem o cansaço mas não nomeiam o padrão.', desired_state: 'Reconhecem e se localizam na leitura sistêmica.',
+      journey_needs: ['tornar visível o padrão'], target_mix: mix,
+      phases: [
+        ph(1, { 'ACJ-01': 60, 'ACJ-02': 20, 'ACJ-03': 10, 'ACJ-04': 10, 'ACJ-05': 0 }, ['ACJ-01']),
+        ph(2, { 'ACJ-01': 20, 'ACJ-02': 50, 'ACJ-03': 15, 'ACJ-04': 10, 'ACJ-05': 5 }, ['ACJ-02']),
+        ph(3, { 'ACJ-01': 15, 'ACJ-02': 20, 'ACJ-03': 35, 'ACJ-04': 20, 'ACJ-05': 10 }, ['ACJ-03', 'ACJ-04']),
+        ph(4, { 'ACJ-01': 20, 'ACJ-02': 25, 'ACJ-03': 15, 'ACJ-04': 15, 'ACJ-05': 25 }, ['ACJ-05']),
+      ],
+      sequence_hypotheses: [{ id: 'SEQ-01', hypothesis: 'Reconhecer antes de se localizar', condition: 'novos públicos', sequence: 'ACJ-01 → ACJ-02', confidence: 'medium', observe: 'linguagem dos comentários' }],
+      success_signals: { audience: ['adoção da linguagem'], journey: ['retorno ao tema'], business: ['inscrições'] },
+      recalibration_rules: ['reduzir ACJ-01 se saturar'], exclusions: ['sem CTA de venda na fase 1'],
+      summary: { journey: adjust ? 'Jornada ajustada com mais Conexão.' : 'Jornada E2E: reconhecer, localizar-se, aproximar-se.', why: 'Serve à presença.', risk: 'Abstração.', learn: 'Maturidade da audiência.', mix_roles: { 'ACJ-01': 'Ponto de entrada' } },
+      confidence: 'medium', human_decisions_required: ['Escolher histórias pessoais da fase 3'],
+      adoption: body.adoption === 'late' ? 'late' : 'native',
+      adoption_note: body.adoption === 'late' ? 'Adoção tardia: plano criado com a campanha em andamento.' : null,
+      source_acj_version: 'ACJ-01@0.1,ACJ-02@0.1,ACJ-03@0.1,ACJ-04@0.1,ACJ-05@0.1',
+    },
+  };
+}
+export const ACJ_VALIDATION = { realized: 'partial', score: 64, issues: ['O espelho ainda é genérico.'], main_risk: 'Efeito Barnum', boundary_conflict: null, suggestion: 'Trazer uma cena concreta.', checked_at: '2026-10-06T12:00:00Z' };
+export async function mockAcj(page: Page, calls: Array<Record<string, unknown>> = []) {
+  await mockEdge(page, 'acj-orchestrator', (b) => {
+    if (b.action === 'campaign_plan') return acjPlanResponse(b);
+    if (b.action === 'validate') return { success: true, validation: ACJ_VALIDATION };
+    if (b.action === 'read_signals') return { success: true, reading: { post_id: b.post_id, acj_primary: 'ACJ-02', comment_count: 2, movement_evidence: 'partial', probable_causes: ['content'], signals: [{ type: 'autolocalização', excerpt: 'isso acontece comigo', reads_as: 'ACJ-02' }], summary: 'Há autolocalização em parte dos comentários.', limitations: 'Amostra pequena.', model: 'mock' } };
+    return { success: true, assignment: { acj_primary: 'ACJ-02', acj_secondary: null, acj_role: 'ponte', acj_rationale: 'r', acj_confidence: 'medium', human_decision_required: false } };
+  }, calls);
   return calls;
 }
 
@@ -82,21 +121,37 @@ export async function mockPauta(page: Page, calls: Array<Record<string, unknown>
       const order = chans.map((a, i) => ({ i, load: a.length })).sort((a, b) => a.load - b.load || a.i - b.i);
       for (const o of order.slice(0, ch.contents)) chans[o.i].push({ account_id: ch.account_id, platform: ch.platform });
     }
+    const [acjPlan] = await sql<{ counts: Record<string, number> }>(`select counts from acj_cycle_plans where cycle_id='${body.cycle_id}' and status='active' order by version desc limit 1`);
+    const acjs = acjPlan ? Object.entries(acjPlan.counts).flatMap(([k, v]) => Array(v).fill(k)) : [];
     const prefix = body.mode === 'refresh' ? 'Nova seleção' : 'Ideia da Hive';
     return {
       success: true,
       ideas: fns.map((f, i) => ({
         title: `${prefix} ${i + 1} (r${_pautaRound})`, summary: `Direção de pensamento ${i + 1}.`, strategic_function: f,
         editorial_slug: 'provocacao-de-crenca', channels: chans[i], suggested_pieces: chans[i].length, rationale: 'porque sim',
+        ...(acjs[i] ? { acj_primary: acjs[i], acj_secondary: null, acj_role: 'ponto de entrada', acj_rationale: 'realiza o movimento' } : {}),
       })),
     };
   }, calls);
 }
 
 // content-develop: frase + texto previsíveis por modo.
-export async function mockDevelop(page: Page, calls: Array<Record<string, unknown>> = []) {
+export async function mockDevelop(page: Page, calls: Array<Record<string, unknown>> = [], opts: { acj?: boolean } = {}) {
   await mockEdge(page, 'content-develop', async (body) => {
-    const [idea] = await sql<{ title: string }>(`select title from ideas where id='${body.idea_id}'`);
+    const [idea] = await sql<{ title: string; acj_primary: string | null }>(`select title, acj_primary from ideas where id='${body.idea_id}'`);
+    const acj = opts.acj ? {
+      acj: {
+        reused: !!body.content_id, campaign_plan_id: null, cycle_plan_id: null, validation: ACJ_VALIDATION,
+        contract: {
+          ...(body.content_id ? (await sql<{ id: string }>(`select id from acj_content_contracts where content_id='${body.content_id}' and status<>'superseded' limit 1`))[0] ?? {} : {}),
+          acj_primary: idea?.acj_primary ?? 'ACJ-02', acj_secondary: null, attribution_confidence: 'medium', rationale: 'A ideia espelha uma cena do líder.',
+          alternative_considered: null, alternative_reason: null, audience_state_from: 'realidade reconhecida mas externa', journey_need: 'localizar-se',
+          movement_to: 'relevância pessoal percebida', connection_mechanism: 'espelhamento por cena concreta', authorial_gesture: 'espelha',
+          expected_experience: 'reconhecer-se sem rótulo', expected_response: ['relatos em primeira pessoa'], failure_modes: ['efeito Barnum'],
+          expression_context: { cta: 'onde isso aparece no seu time?' }, not_to_do: 'diagnosticar a pessoa', source_acj_version: 'ACJ-02@0.1', assigned_late: !idea?.acj_primary,
+        },
+      },
+    } : {};
     const tag = body.mode === 'adjust' ? ' (ajustado)' : body.mode === 'new_version' ? ' (nova versão)' : '';
     return {
       success: true,
@@ -104,6 +159,7 @@ export async function mockDevelop(page: Page, calls: Array<Record<string, unknow
       texto: `Primeiro parágrafo do texto${tag}.\n\nSegundo parágrafo que desdobra o pensamento.`,
       considered: { base: 'Diagnóstico Sistêmico · Genesis', coerencia: 'Fortalece autoridade sem aproximação comercial direta.', formato: 'LinkedIn · frase + texto' },
       meta: { headline_type: 'contradicao-direta', analogy: null, virality_score: 80, virality_reason: 'motivo', qa_score: 75 },
+      ...acj,
     };
   }, calls);
 }

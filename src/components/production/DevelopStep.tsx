@@ -8,11 +8,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { contentApi } from '@/lib/campaignApi';
+import { acjContractApi } from '@/lib/acj/api';
+import { AcjContractSummary } from '@/components/acj/AcjContractSummary';
 import { isAvulso } from '@/lib/campaign/avulso';
 import { developIdeas, discardContent, editContent, finishValidation, reviseWithHive, validateContent } from '@/lib/campaign/develop';
 import {
   CAMPAIGN_TYPE_LABELS, FUNCTION_COLORS, FUNCTION_LABELS,
-  type BeeEditorial, type Campaign, type CampaignCycle, type Content, type Idea, type SocialAccount,
+  type AcjContentContract, type BeeEditorial, type Campaign, type CampaignCycle, type Content, type Idea, type SocialAccount,
 } from '@/types';
 
 const ADJUST_EXAMPLES = ['Quero uma abertura mais provocativa.', 'Quero algo menos corporativo.', 'Essa frase não parece comigo. Reescreva mantendo a ideia.'];
@@ -35,6 +37,16 @@ export function DevelopStep({ campaign, cycle, ideas, editorials, accounts, onId
   const live = useMemo(() => (contents ?? []).filter((c) => c.status !== 'discarded').sort((a, b) => a.position - b.position), [contents]);
   const missing = approvedIdeas.filter((i) => i.status === 'approved' && !(contents ?? []).some((c) => c.idea_id === i.id));
   const current = live.find((c) => c.status === 'pending_validation' || c.status === 'developing');
+  // Contrato ACJ de cada conteúdo (recarrega quando a Hive refaz uma versão).
+  const [contracts, setContracts] = useState<Record<string, AcjContentContract>>({});
+  const contractKey = live.map((c) => `${c.id}:${c.updated_at}`).join(',');
+  useEffect(() => {
+    if (!live.length) return;
+    acjContractApi.listByContents(live.map((c) => c.id))
+      .then((list) => setContracts(Object.fromEntries(list.map((k) => [k.content_id, k]))))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contractKey]);
   const currentIdx = current ? live.indexOf(current) : -1;
   const ideaOf = (c: Content) => ideas.find((i) => i.id === c.idea_id);
   const edName = (slug?: string | null) => editorials.find((e) => e.slug === slug)?.name;
@@ -227,6 +239,8 @@ export function DevelopStep({ campaign, cycle, ideas, editorials, accounts, onId
           </dl>
         </section>
       )}
+
+      <AcjContractSummary contract={contracts[c.id] ?? null} onChange={(k) => setContracts((m) => ({ ...m, [k.content_id]: k }))} />
 
       {adjusting && (
         <div className="space-y-3 rounded-2xl border border-accent/40 bg-accent/5 p-4" data-testid="adjust-content">

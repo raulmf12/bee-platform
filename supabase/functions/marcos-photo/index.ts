@@ -13,6 +13,7 @@
 // Toda imagem gerada exige aprovação humana antes da publicação (Constituição §11).
 import { errorResponse, getUserGeminiKey, jsonResponse, logUsage, preflight, userIdFromAuth, checkRateLimit } from '../_shared/security.ts';
 import { svcHeaders } from '../_shared/gemini.ts';
+import { acjVisualContext, loadPostAcj } from '../_shared/acj.ts';
 import { PROFILE_VERSION, PRODUCER_ID, type RefPriority } from '../_shared/photo-profile.ts';
 import { STYLES, VARIANTS, type StyleId } from '../_shared/photo-styles.ts';
 import {
@@ -60,7 +61,7 @@ async function b64(url: string): Promise<{ data: string; mime: string }> {
 }
 
 // Leitura semântica do texto-mãe (Constituição §7.1; F01 §3; F02–F04 §1/§4; F03 §1).
-async function readText(apiKey: string, text: string): Promise<TextReading> {
+async function readText(apiKey: string, text: string, acjCtx = ''): Promise<TextReading> {
   const variantGuide = VARIANTS.map((v) => `${v.id} ${v.name}: ${v.operation}`).join('; ');
   const prompt = [
     'Você é o leitor editorial do motor fotográfico da Hive. Leia o TEXTO-MÃE de um post do Marcos Piccini (consultor de liderança sistêmica) e devolva SOMENTE JSON.',
@@ -69,6 +70,7 @@ async function readText(apiKey: string, text: string): Promise<TextReading> {
     'variant_intent: para CADA estilo, a variação que a árvore de decisão dele indica para este texto. F01: encontro direto/afirmação clara → F01-A; reflexão/elaboração conceitual → F01-B; calor/reconhecimento/aproximação → F01-C; senão F01-D. F02: formular/registrar → F02-A; estudar/confrontar referência → F02-B; construir/revisar materiais → F02-C; assimilar/maturar pergunta aberta → F02-D. F03: receber/compreender o outro → F03-A; trocar perspectivas → F03-B; criar junto → F03-C; sustentar grupo → F03-D; conduzir com quadro → F03-E; apresentar mantendo relação → F03-F. F04: continuidade/próximo passo → F04-A; passagem antes/depois → F04-B; mudança de perspectiva → F04-C; futuro em construção → F04-D.',
     `Variações: ${variantGuide}.`,
     '{ "semantics": { "autoria":0, "densidade_conceitual":0, "relacionalidade":0, "orientacao_futuro":0, "energia_acao":0, "intimidade":0, "necessidade_evidencia":0, "valor_atmosfera":0, "forca_posicionamento":0 }, "factual_claim": false, "factual_reason": "", "central_verb": "", "variant_intent": { "F01": "F01-?", "F02": "F02-?", "F03": "F03-?", "F04": "F04-?" } }',
+    ...(acjCtx ? [`${acjCtx}\n(Para o motor fotográfico a ACJ é só sinal de compatibilidade: as regras da Constituição e dos estilos F01–F04 prevalecem.)`] : []),
     `TEXTO-MÃE:\n${text.slice(0, 3000)}`,
   ].join('\n');
   const { json } = await gemini(apiKey, TEXT_CHAIN, [{ text: prompt }], { responseMimeType: 'application/json', temperature: 0.2 });
@@ -96,7 +98,7 @@ async function generate(userId: string, apiKey: string, input: Row) {
   let plan: PhotoPlan = input.plan;
   let reading: TextReading | null = null;
   if (!plan) {
-    reading = await readText(apiKey, text || 'Retrato autoral do Marcos Piccini.');
+    reading = await readText(apiKey, text || 'Retrato autoral do Marcos Piccini.', acjVisualContext(await loadPostAcj(input.post_id, userId)));
     plan = planPhoto({
       text, reading, recent: ctx.recent, refs: ctx.refs, forceVariant: input.force_variant,
       approvedStyles: purpose === 'validation_board' || input.force_variant ? null : ctx.approvedStyles, aspect: input.aspect,

@@ -1,6 +1,7 @@
 // Etapa 6 — TELAS 12, 12A, 12B, 12C: produção visual do ciclo, galeria, escolha
 // da proposta, edição/aprovação da peça e conclusão (→ programação).
 import { MarcosPhotoReview } from '@/components/hive/MarcosPhotoReview';
+import { AcjChip } from '@/components/acj/AcjChip';
 import { isoToLocalInput, localInputToIso, nowLocalInput } from '@/lib/schedule';
 import { isAvulso } from '@/lib/campaign/avulso';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -363,6 +364,14 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
       <div>
         <h1 className="font-display text-2xl font-bold">{unit?.content.title}</h1>
         <p className="text-sm text-muted-foreground">{piece.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} · {accountLabel(piece.account_id)} · Imagem{variant ? ` · ${variant}${variantNames[variant] ? ` ${variantNames[variant]}` : ''}` : ''}{isApproved ? ' · Aprovada' : ''}</p>
+        {piece.acj_primary && (
+          <p className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground" data-testid="piece-acj">
+            <AcjChip id={piece.acj_primary} size="xs" /> herdada do conteúdo-mãe{piece.acj_frozen_at ? ' · congelada na publicação' : ''}
+            {(piece.visual_decision as { explanation?: { acj_note?: string } } | null)?.explanation?.acj_note && (
+              <span>· {(piece.visual_decision as { explanation: { acj_note: string } }).explanation.acj_note}</span>
+            )}
+          </p>
+        )}
       </div>
       <div className="grid gap-6 lg:grid-cols-[minmax(0,420px)_1fr]">
         <div className="space-y-2">

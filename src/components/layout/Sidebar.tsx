@@ -28,7 +28,8 @@ import {
   Plus,
   Workflow,
   BarChart3,
-  Camera
+  Camera,
+  Route as RouteIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BeeLogo } from '@/components/shared/BeeLogo';
@@ -81,6 +82,7 @@ const NAV_GROUPS: NavGroup[] = [
     icon: Brain,
     items: [
       { to: '/aprendizado', label: 'Aprendizado', icon: Brain },
+      { to: '/jornada', label: 'Jornada relacional (ACJ)', icon: RouteIcon },
       { to: '/curadoria', label: 'Curadoria', icon: Sparkles },
       { to: '/feedback', label: 'Feedback contínuo', icon: MessageSquarePlus },
       { to: '/coach', label: 'Coach de voz', icon: MessagesSquare },

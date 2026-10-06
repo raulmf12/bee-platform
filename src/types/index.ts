@@ -249,6 +249,12 @@ export interface UserPost {
   schedule_priority?: number | null;
   suggested_start?: string | null;
   suggested_end?: string | null;
+  // ACJ herdada do conteúdo-mãe (snapshot; congelada na publicação — trigger no banco).
+  acj_primary?: AcjId | null;
+  acj_secondary?: AcjId | null;
+  acj_snapshot?: AcjSnapshot | null;
+  acj_status?: 'inherited' | 'legacy_unassigned' | 'not_applicable' | 'unknown' | null;
+  acj_frozen_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1071,3 +1077,5 @@ export interface AiGate {
 }
 
 export * from './campaign';
+export * from './acj';
+import type { AcjId, AcjSnapshot } from './acj';

@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { MixBars } from '@/components/campaign/MixBars';
 import { StrategyMatrix } from '@/components/campaign/StrategyMatrix';
+import { AcjCampaignPanel } from '@/components/acj/AcjCampaignPanel';
 import { accountApi, campaignApi, cycleApi } from '@/lib/campaignApi';
 import { campaignWeek, formatDay, formatRange } from '@/lib/campaign/dates';
 import { CAMPAIGN_STATUS_LABELS, CYCLE_STATUS_LABELS } from '@/lib/campaign/labels';
@@ -129,6 +130,8 @@ export function CampaignDetail() {
               {showMatrix && campaign.strategy.matrix?.length > 0 && <StrategyMatrix matrix={campaign.strategy.matrix} />}
             </section>
           )}
+
+          <AcjCampaignPanel campaign={campaign} />
 
           <section className="space-y-3 rounded-2xl border bg-card p-5">
             <h2 className="font-display text-lg font-semibold">Ciclos</h2>

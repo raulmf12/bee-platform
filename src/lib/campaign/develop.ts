@@ -5,11 +5,25 @@ import { db } from '@/lib/db';
 import { aiApi } from '@/lib/api';
 import { edge } from '@/lib/edge';
 import { contentApi, cycleApi, ideaApi } from '@/lib/campaignApi';
+import { acjContractApi } from '@/lib/acj/api';
 import type {
   AiVariation, Campaign, CampaignCycle, Content, ContentBody, Idea, UserPost,
 } from '@/types';
 
 type DevResult = Awaited<ReturnType<typeof edge.contentDevelop>>;
+
+// Contrato ACJ (fonte canônica no conteúdo-mãe): novo → grava versão; reaproveitado →
+// só atualiza o portão. Falha aqui não perde o conteúdo (a ACJ avisa, não bloqueia).
+async function persistAcj(contentId: string, r: DevResult): Promise<void> {
+  const a = r.acj;
+  if (!a?.contract) return;
+  try {
+    if (a.reused && a.contract.id) await acjContractApi.update(a.contract.id, { validation: a.validation ?? null });
+    else await acjContractApi.create(contentId, a.contract, { campaign_plan_id: a.campaign_plan_id, cycle_plan_id: a.cycle_plan_id, validation: a.validation ?? null });
+  } catch (e) {
+    console.warn('[acj] contrato não salvo:', (e as Error).message);
+  }
+}
 
 async function registerAiVersion(idea: Idea, r: DevResult): Promise<{ generation_id: string; variation_id: string }> {
   const generation = await aiApi.createGeneration({
@@ -50,6 +64,7 @@ export async function developIdeas(
           virality_reason: r.meta.virality_reason, headline_type: r.meta.headline_type, analogy: r.meta.analogy,
         },
       });
+      await persistAcj(content.id, r);
       await ideaApi.update(idea.id, { status: 'developed' });
       created.push(content);
       done++;
@@ -62,7 +77,8 @@ export async function developIdeas(
 
 // "Ajustar com a Hive" / "Nova versão": nova versão da IA = nova variação pristina.
 export async function reviseWithHive(content: Content, idea: Idea, mode: 'adjust' | 'new_version', instruction?: string): Promise<Content> {
-  const r = await edge.contentDevelop({ idea_id: idea.id, mode, current: content.body, instruction });
+  const r = await edge.contentDevelop({ idea_id: idea.id, content_id: content.id, mode, current: content.body, instruction });
+  await persistAcj(content.id, r);
   const ids = await registerAiVersion(idea, r);
   const body = { frase: r.frase, texto: r.texto };
   return contentApi.update(content.id, {

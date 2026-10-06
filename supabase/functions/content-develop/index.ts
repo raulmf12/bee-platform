@@ -6,11 +6,14 @@
 //   develop     { idea_id }                      → primeira versão
 //   adjust      { idea_id, current, instruction } → "Ajustar com a Hive"
 //   new_version { idea_id, current }              → "Nova versão" (outro ângulo)
-// Saída: { success, frase, texto, considered{base,coerencia,formato}, meta{...} }
+// ACJ: antes da redação, monta (ou reaproveita) o CONTRATO RELACIONAL do conteúdo-mãe
+// e o envia ao generate-content; depois roda o portão "o movimento aconteceu?".
+// Saída: { success, frase, texto, considered{base,coerencia,formato}, meta{...}, acj{contract,validation,...} }
 import {
-  checkRateLimit, errorResponse, internalUserId, jsonResponse, preflight, userIdFromAuth,
+  checkRateLimit, errorResponse, getUserGeminiKey, internalUserId, jsonResponse, logUsage, preflight, userIdFromAuth,
 } from '../_shared/security.ts';
 import { fetchRest } from '../_shared/gemini.ts';
+import { buildContract, contractPromptBlock, validateMovement, type AcjContract, type AcjValidation } from '../_shared/acj.ts';
 
 type Fn = 'presenca' | 'posicionamento' | 'autoridade' | 'relacionamento' | 'produtos';
 const FN_LABEL: Record<Fn, string> = {
@@ -26,6 +29,7 @@ const QA_PASS = 70;
 interface Input {
   mode?: 'develop' | 'adjust' | 'new_version';
   idea_id: string;
+  content_id?: string;
   current?: { frase?: string; texto?: string };
   instruction?: string;
 }
@@ -57,8 +61,8 @@ Deno.serve(async (req: Request) => {
     if (!input.idea_id) return errorResponse('idea_id obrigatório', 400);
     if (mode === 'adjust' && !input.instruction?.trim()) return errorResponse('Diga o que ajustar.', 400);
 
-    const [idea] = await fetchRest<Array<{ title: string; summary: string | null; strategic_function: Fn | null; editorial_slug: string | null; campaign_id: string | null; rationale: string | null }>>(
-      `/ideas?id=eq.${input.idea_id}&user_id=eq.${userId}&select=title,summary,strategic_function,editorial_slug,campaign_id,rationale&limit=1`);
+    const [idea] = await fetchRest<Array<{ title: string; summary: string | null; strategic_function: Fn | null; editorial_slug: string | null; campaign_id: string | null; cycle_id: string | null; rationale: string | null; acj_primary: string | null; acj_secondary: string | null; acj_role: string | null; acj_rationale: string | null }>>(
+      `/ideas?id=eq.${input.idea_id}&user_id=eq.${userId}&select=title,summary,strategic_function,editorial_slug,campaign_id,cycle_id,rationale,acj_primary,acj_secondary,acj_role,acj_rationale&limit=1`);
     if (!idea) return errorResponse('Ideia não encontrada', 404);
     const fn: Fn = idea.strategic_function ?? 'presenca';
     // Conteúdo avulso ("Um conteúdo") vive num contêiner metadata.kind='avulso': não é campanha.
@@ -74,6 +78,31 @@ Deno.serve(async (req: Request) => {
       campaign ? `CAMPANHA: ${campaign.name} (${campaign.type === 'vendas' ? 'vendas/lançamento' : 'orgânica'})${campaign.intent ? ` — intenção: ${campaign.intent}` : ''}${campaign.moment?.label ? ` · momento: ${campaign.moment.label}` : ''}` : '',
       campaign?.type !== 'vendas' && fn !== 'produtos' ? 'Sem aproximação comercial direta: nada de CTA de venda.' : '',
     ].filter(Boolean).join('\n');
+    // ---- Contrato ACJ (fonte canônica no conteúdo-mãe) ----
+    const apiKey = await getUserGeminiKey(userId);
+    let acj: { contract: AcjContract | (AcjContract & { id: string }); reused: boolean; campaign_plan_id: string | null; cycle_plan_id: string | null; validation?: AcjValidation | null; error?: string } | null = null;
+    try {
+      const [existing] = input.content_id
+        ? await fetchRest<Array<AcjContract & { id: string }>>(`/acj_content_contracts?content_id=eq.${input.content_id}&user_id=eq.${userId}&status=neq.superseded&select=*&order=version.desc&limit=1`)
+        : [];
+      const [cyclePlan] = idea.cycle_id
+        ? await fetchRest<Array<{ id: string; campaign_plan_id: string; counts: Record<string, number>; rationale: string | null }>>(`/acj_cycle_plans?cycle_id=eq.${idea.cycle_id}&user_id=eq.${userId}&status=eq.active&select=id,campaign_plan_id,counts,rationale&order=version.desc&limit=1`).catch(() => [])
+        : [];
+      if (existing) {
+        acj = { contract: existing, reused: true, campaign_plan_id: cyclePlan?.campaign_plan_id ?? null, cycle_plan_id: cyclePlan?.id ?? null };
+      } else if (apiKey) {
+        const built = await buildContract(apiKey, idea, {
+          campaign: campaign ? `${campaign.name}${campaign.intent ? ` — ${campaign.intent}` : ''}` : undefined,
+          cycleNeed: cyclePlan ? `${Object.entries(cyclePlan.counts ?? {}).map(([k, v]) => `${k}=${v}`).join(', ')}. ${cyclePlan.rationale ?? ''}` : undefined,
+        });
+        logUsage({ userId, provider: 'gemini', product: 'text', model: built.model, tokens_input: built.usage.input, tokens_output: built.usage.output, metadata: { fn: 'content-develop', step: 'acj-contract' } });
+        acj = { contract: built.contract, reused: false, campaign_plan_id: cyclePlan?.campaign_plan_id ?? null, cycle_plan_id: cyclePlan?.id ?? null };
+      }
+    } catch (e) {
+      console.warn('[content-develop] contrato ACJ indisponível:', (e as Error).message);
+      acj = null;
+    }
+
     const cur = input.current ?? {};
     const extra = mode === 'adjust'
       ? `A PESSOA PEDIU ESTE AJUSTE na versão atual: "${input.instruction}". Atenda ao pedido e PRESERVE tudo o que não foi pedido para mudar.\nVERSÃO ATUAL:\nFrase: ${cur.frase ?? ''}\nTexto:\n${cur.texto ?? ''}`
@@ -87,6 +116,7 @@ Deno.serve(async (req: Request) => {
       variations: 1,
       briefing,
       mother_idea: { title: idea.title, direction: idea.summary ?? undefined, strategic_function: FN_LABEL[fn] },
+      ...(acj ? { acj_context: contractPromptBlock(acj.contract) } : {}),
     });
 
     const briefing = [context, extra].filter(Boolean).join('\n\n');
@@ -106,6 +136,18 @@ Deno.serve(async (req: Request) => {
       console.warn('[content-develop] QA indisponível:', qaError);
     }
 
+    // Portão ACJ (G3/G4): avisa se o movimento não aconteceu — não reescreve.
+    if (acj && apiKey) {
+      try {
+        const g = await validateMovement(apiKey, acj.contract, { frase: best.quote, texto: best.caption });
+        acj.validation = g.validation;
+        logUsage({ userId, provider: 'gemini', product: 'text', model: g.model, tokens_input: g.usage.input, tokens_output: g.usage.output, metadata: { fn: 'content-develop', step: 'acj-gate' } });
+      } catch (e) {
+        acj.validation = null;
+        acj.error = (e as Error).message.slice(0, 200);
+      }
+    }
+
     const considered = {
       base: [editorial?.name, 'Genesis (voz e princípios)', 'Diretrizes de criação', 'Base de conhecimento'].filter(Boolean).join(' · '),
       coerencia: idea.rationale?.trim()
@@ -122,6 +164,7 @@ Deno.serve(async (req: Request) => {
         headline_type: best.headline_type_used ?? null, analogy: best.analogy_used ?? null,
         virality_score: best.virality_score ?? null, virality_reason: best.virality_reason ?? null, qa_score: qa.score, qa_error: qaError,
       },
+      acj,
     });
   } catch (e) {
     console.error('[content-develop]', e);
