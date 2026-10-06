@@ -293,3 +293,8 @@ export async function createAlternatives(userId: string, base: UserPost, group: 
   }
   return created;
 }
+
+// Reprogramar (ou agendar) uma peça aprovada direto da revisão.
+export async function reschedulePiece(piece: UserPost, iso: string): Promise<UserPost> {
+  return updatePiece(piece.id, { status: 'scheduled', scheduled_date: iso });
+}

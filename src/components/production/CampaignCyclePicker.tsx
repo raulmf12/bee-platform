@@ -17,8 +17,14 @@ export function CampaignCyclePicker({ campaigns, campaignId, cycles, cycleId, re
 }) {
   const [showAll, setShowAll] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
+  // Ciclos que passaram sem terminar continuam acessíveis (marcados "Atrasado");
+  // os concluídos aparecem em "Ver ciclos anteriores" (pra editar/reprogramar).
+  const late = cycles.filter((c) => c.end_date < today && c.status !== 'done');
+  const done = cycles.filter((c) => c.end_date < today && c.status === 'done');
   const upcoming = cycles.filter((c) => c.end_date >= today);
-  const visible = showAll ? upcoming : upcoming.slice(0, 3);
+  const base = [...late, ...(showAll ? upcoming : upcoming.slice(0, 3))];
+  const selected = cycles.find((c) => c.id === cycleId);
+  const visible = [...(showAll ? done : selected && !base.includes(selected) ? [selected] : []), ...base];
   return (
     <div className="space-y-5">
       <section className="space-y-2 rounded-2xl border bg-card p-4">
@@ -54,6 +60,7 @@ export function CampaignCyclePicker({ campaigns, campaignId, cycles, cycleId, re
                   <span className="block text-sm font-semibold">{current ? 'Ciclo atual' : `Ciclo ${String(cy.idx).padStart(2, '0')}`} · {formatRange(cy.start_date, cy.end_date)}</span>
                   <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                     {CYCLE_STATUS_LABELS[cy.status]}
+                    {cy.end_date < today && cy.status !== 'done' && <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-rose-600" data-testid="cycle-late">Atrasado</span>}
                     {cy.id === recommendedCycleId && <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] font-semibold text-accent-foreground">Recomendado</span>}
                   </span>
                 </span>
@@ -61,9 +68,9 @@ export function CampaignCyclePicker({ campaigns, campaignId, cycles, cycleId, re
               </button>
             );
           })}
-          {upcoming.length > 3 && (
+          {(upcoming.length > 3 || done.length > 0) && (
             <button type="button" onClick={() => setShowAll((v) => !v)} className="flex w-full items-center justify-between rounded-xl border p-3 text-sm hover:bg-accent/5">
-              {showAll ? 'Mostrar menos' : 'Ver ciclos futuros'} <ChevronRight className={`h-4 w-4 transition-transform ${showAll ? 'rotate-90' : ''}`} />
+              {showAll ? 'Mostrar menos' : done.length ? 'Ver ciclos anteriores e futuros' : 'Ver ciclos futuros'} <ChevronRight className={`h-4 w-4 transition-transform ${showAll ? 'rotate-90' : ''}`} />
             </button>
           )}
           {/* Só sugere voltar ao ciclo atual quando ELE é o recomendado (ainda sem pauta aprovada). */}

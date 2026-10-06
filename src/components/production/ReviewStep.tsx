@@ -1,6 +1,7 @@
 // Etapa 6 — TELAS 12, 12A, 12B, 12C: produção visual do ciclo, galeria, escolha
 // da proposta, edição/aprovação da peça e conclusão (→ programação).
 import { MarcosPhotoReview } from '@/components/hive/MarcosPhotoReview';
+import { isoToLocalInput, localInputToIso, nowLocalInput } from '@/lib/schedule';
 import { isAvulso } from '@/lib/campaign/avulso';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -14,7 +15,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { contentApi, ideaApi, pieceApi } from '@/lib/campaignApi';
 import { formatRange } from '@/lib/campaign/dates';
 import {
-  AI_IMAGE_VARIANT, adjustPieceText, approvePiece, choosePiece, createAlternatives, editPieceText, finishProduction, imageKind, produceCycle, productionTodo, swapPieceImage,
+  AI_IMAGE_VARIANT, adjustPieceText, approvePiece, choosePiece, createAlternatives, editPieceText, reschedulePiece, finishProduction, imageKind, produceCycle, productionTodo, swapPieceImage,
 } from '@/lib/campaign/produce';
 import { loadHiveDesign } from '@/lib/hive/loadDesign';
 import { useAuthStore } from '@/store/authStore';
@@ -388,11 +389,19 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
               <>
                 <p className="font-display text-base font-semibold" data-testid="piece-quote">{quote}</p>
                 <p className="line-clamp-6 whitespace-pre-line text-sm text-muted-foreground" data-testid="piece-caption">{piece.caption}</p>
-                {!isApproved && <Button size="sm" variant="ghost" onClick={() => setDraft({ quote, caption: piece.caption ?? '' })}><Pencil className="h-3.5 w-3.5" /> Editar texto</Button>}
+                <Button size="sm" variant="ghost" onClick={() => setDraft({ quote, caption: piece.caption ?? '' })}><Pencil className="h-3.5 w-3.5" /> Editar texto</Button>
               </>
             )}
           </section>
-          {!isApproved && (
+          {isApproved && piece.status !== 'published' && (
+            <section className="space-y-2 rounded-2xl border bg-card p-4" data-testid="piece-schedule">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{piece.scheduled_date ? 'Reprogramar (data e hora)' : 'Agendar (data e hora)'}</p>
+              <Input type="datetime-local" aria-label="Data e hora da publicação" min={nowLocalInput()} value={isoToLocalInput(piece.scheduled_date)}
+                onChange={(e) => { const iso = localInputToIso(e.target.value); if (!iso) return; if (new Date(iso).getTime() < Date.now()) { toast.error('Escolha uma data futura.'); return; }
+                  void act('schedule', async () => { replacePiece(await reschedulePiece(piece, iso)); toast.success('Reprogramado.'); }); }} />
+            </section>
+          )}
+          {piece.status !== 'published' && (
             <section className="space-y-3 rounded-2xl border border-accent/40 bg-accent/5 p-4" data-testid="piece-hive">
               <p className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="h-4 w-4 text-accent" /> Pedir ajuste à Hive</p>
               <div className="flex gap-1 text-xs">
