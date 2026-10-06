@@ -29,6 +29,7 @@ export async function sql<T = Record<string, unknown>>(query: string): Promise<T
 // Tabelas com user_id que os testes podem sujar. Ordem = filhos antes dos pais.
 // (Cresce conforme as fases adicionam tabelas.)
 export const E2E_OWNED_TABLES = [
+  'photo_style_approvals', 'photo_generations',
   'meta_ad_insights_daily', 'meta_ads', 'meta_adsets', 'meta_campaigns', 'meta_ad_accounts', 'meta_businesses', 'meta_connections',
   'ai_reviews',
   'ai_variations',
@@ -118,4 +119,18 @@ export async function callEdgeAsService<T = Record<string, unknown>>(fn: string,
   let json: unknown = text;
   try { json = JSON.parse(text); } catch { /* texto cru */ }
   return { status: res.status, json: json as T };
+}
+
+// Remove do bucket `design` as imagens geradas pelo usuário de teste (motor fotográfico).
+export async function cleanupE2EPhotoFiles(): Promise<number> {
+  const { id } = e2eUser();
+  if (!id || id === MARCOS) throw new Error('cleanup recusado: id inválido');
+  const rows = await sql<{ storage_path: string }>(`select storage_path from photo_generations where user_id='${id}' and storage_path is not null`);
+  if (!rows.length) return 0;
+  const keys = await fetch(`https://api.supabase.com/v1/projects/${REF}/api-keys`, { headers: { Authorization: `Bearer ${mgmtToken()}` } }).then((r) => r.json()) as Array<{ name: string; api_key: string }>;
+  const svc = keys.find((k) => k.name === 'service_role')?.api_key;
+  if (!svc) return 0;
+  const paths = rows.map((r) => r.storage_path).filter((p) => p.startsWith('hive/marcos-photo/'));
+  await fetch(`https://${REF}.supabase.co/storage/v1/object/design`, { method: 'DELETE', headers: { apikey: svc, Authorization: `Bearer ${svc}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ prefixes: paths }) });
+  return paths.length;
 }

@@ -15,8 +15,8 @@ import { analyzeTextZone, clearZoneCache } from './imageZone';
 import { composeM02 } from './composeM02';
 import { composeM03 } from './composeM03';
 import { ensureM01Asset, clearM01AssetCache } from './marcosImage';
-import { renderM02Scene, clearM02SceneCache, type M02Place } from './m02Scene';
-import { blobFromBase64, uploadDesignAsset, listMarcosPhotos } from './assetLib';
+import { generateMarcosPhoto, TEXT_SPACE_TO_PLACE } from './marcosPhoto';
+import { imageDims, listMarcosPhotos } from './assetLib';
 import { renderFabricToDataUrl } from '@/lib/templates/renderPost';
 import { uploadAssetImage } from '@/lib/storage';
 
@@ -41,6 +41,12 @@ export async function generateHiveImage(params: {
   seed?: HiveSeed;
   // Força um fundo de IA novo (M01-D/E): ignora o pool e gera do zero.
   forceBg?: boolean;
+  // Texto-mãe completo (legenda): o motor fotográfico lê o conteúdo inteiro, não só a frase.
+  context?: string;
+  // Decisão visual anterior do post: re-render sem forceBg reaproveita a foto do Marcos já gerada.
+  previousDecision?: Record<string, unknown> | null;
+  // Pedido de ajuste do revisor (motor fotográfico) — gera de novo aplicando a nota.
+  photoAdjust?: string;
 }): Promise<HiveVisualResult> {
   const text = params.text.trim();
   if (!text) throw new Error('Sem texto pra compor a imagem.');
@@ -72,33 +78,38 @@ export async function generateHiveImage(params: {
       text, highlight, canvas: CANVAS, diagram: decision.diagram ?? null,
     });
   } else if (recipe.manifestacao_id === 'M02') {
-    // Gera a CENA: Marcos DENTRO de um ambiente real (prancha = estilo, foto real
-    // = likeness). É o que dá o "cenário" — a foto crua era estúdio preto ("paia").
-    const place: M02Place = 'esquerda';
-    let likeness = decision.asset?.url;
-    if (!likeness) {
-      const photos = await listMarcosPhotos().catch(() => []);
-      likeness = photos[0]?.url;
+    // MOTOR FOTOGRÁFICO DO MARCOS (docs/fotografia/01–06): estilo F01–F04,
+    // identidade travada pelas referências por nível, portões de qualidade e
+    // aprovação humana. Menor fabricação: se o texto pede prova real (ou nenhum
+    // estilo foi aprovado ainda), usa uma FOTO REAL dele — nunca inventa.
+    const prev = (params.previousDecision?.asset ?? null) as { url?: string; photo_generation_id?: string; espaco_texto?: string; width?: number; height?: number; origin?: string } | null;
+    let asset: { url: string; width: number | null; height: number | null; espaco_texto: string; texto_cor: string; origin: string; preComposed?: boolean };
+    let photoMeta: Record<string, unknown> = {};
+    if (params.seed && !params.forceBg && !params.photoAdjust && prev?.url && prev.photo_generation_id) {
+      asset = { url: prev.url, width: prev.width ?? null, height: prev.height ?? null, espaco_texto: prev.espaco_texto ?? 'esquerda', texto_cor: 'claro', origin: 'generated', preComposed: true };
+      photoMeta = { photo_generation_id: prev.photo_generation_id };
+    } else {
+      const r = await generateMarcosPhoto({ text: [params.context, text].filter(Boolean).join('\n\n'), postId: params.postId, adjustNote: params.photoAdjust });
+      if (r.status === 'generated' && r.generation.image_url) {
+        const g = r.generation;
+        const url = g.image_url as string;
+        const dims = await imageDims(url).catch(() => ({ w: 0, h: 0 }));
+        asset = { url, width: dims.w || null, height: dims.h || null, espaco_texto: TEXT_SPACE_TO_PLACE[g.text_space] ?? 'esquerda', texto_cor: 'claro', origin: 'generated', preComposed: true };
+        photoMeta = { photo_generation_id: g.id, photo_style: g.style_id, photo_variant: g.variant_id, photo_auto_status: g.auto_status, photo_attempts: r.attempts.length };
+      } else {
+        const real = decision.asset?.url ? decision.asset : (await listMarcosPhotos().catch(() => [])).find((p) => p.is_active !== false && p.origin === 'real');
+        if (!real?.url) throw new Error('Sem foto real do Marcos para este post.');
+        const tags = (real as { semantic?: { espaco_texto?: string; texto_cor?: string } }).semantic;
+        asset = { url: real.url, width: (real as { width?: number }).width ?? null, height: (real as { height?: number }).height ?? null,
+          espaco_texto: (decision.asset?.espaco_texto ?? tags?.espaco_texto ?? 'esquerda') as string, texto_cor: (decision.asset?.texto_cor ?? tags?.texto_cor ?? 'claro') as string, origin: 'real' };
+        photoMeta = { photo_origin: 'real', photo_fallback: r.status === 'needs_real_photo' ? `prova real: ${r.reason}` : 'nenhum estilo fotográfico aprovado ainda' };
+      }
     }
-    if (!likeness) throw new Error('Sem foto do Marcos pra compor a cena do M02.');
-    const cacheKey = `${params.postId}|${decision.variant}|${place}`;
-    if (params.forceBg) clearM02SceneCache(cacheKey);
-    const scene = await renderM02Scene({ variant: decision.variant, place, likenessUrls: [likeness], cacheKey });
-    // Sobe a cena pro Storage (URL pública -> não incha o fabric com dataUrl).
-    const mime = scene.dataUrl.slice(5, scene.dataUrl.indexOf(';'));
-    const { publicUrl } = await uploadDesignAsset(blobFromBase64(scene.dataUrl.split(',')[1], mime));
-    const asset = {
-      url: publicUrl, width: scene.width, height: scene.height,
-      espaco_texto: scene.place, texto_cor: 'claro', origin: 'generated', preComposed: true,
-    };
     slide = composeM02({
       recipe, colors: design.colors, spiralUrl: design.spiralUrl,
       text, subtitle: decision.subtitle ?? null, highlight, canvas: CANVAS, asset,
     });
-    (decision as Record<string, unknown>).asset = {
-      url: publicUrl, width: scene.width, height: scene.height,
-      origin: 'generated', espaco_texto: scene.place, scene: true,
-    };
+    (decision as Record<string, unknown>).asset = { ...asset, ...photoMeta };
   } else {
     // M01-D (Campo) e M01-E (Matéria) têm fundo de IA: se a biblioteca não tem
     // asset, gera um agora (senão fica placeholder). Demais M01 = sem imagem.

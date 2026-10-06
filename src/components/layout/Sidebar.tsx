@@ -27,7 +27,8 @@ import {
   Layers,
   Plus,
   Workflow,
-  BarChart3
+  BarChart3,
+  Camera
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BeeLogo } from '@/components/shared/BeeLogo';
@@ -69,6 +70,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/arsenal', label: 'Arsenal', icon: Boxes },
       { to: '/produtos', label: 'Produtos', icon: Package },
       { to: '/conhecimento', label: 'Conhecimento', icon: Database },
+      { to: '/hive/fotografia', label: 'Fotografia do Marcos', icon: Camera },
       { to: '/templates', label: 'Templates', icon: Paintbrush },
       { to: '/biblioteca', label: 'Biblioteca', icon: ImageIcon },
       { to: '/podcasts', label: 'Vídeos', icon: Mic },

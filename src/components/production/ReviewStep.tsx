@@ -1,5 +1,6 @@
 // Etapa 6 — TELAS 12, 12A, 12B, 12C: produção visual do ciclo, galeria, escolha
 // da proposta, edição/aprovação da peça e conclusão (→ programação).
+import { MarcosPhotoReview } from '@/components/hive/MarcosPhotoReview';
 import { isAvulso } from '@/lib/campaign/avulso';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -307,6 +308,7 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
   }
 
   const quote = (piece.carousel_text?.quote as string | undefined) ?? '';
+  const photoGenId = (piece.visual_decision as { asset?: { photo_generation_id?: string } } | null)?.asset?.photo_generation_id ?? null;
   return (
     <div className="space-y-5" data-testid="edit-view">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -324,6 +326,11 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
           )}
         </div>
       </div>
+      {!isApproved && photoGenId && (
+        <MarcosPhotoReview key={photoGenId} generationId={photoGenId} busy={!!busy} compact
+          onApprove={() => act('approve', async () => { const a = await approvePiece(piece); replacePiece(a); setView({ kind: 'approved', pieceId: a.id }); })}
+          onRegenerate={(note) => act('swap', async () => replacePiece(await swapPieceImage(currentUser!.id, piece, note)))} />
+      )}
       <div>
         <h1 className="font-display text-2xl font-bold">{unit?.content.title}</h1>
         <p className="text-sm text-muted-foreground">{piece.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} · {accountLabel(piece.account_id)} · Imagem{variant ? ` · ${variant}${variantNames[variant] ? ` ${variantNames[variant]}` : ''}` : ''}{isApproved ? ' · Aprovada' : ''}</p>

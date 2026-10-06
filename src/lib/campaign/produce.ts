@@ -11,6 +11,7 @@ import { edge, type HiveSeed, type GeneratedVariation } from '@/lib/edge';
 import { aiApi } from '@/lib/api';
 import { db } from '@/lib/db';
 import { cycleApi } from '@/lib/campaignApi';
+import { getPhotoGeneration, reviewMarcosPhoto } from '@/lib/hive/marcosPhoto';
 import type { AiVariation, CampaignCycle, Content, Idea, IdeaChannel, UserPost } from '@/types';
 
 export const AI_IMAGE_VARIANT = (v?: string) => v === 'M01-D' || v === 'M01-E' || (v?.startsWith('M02-') ?? false);
@@ -32,11 +33,12 @@ async function updatePiece(id: string, patch: Partial<UserPost>): Promise<UserPo
 }
 
 // Produz (ou refaz) o visual da peça com a Hive e grava.
-export async function renderPiece(userId: string, piece: UserPost, opts: { seed?: HiveSeed; forceBg?: boolean; approve?: boolean } = {}): Promise<UserPost> {
+export async function renderPiece(userId: string, piece: UserPost, opts: { seed?: HiveSeed; forceBg?: boolean; approve?: boolean; photoAdjust?: string } = {}): Promise<UserPost> {
   const text = (piece.carousel_text?.quote as string | undefined)?.trim() || piece.title || '';
   const r = await generateHiveImage({
     userId, postId: piece.id, text, platform: piece.platform as 'linkedin' | 'instagram',
     editorialSlug: piece.metadata?.editorial_slug as string | undefined, seed: opts.seed, forceBg: opts.forceBg,
+    context: piece.caption ?? undefined, previousDecision: piece.visual_decision as Record<string, unknown> | null, photoAdjust: opts.photoAdjust,
   });
   // O upload reusa o mesmo caminho (upsert): o ?v= força o navegador a buscar a
   // peça refeita em vez de mostrar a versão antiga do cache.
@@ -195,14 +197,20 @@ export async function editPieceText(userId: string, piece: UserPost, next: { quo
 }
 
 // 12C — "Mantenha tudo e troque apenas essa imagem": novo fundo, mesmo template.
-export async function swapPieceImage(userId: string, piece: UserPost): Promise<UserPost> {
-  return renderPiece(userId, piece, { seed: seedFromDecision(piece.visual_decision), forceBg: true });
+export async function swapPieceImage(userId: string, piece: UserPost, photoAdjust?: string): Promise<UserPost> {
+  return renderPiece(userId, piece, { seed: seedFromDecision(piece.visual_decision), forceBg: true, photoAdjust });
 }
 
 // 12C — aprovar a peça: aprova também a imagem de IA (a pessoa acabou de revisá-la)
 // e mede a edição humana (ai_reviews) contra a variação pristina.
 export async function approvePiece(piece: UserPost): Promise<UserPost> {
   const variant = (piece.visual_decision as { variant?: string } | null)?.variant;
+  // Foto do Marcos (motor fotográfico): aprovar a peça é a aprovação humana da foto.
+  const photoId = (piece.visual_decision as { asset?: { photo_generation_id?: string } } | null)?.asset?.photo_generation_id;
+  if (photoId) {
+    const g = await getPhotoGeneration(photoId).catch(() => null);
+    if (g?.review_status === 'pending') await reviewMarcosPhoto(photoId, 'approve').catch(console.error);
+  }
   const approved = await updatePiece(piece.id, {
     status: 'approved', image_status: 'approved', image_approved: true,
     metadata: { ...piece.metadata, review_stage: 'done', ...(AI_IMAGE_VARIANT(variant) ? { bg_approved: true } : {}) },

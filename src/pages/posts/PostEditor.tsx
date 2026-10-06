@@ -28,6 +28,7 @@ import { isoToLocalInput, localInputToIso, nowLocalInput } from '@/lib/schedule'
 import { extractSlotText } from '@/lib/templates/extract';
 import { generateHiveImage } from '@/lib/hive/runVisual';
 import { bgGatePending } from '@/lib/hive/bgGate';
+import { MarcosPhotoReview } from '@/components/hive/MarcosPhotoReview';
 import { PostCoach } from '@/components/ai/PostCoach';
 import type { HiveSeed } from '@/lib/edge';
 import { toast } from 'sonner';
@@ -271,7 +272,7 @@ export function PostEditor() {
 
   // Regenera o fundo de IA mantendo o MESMO template (variante). Continua
   // pendente de aprovação depois — você aprova o fundo novo.
-  async function regenerateBg() {
+  async function regenerateBg(adjustNote?: string) {
     if (!post || !currentUser) return;
     const variant = (post.visual_decision as { variant?: string } | undefined)?.variant;
     if (!variant) { toast.error('Sem variante decidida pra regenerar o fundo.'); return; }
@@ -291,7 +292,7 @@ export function PostEditor() {
         userId: currentUser.id, postId: post.id, text: frase,
         platform: post.platform as 'linkedin' | 'instagram',
         editorialSlug: post.metadata?.editorial_slug as string | undefined,
-        seed, forceBg: true,
+        seed, forceBg: true, context: post.caption ?? undefined, photoAdjust: adjustNote,
       });
       await update(post.id, {
         carousel_fabric_json: [slide],
@@ -468,7 +469,7 @@ export function PostEditor() {
         text: frase,
         platform: post.platform as 'linkedin' | 'instagram',
         editorialSlug: post.metadata?.editorial_slug as string | undefined,
-        seed,
+        seed, context: post.caption ?? undefined, previousDecision: post.visual_decision as Record<string, unknown> | null,
       });
       await update(post.id, {
         carousel_fabric_json: [slide],
@@ -574,6 +575,9 @@ export function PostEditor() {
   const platformLabel = post.platform === 'instagram' ? 'Instagram' : 'LinkedIn';
   const isAlreadyPublished = !!post.published_url;
 
+  // Foto do Marcos gerada pelo motor fotográfico (M02): id da geração pra revisão.
+  const photoGenId = ((post?.visual_decision as { asset?: { photo_generation_id?: string } } | null)?.asset?.photo_generation_id) ?? null;
+
   return (
     <div className="flex h-full flex-col">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-card/60 px-6 py-3 backdrop-blur">
@@ -656,7 +660,7 @@ export function PostEditor() {
       </header>
 
       {/* Portão do fundo de IA (M01-D Campo / M01-E Matéria): revisar antes de publicar. */}
-      {bgGatePending(post) && (
+      {bgGatePending(post) && !photoGenId && (
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/40 bg-amber-500/10 px-6 py-2.5">
           <div className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400">
             <Wand2 className="h-4 w-4 shrink-0" />
@@ -676,6 +680,14 @@ export function PostEditor() {
               <CheckCircle2 className="h-4 w-4" /> Aprovar imagem
             </Button>
           </div>
+        </div>
+      )}
+
+      {/* Foto do Marcos (motor fotográfico): revisão lado a lado com as referências. */}
+      {bgGatePending(post) && photoGenId && (
+        <div className="border-b border-amber-500/40 bg-amber-500/5 px-6 py-3">
+          <p className="mb-2 text-xs font-semibold text-amber-700 dark:text-amber-400">Foto do Marcos gerada por IA — toda imagem gerada precisa da sua aprovação antes de publicar.</p>
+          <MarcosPhotoReview key={photoGenId} generationId={photoGenId} busy={bgBusy} onApprove={approveBg} onRegenerate={(note) => regenerateBg(note)} />
         </div>
       )}
 

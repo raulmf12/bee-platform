@@ -35,6 +35,7 @@ import { HiveTesteM01 } from '@/pages/hive/HiveTesteM01'; // TEMP: apagar depois
 import { Custos } from '@/pages/custos/Custos';
 import { ImageLab } from '@/pages/labs/ImageLab';
 import { Pipeline } from '@/pages/pipeline/Pipeline';
+import { PhotoEngine } from '@/pages/hive/PhotoEngine';
 import { Performance } from '@/pages/desempenho/Performance';
 import { AccountsCompare } from '@/pages/desempenho/AccountsCompare';
 import { OneContent } from '@/pages/criar/OneContent';
@@ -124,6 +125,7 @@ export default function App() {
           <Route path="hive/preview" element={<HivePreview />} />
           <Route path="hive/assets" element={<HiveAssets />} />
           <Route path="hive/marcos" element={<HiveMarcos />} />
+          <Route path="hive/fotografia" element={<PhotoEngine />} />
           <Route path="hive/convite" element={<HiveConvite />} />
           <Route path="hive/teste-m02" element={<HiveTesteM02 />} /> {/* TEMP: apagar depois */}
           <Route path="hive/teste-m01" element={<HiveTesteM01 />} /> {/* TEMP: apagar depois */}
