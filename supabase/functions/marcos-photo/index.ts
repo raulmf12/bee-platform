@@ -104,7 +104,7 @@ async function generate(userId: string, apiKey: string, input: Row) {
   }
   if (plan.status === 'needs_real_photo') return { status: 'needs_real_photo', plan };
 
-  const { refs, comparison } = pickReferences(plan, ctx.refs);
+  const { refs, comparison } = pickReferences(plan, ctx.refs);  // plan inclui wardrobe
   if (refs.length < 2) throw new Error('Referências insuficientes para preservar a identidade (Constituição §4.4).');
   const prompt = buildPhotoPrompt(plan, refs, { adjustNote: input.adjust_note, previousFailure: input.previous_failure });
   const images = await Promise.all(refs.map((r) => b64(r.url)));

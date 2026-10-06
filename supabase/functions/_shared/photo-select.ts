@@ -79,8 +79,16 @@ export function planPhoto(input: {
 }): PhotoPlan {
   const s = normalizeSemantics(input.reading.semantics);
   const a0 = input.refs.filter((r) => r.priority === 'A0').length;
-  const bodyAllowed = a0 > 0;
-  const sufficiency = { a0, body_allowed: bodyAllowed, note: bodyAllowed ? undefined : 'Sem referências A0 (aparência atual de 23/09/2026): só enquadramentos de rosto/busto (Constituição §4.4 — menor reconstrução).' };
+  // Corpo: as A0 (23/09/2026) prevalecem; sem elas, por decisão do produtor, valem as
+  // fotos de meio corpo da biblioteca. Sem nenhuma das duas → só rosto/busto (§4.4).
+  const libraryBody = input.refs.some((r) => r.priority !== 'D' && r.roles.includes('mid_body'));
+  const bodyAllowed = a0 > 0 || libraryBody;
+  const sufficiency = {
+    a0, body_allowed: bodyAllowed,
+    note: a0 > 0 ? undefined : libraryBody
+      ? 'Sem fotos A0: o corpo vem das fotos de meio corpo da biblioteca.'
+      : 'Sem referências de corpo: só enquadramentos de rosto/busto (Constituição §4.4 — menor reconstrução).',
+  };
   const reasons: string[] = [];
   const penalties: string[] = [];
   const base = {
@@ -152,12 +160,16 @@ const has = (r: AvailableRef, role: string) => r.roles.includes(role);
 // Até `max` referências humanas, na ordem de prioridade do perfil: A0 (rosto atual
 // + corpo do mesmo ângulo quando o corpo aparece), A (rosto + expressão), B/C
 // (apoio), D (só fala/anatomia). Devolve também o conjunto da COMPARAÇÃO lado a lado.
-export function pickReferences(plan: Pick<PhotoPlan, 'crop' | 'expression' | 'gaze'>, refs: AvailableRef[], max = 5) {
+export function pickReferences(plan: Pick<PhotoPlan, 'crop' | 'expression' | 'gaze'> & { wardrobe?: string }, refs: AvailableRef[], max = 5) {
   const out: AvailableRef[] = [];
   const add = (r?: AvailableRef) => { if (r && !out.includes(r) && out.length < max) out.push(r); };
   const byKey = (k: string) => refs.find((r) => r.key === k);
+  // Roupa da cena → prefere referências com a mesma roupa (consistência de figurino).
+  const wardRole = plan.wardrobe === 'camiseta_preta' ? 'black_tshirt' : plan.wardrobe === 'camisa_azul_clara' ? 'light_blue_shirt' : null;
+  const pref = (list: AvailableRef[]) => (wardRole ? [...list.filter((r) => has(r, wardRole)), ...list.filter((r) => !has(r, wardRole))] : list);
   const a0 = refs.filter((r) => r.priority === 'A0');
   const body = BODY_CROPS.includes(plan.crop);
+  const libraryBody = pref(refs.filter((r) => r.priority !== 'D' && r.priority !== 'A0' && has(r, 'mid_body')));
   add(a0.find((r) => has(r, 'current_face_front')));
   add(a0.find((r) => has(r, 'current_face_three_quarter')));
   if (body) add(a0.find((r) => plan.crop === 'full_body' ? has(r, 'current_full_body_three_quarter_left') || has(r, 'current_full_body_front') : has(r, 'waist_definition') || has(r, 'current_torso')));
@@ -165,16 +177,16 @@ export function pickReferences(plan: Pick<PhotoPlan, 'crop' | 'expression' | 'ga
   const exprRefs = EXPRESSIONS[plan.expression].refs.map(byKey).filter(Boolean) as AvailableRef[];
   exprRefs.slice(0, 2).forEach(add);                        // a expressão pedida (até 2)
   add(byKey('HAR_0476'));                                   // A: ¾ / geometria do rosto
+  if (body && !a0.length) add(libraryBody[0]);              // corpo pela biblioteca (meio corpo, mesma roupa)
   exprRefs.slice(2).forEach(add);                           // demais da expressão (D só se sobrar)
-  // Mínimo de 4 referências de identidade: completa com rostos A (frontal/¾).
-  for (const r of refs.filter((x) => x.priority === 'A' && (has(x, 'face_front') || has(x, 'three_quarter') || has(x, 'face_geometry')))) { if (out.length >= 4) break; add(r); }
-  // D só como apoio de fala/anatomia, e só se sobrar espaço.
+  // Mínimo de 4 referências de identidade: completa com rostos (A, depois biblioteca com a mesma roupa).
+  for (const r of pref(refs.filter((x) => (x.priority === 'A' || x.priority === 'B') && (has(x, 'face_front') || has(x, 'three_quarter') || has(x, 'face_geometry'))))) { if (out.length >= 4) break; add(r); }
   const human = out.filter((r) => r.priority !== 'D' || plan.expression === 'E05' || plan.expression === 'E04');
   const comparison = {
     front: a0.find((r) => has(r, 'current_face_front')) ?? byKey('HAR_0472') ?? null,
     three_quarter: a0.find((r) => has(r, 'current_face_three_quarter')) ?? byKey('HAR_0476') ?? null,
-    expression: EXPRESSIONS[plan.expression].refs.map(byKey).find(Boolean) ?? null,
-    body: body ? (a0.find((r) => has(r, 'body_proportions')) ?? null) : null,
+    expression: exprRefs[0] ?? null,
+    body: body ? (a0.find((r) => has(r, 'body_proportions')) ?? libraryBody[0] ?? null) : null,
   };
   return { refs: human, comparison };
 }
@@ -213,10 +225,12 @@ export function buildPhotoPrompt(plan: PhotoPlan, refs: AvailableRef[], opts: { 
     `Scene: ${v.scene} Environment: ${ENVIRONMENTS[plan.environment] ?? plan.environment}.`,
     v.people ? `Other people: ${v.people}. They are editorial, not identifiable, never look at the camera, have coherent gaze and natural bodies; no names, badges or uniforms.` : 'Marcos is the only person in the frame.',
     `Framing: ${v.framing}. ${CROP_TEXT[plan.crop]}. ${SPACE_TEXT[plan.text_space]}. Do not crop joints accidentally; never place text area over eyes, mouth or relevant hands.`,
-    plan.sufficiency.body_allowed ? '' : 'IMPORTANT: there are no current full-body references, so his body proportions must not be reconstructed — keep the framing tight (no waist, no hands, no legs).',
+    plan.sufficiency.body_allowed ? '' : 'IMPORTANT: there are no body references, so his body proportions must not be reconstructed — keep the framing tight (no waist, no hands, no legs).',
+    plan.sufficiency.body_allowed && plan.sufficiency.a0 === 0 && BODY_CROPS.includes(plan.crop) ? 'Body: derive his body from the half-body reference photos, keeping today\'s build — average, leaner than older photos, natural waist and abdomen, no athletic definition; legs and full height must stay proportionate to that torso.' : '',
     `Camera: ${st.lens}.`,
     `Light and color: ${st.light}.`,
     `Wardrobe: ${WARDROBE[plan.wardrobe]?.prompt ?? plan.wardrobe}. No invented accessories (no glasses, watch, badge or jewelry unless in the references).`,
+    'Hands: anatomically correct with five natural fingers; when hands are not essential to the action keep them relaxed, partially hidden or softly out of focus rather than prominent. Any page, notebook, book, screen or board: its content must be illegible — seen at an angle and out of focus, abstract strokes only, never letter-like glyphs in focus. Background: no signs, plaques, posters or lettering of any kind.',
     'Constraints: exact recognizable identity and current proportions; natural skin texture; anatomically correct hands and fingers; coherent gaze; physically plausible light, perspective, depth of field and contact; homogeneous grain and sharpness; imperfection preferable to sterility; visually indistinguishable from a real photograph; no text, letters, numbers, logos, brands or watermark anywhere in the image.',
     `Avoid: ${[...HARD_AVOID, ...st.avoid, ...v.avoid].join('; ')}.`,
     opts.previousFailure ? `A previous attempt was REJECTED by the quality gate for: ${opts.previousFailure}. Fix exactly these problems.` : '',

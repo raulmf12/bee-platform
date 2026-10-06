@@ -28,7 +28,7 @@ test.describe('F12 · motor fotográfico do Marcos', () => {
     expect(g.model).toMatch(/gemini/);
     const [row] = await sql<Record<string, unknown>>(`select origin, producer_profile_version, style_id, variant_id, expression_id, wardrobe_id, environment_id, text_space, aspect, array_length(source_ref_keys,1) refs, auto_status, identity_status, review_status from photo_generations where id='${g.id}'`);
     console.log('REGISTRO', JSON.stringify(row));
-    expect(row).toMatchObject({ origin: 'gerada', producer_profile_version: 'marcos_piccini_v1.1', style_id: 'F01', review_status: 'pending' });
+    expect(row).toMatchObject({ origin: 'gerada', producer_profile_version: 'marcos_piccini_v1.1', style_id: (process.env.VARIANT ?? 'F01-B').slice(0, 3), review_status: 'pending' });
     const img = await page.request.get(g.image_url);
     if (process.env.SHOTS) writeFileSync(`${process.env.SHOTS}/marcos-${g.variant_id}.png`, await img.body());
     expect(e2eUser().id).toBeTruthy();
@@ -61,12 +61,13 @@ test.describe('F12 · motor fotográfico do Marcos', () => {
     await page.route('**/storage/v1/object/design/hive/refs/**', (r) => { refWrite++; return r.fulfill({ status: 200, contentType: 'application/json', body: '{"Key":"design/hive/refs/x.jpg"}' }); });
     await page.route('**/rest/v1/photo_references?on_conflict=*', (r) => r.request().method() === 'OPTIONS' ? r.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': '*' } }) : (refWrite++, r.fulfill({ status: 201, contentType: 'application/json', body: '[]' })));
     await page.goto('/hive/fotografia');
-    await expect(page.getByTestId('level-A')).toContainText('8 de 8');
-    await expect(page.getByTestId('level-D')).toContainText('2 de 2');
+    await expect(page.getByTestId('level-A')).toContainText('8 fotos');
+    await expect(page.getByTestId('level-D')).toContainText('4 fotos');
     await expect(page.getByTestId('level-A0')).toContainText('0 de 13');
-    await expect(page.getByTestId('a0-missing')).toContainText('Faltam as 13 fotos A0');
-    await expect(page.getByTestId('style-F02')).toContainText('F02-A Escrita e elaboração (precisa A0)');
-    await expect(page.getByTestId('board-F04')).toBeDisabled();
+    await expect(page.getByTestId('level-B')).toContainText('23 fotos');
+    await expect(page.getByTestId('a0-missing')).toContainText('corpo pelas fotos de meio corpo');
+    await expect(page.getByTestId('style-F02')).not.toContainText('precisa');
+    await expect(page.getByTestId('board-F04')).toBeEnabled();
 
     await page.getByTestId('ref-upload').setInputFiles([
       { name: '20260923_152032.jpg', mimeType: 'image/jpeg', buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]) },
@@ -77,8 +78,8 @@ test.describe('F12 · motor fotográfico do Marcos', () => {
     expect(refWrite).toBe(2);
 
     await page.getByTestId('board-F01').click();
-    await expect(page.getByTestId('style-F01').getByTestId('marcos-photo-review')).toHaveCount(3, { timeout: 30_000 });
-    expect(calls.filter((c) => c.action === 'generate').map((c) => c.force_variant)).toEqual(['F01-A', 'F01-B', 'F01-C']);
+    await expect(page.getByTestId('style-F01').getByTestId('marcos-photo-review')).toHaveCount(4, { timeout: 30_000 });
+    expect(calls.filter((c) => c.action === 'generate').map((c) => c.force_variant)).toEqual(['F01-A', 'F01-B', 'F01-C', 'F01-D']);
     expect(calls.filter((c) => c.action === 'generate').every((c) => c.purpose === 'validation_board')).toBe(true);
     const first = page.getByTestId('style-F01').getByTestId('marcos-photo-review').first();
     await expect(first).toContainText('Portões: revisar');
@@ -89,7 +90,7 @@ test.describe('F12 · motor fotográfico do Marcos', () => {
     await expect(page.getByTestId('style-F01').getByTestId('style-status')).toHaveText('Aprovado');
     const { id: userId } = e2eUser();
     const [ap] = await sql<{ status: string; n: number }>(`select status, array_length(board_generation_ids,1) n from photo_style_approvals where user_id='${userId}' and style_id='F01'`);
-    expect(ap).toEqual({ status: 'approved', n: 3 });
+    expect(ap).toEqual({ status: 'approved', n: 4 });
   });
 
   test('produção: peça com o Marcos usa o motor, mostra a revisão lado a lado e aprovar registra a foto', async ({ page }) => {

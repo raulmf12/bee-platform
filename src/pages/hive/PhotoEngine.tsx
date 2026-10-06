@@ -21,9 +21,9 @@ interface RefRow { id: string; ref_key: string; priority: RefPriority; roles: st
 interface Approval { style_id: string; status: 'draft' | 'approved' | 'rejected'; notes: string | null; decided_at: string | null; board_generation_ids: string[] }
 
 const LEVELS: Array<{ p: RefPriority; title: string; hint: string }> = [
-  { p: 'A0', title: 'A0 · Aparência atual (23/09/2026)', hint: 'Define idade, cabelo, barba, peso, cintura e proporções do corpo. Sem elas, o motor só gera rosto e busto.' },
+  { p: 'A0', title: 'A0 · Aparência atual (23/09/2026) — opcional', hint: 'Se enviadas, definem peso, cintura e proporções do corpo. Sem elas, o corpo vem das fotos de meio corpo da biblioteca.' },
   { p: 'A', title: 'A · Identidade e expressões', hint: 'Rosto, olhos, cabelo, barba e as expressões E01–E04.' },
-  { p: 'B', title: 'B · Apoio (camiseta preta)', hint: 'Corpo superior e roupa contemporânea.' },
+  { p: 'B', title: 'B · Biblioteca (rosto, meio corpo e roupa)', hint: 'Rostos de frente e ¾ e meio corpo, em camisa clara e camiseta preta — usadas pela roupa da cena.' },
   { p: 'C', title: 'C · Luz natural e contexto externo', hint: 'Postura sentada, ambiente externo, reflexão.' },
   { p: 'D', title: 'D · Fala (estado visual antigo)', hint: 'Só anatomia e expressão em fala — nunca cabelo/barba/corpo.' },
 ];
@@ -58,7 +58,9 @@ export function PhotoEngine() {
   useEffect(() => { void load(); }, [load]);
 
   const a0 = (refs ?? []).filter((r) => r.priority === 'A0').length;
-  const bodyAllowed = a0 > 0;
+  // Corpo: A0 se houver; senão, as fotos de meio corpo da biblioteca (decisão do produtor).
+  const libraryBody = (refs ?? []).some((r) => r.priority !== 'D' && r.roles.includes('mid_body'));
+  const bodyAllowed = a0 > 0 || libraryBody;
   const missingA0 = REFERENCE_MANIFEST.filter((m) => m.priority === 'A0' && !(refs ?? []).some((r) => r.ref_key === m.key));
   const boardOf = useMemo(() => (style: string) => {
     const latest = new Map<string, PhotoGeneration>();
@@ -93,7 +95,7 @@ export function PhotoEngine() {
   // Prancha de validação: uma imagem por variação disponível do estilo.
   async function runBoard(style: string) {
     const variants = STYLE_VARIANTS[style].filter((v) => bodyAllowed || !BODY_VARIANTS.has(v));
-    if (!variants.length) { toast.info('Este estilo precisa das referências A0 (corpo atual).'); return; }
+    if (!variants.length) { toast.info('Este estilo precisa de fotos de corpo do Marcos.'); return; }
     for (const [i, v] of variants.entries()) {
       setRunning({ style, variant: v, done: i, total: variants.length });
       try { await generateMarcosPhoto({ text: BOARD_TEXT[style], forceVariant: v, purpose: 'validation_board' }); }
@@ -126,16 +128,17 @@ export function PhotoEngine() {
       {/* 1. Referências */}
       <section className="space-y-3" aria-labelledby="h-refs">
         <div className="flex flex-wrap items-end justify-between gap-2">
-          <h2 id="h-refs" className="font-display text-lg font-semibold">Referências ({refs?.length ?? '…'} de {REFERENCE_MANIFEST.length})</h2>
+          <h2 id="h-refs" className="font-display text-lg font-semibold">Referências ({refs?.length ?? '…'} fotos)</h2>
           <label className={cn('inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-accent/5', uploading && 'opacity-60')}>
             {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />} Enviar fotos de referência
             <input type="file" accept="image/*" multiple className="hidden" disabled={uploading} onChange={(e) => void upload(e.target.files)} data-testid="ref-upload" />
           </label>
         </div>
-        {!bodyAllowed && refs && (
-          <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4 text-sm" data-testid="a0-missing">
-            <p className="font-semibold text-amber-700 dark:text-amber-400">Faltam as {missingA0.length} fotos A0 (aparência atual de 23/09/2026).</p>
-            <p className="text-muted-foreground">Sem elas o perfil proíbe deduzir corpo, peso e cintura das fotos antigas — o motor gera só rosto e busto (F01-A, F01-B, F01-C). Envie os arquivos com o nome original ({missingA0.slice(0, 2).map((m) => `${m.key}.jpg`).join(', ')}…) que cada um é reconhecido sozinho.</p>
+        {refs && a0 === 0 && (
+          <div className="rounded-xl border bg-secondary/30 p-3 text-sm" data-testid="a0-missing">
+            {bodyAllowed
+              ? <p className="text-muted-foreground">Usando as fotos da biblioteca: rosto pelas referências A/B e corpo pelas fotos de meio corpo. As fotos A0 (23/09/2026) são opcionais — se forem enviadas, passam a definir o corpo.</p>
+              : <p className="text-amber-700 dark:text-amber-400">Sem fotos de corpo na biblioteca: o motor gera só rosto e busto (F01-A, F01-B, F01-C).</p>}
           </div>
         )}
         <div className="space-y-3">
@@ -143,7 +146,7 @@ export function PhotoEngine() {
             const items = (refs ?? []).filter((r) => r.priority === l.p);
             return (
               <div key={l.p} className="rounded-xl border bg-card p-3" data-testid={`level-${l.p}`}>
-                <p className="text-sm font-semibold">{l.title} <span className="font-normal text-muted-foreground">· {items.length} de {REFERENCE_MANIFEST.filter((m) => m.priority === l.p).length}</span></p>
+                <p className="text-sm font-semibold">{l.title} <span className="font-normal text-muted-foreground">· {l.p === 'A0' ? `${items.length} de 13` : `${items.length} foto${items.length === 1 ? '' : 's'}`}</span></p>
                 <p className="mb-2 text-xs text-muted-foreground">{l.hint}</p>
                 <div className="flex flex-wrap gap-2">
                   {items.sort((a, b) => a.ref_key.localeCompare(b.ref_key)).map((r) => (
@@ -179,7 +182,7 @@ export function PhotoEngine() {
                     </span>
                   </p>
                   <p className="text-xs italic text-muted-foreground">{STYLE_ESSENCE[st]}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Variações: {STYLE_VARIANTS[st].map((v) => `${v} ${VARIANT_NAMES[v]}${available.includes(v) ? '' : ' (precisa A0)'}`).join(' · ')}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Variações: {STYLE_VARIANTS[st].map((v) => `${v} ${VARIANT_NAMES[v]}${available.includes(v) ? '' : ' (precisa foto de corpo)'}`).join(' · ')}</p>
                 </div>
                 <Button size="sm" variant="outline" disabled={!!running || available.length === 0} onClick={() => void runBoard(st)} data-testid={`board-${st}`}>
                   {isRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}

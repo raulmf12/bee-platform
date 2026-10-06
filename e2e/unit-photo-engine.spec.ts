@@ -36,12 +36,24 @@ test.describe('unit · motor fotográfico do Marcos', () => {
     expect(sc.F01).toBeGreaterThan(sc.F02);
   });
 
-  test('regra de insuficiência: sem A0 só rosto/busto (F01-A/B/C), nunca corpo', () => {
-    const p = planPhoto({ text: 'O próximo passo', reading: reading({ orientacao_futuro: 0.95 }, { F04: 'F04-A' }), recent: [], refs: HAR });
-    expect(p.sufficiency).toMatchObject({ a0: 0, body_allowed: false });
+  test('corpo: sem A0, as fotos de meio corpo da biblioteca liberam o corpo; sem nenhuma, só rosto/busto', () => {
+    const lib = planPhoto({ text: 'O próximo passo', reading: reading({ orientacao_futuro: 0.95 }, { F04: 'F04-A' }), recent: [], refs: HAR });
+    expect(lib.sufficiency).toMatchObject({ a0: 0, body_allowed: true });
+    expect(lib.sufficiency.note).toContain('meio corpo da biblioteca');
+    expect(lib).toMatchObject({ style: 'F04', variant: 'F04-A', crop: 'full_body' });
+    const faceOnly = HAR.filter((r) => !r.roles.includes('mid_body'));
+    const p = planPhoto({ text: 'O próximo passo', reading: reading({ orientacao_futuro: 0.95 }, { F04: 'F04-A' }), recent: [], refs: faceOnly });
+    expect(p.sufficiency.body_allowed).toBe(false);
     expect(p.style).toBe('F01');
-    expect(['F01-A', 'F01-B', 'F01-C']).toContain(p.variant);
     expect(['bust', 'close']).toContain(p.crop);
+  });
+
+  test('referências pela roupa da cena + corpo da biblioteca', () => {
+    const black = (k: string, roles: string[]): AvailableRef => ({ key: k, priority: 'B', roles: [...roles, 'black_tshirt'], url: `https://x/${k}.jpg` });
+    const lib = [...HAR, black('HAR_0598', ['face_front', 'neutral']), black('HAR_0607', ['mid_body', 'three_quarter', 'crossed_arms'])];
+    const r = pickReferences({ crop: 'mid_body', expression: 'E04', gaze: 'off_camera', wardrobe: 'camiseta_preta' }, lib);
+    expect(r.refs.map((x) => x.key)).toEqual(['HAR_0472', 'HAR_0720', 'HAR_0721', 'HAR_0476', 'HAR_0615']);
+    expect(r.comparison.body?.key).toBe('HAR_0615');   // meio corpo com a MESMA roupa (camiseta preta)
   });
 
   test('antirrepetição: F01 em 2 dos 3 últimos perde força; variação, expressão e roupa variam', () => {
@@ -72,7 +84,7 @@ test.describe('unit · motor fotográfico do Marcos', () => {
   test('prompt segue o contrato do estilo + identidade travada', () => {
     const plan = planPhoto({ text: 'eu', reading: reading({ autoria: 0.9 }, { F01: 'F01-B' }), recent: [], refs: HAR });
     const prompt = buildPhotoPrompt(plan, pickReferences(plan, HAR).refs, { adjustNote: 'luz mais quente' });
-    for (const s of ['CROP: bust portrait', 'no current full-body references', 'Style: F01 Presença autoral', 'Variant: F01-B', 'IDENTITY LOCK (strict)', 'marcos_piccini_v1.1', 'Expression:', 'Avoid:', 'hand on chin', 'Reviewer adjustment request', 'aspect ratio 4:5', 'no text']) expect(prompt).toContain(s);
+    for (const s of ['CROP: bust portrait', 'Style: F01 Presença autoral', 'Variant: F01-B', 'IDENTITY LOCK (strict)', 'marcos_piccini_v1.1', 'Expression:', 'Avoid:', 'hand on chin', 'Reviewer adjustment request', 'aspect ratio 4:5', 'no text']) expect(prompt).toContain(s);
   });
 
   test('portões: verdade/identidade são hard fail; diversidade medida por código', () => {

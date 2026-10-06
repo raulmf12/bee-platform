@@ -40,3 +40,6 @@ e2e/.auth/
 test-results/
 playwright-report/
 blob-report/
+
+# worktrees de agentes (locais)
+.claude/worktrees/
