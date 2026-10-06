@@ -485,6 +485,10 @@ export const edge = {
   }> {
     return postEdge('instagram-import', input);
   },
+  // Atribui cada anúncio (meta_ads) à conta do Instagram que o veiculou.
+  async metaAdsAttribution(input: { force?: boolean } = {}): Promise<{ success: boolean; ads: number; creative: number; page: number; unresolved: number; errors: string[] }> {
+    return postEdge('meta-ads-attribution', input);
+  },
   async metaAdsSync(input: { force_structure?: boolean } = {}): Promise<{
     success: boolean; status: string; done: boolean; queue_left: number; chunks: number; rows: number; summary?: Record<string, unknown>; error?: string;
   }> {

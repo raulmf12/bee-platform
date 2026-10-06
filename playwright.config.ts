@@ -6,7 +6,8 @@ import { loadEnv } from './e2e/helpers/env';
 // separa os dados dele dos do Marcos. Chamadas de IA são mockadas por padrão
 // (determinístico e sem custo); a suíte "live" (@live) usa IA de verdade.
 loadEnv();
-const PORT = 5199;
+// E2E_PORT permite rodar a suíte de outro checkout (worktree) sem reaproveitar o servidor de outra cópia.
+const PORT = Number(process.env.E2E_PORT ?? 5199);
 
 export default defineConfig({
   testDir: './e2e',

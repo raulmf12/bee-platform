@@ -1,6 +1,7 @@
 // COMPARATIVO DE CONTAS do Instagram — sobre o histórico importado de cada uma:
 // retrato da conta, critérios lado a lado, evolução mensal, formatos, horários,
-// melhores posts, público e qual conta a Hive recomenda.
+// melhores posts, público e qual conta a Hive recomenda — e o TRÁFEGO PAGO (Meta
+// Ads) de cada conta, atribuído pelo anúncio (PaidTrafficSection).
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { format } from 'date-fns';
@@ -11,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { useOps } from '@/lib/campaign/useOps';
 import { accountStats, compareAccounts, type AccountStats } from '@/lib/campaign/accountCompare';
 import { importInstagramHistory } from '@/lib/instagramImport';
+import { PaidTrafficSection } from '@/components/performance/PaidTrafficSection';
 import type { SocialAccount } from '@/types';
 import { cn } from '@/lib/utils';
 
@@ -32,6 +34,9 @@ export function AccountsCompare() {
   const stats = useMemo(() => igAccounts.map((a) => accountStats(a, posts, ops?.metrics ?? [])), [igAccounts, posts, ops]);
   const verdict = useMemo(() => (stats.length >= 2 ? compareAccounts(stats) : null), [stats]);
   const notImported = stats.filter((s) => !s.snap.imported_at);
+  // Tráfego pago: contas pelo id do Instagram (a atribuição dos anúncios usa esse id) + orgânico pra cruzar.
+  const paidAccounts = useMemo(() => igAccounts.map((a, i) => ({ id: a.instagram_business_account_id ?? '', username: stats[i]?.username ?? a.label, series: i })).filter((x) => x.id), [igAccounts, stats]);
+  const organicRefs = useMemo(() => stats.map((s) => ({ username: s.username, followers: s.followers, posts: s.posts, avgInteractions: s.avgInteractions })), [stats]);
 
   async function importNow(a: SocialAccount) {
     setImporting(a.id);
@@ -142,6 +147,8 @@ export function AccountsCompare() {
               </section>
             ))}
           </div>
+
+          <PaidTrafficSection accounts={paidAccounts} organic={organicRefs} />
         </>
       )}
 
