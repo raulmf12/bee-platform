@@ -7,7 +7,7 @@ const EMBED_DIM = 1536;
 export async function embedText(
   apiKey: string,
   text: string,
-  taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY' = 'RETRIEVAL_DOCUMENT',
+  taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY' | 'SEMANTIC_SIMILARITY' = 'RETRIEVAL_DOCUMENT',
 ): Promise<number[]> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:embedContent?key=${apiKey}`;
   const body = {
@@ -34,7 +34,7 @@ export async function embedText(
 export async function embedBatch(
   apiKey: string,
   texts: string[],
-  taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY' = 'RETRIEVAL_DOCUMENT',
+  taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY' | 'SEMANTIC_SIMILARITY' = 'RETRIEVAL_DOCUMENT',
 ): Promise<number[][]> {
   // Gemini nao tem batch sincrono pra embedding — fazemos em paralelo com limite.
   const CONCURRENCY = 4;

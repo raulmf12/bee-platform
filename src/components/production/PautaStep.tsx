@@ -119,6 +119,11 @@ export function PautaStep({ campaign, cycle, ideas, editorials, accounts, onChan
                   <span className="text-muted-foreground" data-testid="idea-pieces">{idea.channels.length} peça{idea.channels.length > 1 ? 's' : ''} sugerida{idea.channels.length > 1 ? 's' : ''}</span>
                   {idea.origin === 'user' && <span className="rounded bg-secondary px-1.5 py-0.5">Sua ideia</span>}
                 </p>
+                {idea.repeat_of && (
+                  <p className="mt-2 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-800 dark:text-amber-300" data-testid="idea-repeat">
+                    Parecida com um post de {idea.repeat_of.said_at ? new Date(idea.repeat_of.said_at).toLocaleDateString('pt-BR') : 'antes'}: “{idea.repeat_of.text.split(' — ')[0].slice(0, 140)}”. {idea.repeat_of.reason} Considere trocar a ideia.
+                  </p>
+                )}
                 <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs" data-testid="idea-acj">
                   <AcjChip id={idea.acj_primary} />
                   {idea.acj_secondary && <AcjChip id={idea.acj_secondary} secondary size="xs" />}

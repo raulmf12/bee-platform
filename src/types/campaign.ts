@@ -161,6 +161,8 @@ export interface Idea {
   acj_role?: string | null;
   acj_rationale?: string | null;
   acj_confidence?: string | null;
+  // Guardião anti-repetição: a ideia ainda parece repetir algo já publicado.
+  repeat_of?: { text: string; said_at: string | null; reason: string } | null;
   created_at: string;
   updated_at: string;
 }
@@ -186,6 +188,7 @@ export interface ContentMetadata {
   headline_type?: string | null;
   analogy?: string | null;
   validation_post_id?: string;
+  repeat?: { verdict: string; reason: string; retried: boolean; of_text: string | null; of_date: string | null } | null;
   [k: string]: unknown;
 }
 

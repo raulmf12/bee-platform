@@ -216,4 +216,46 @@ test.describe('F13 · ACJ — fluxo', () => {
     const [r] = await sql<{ movement_evidence: string }>(`select movement_evidence from acj_signal_readings where post_id='${post.id}'`);
     expect(r.movement_evidence).toBe('partial');
   });
+
+  test('anti-repetição: ideia que ainda parece repetida aparece com aviso na pauta', async ({ page }) => {
+    const { mockEdge } = await import('./helpers/mocks');
+    const acc = await seedAccounts();
+    const camp = await seedCampaign({ weeks: 4, accountIds: [acc.linkedin], cadence: [2] });
+    await mockEdge(page, 'cycle-pauta', () => ({ success: true, ideas: [
+      { title: 'Ideia nova', summary: 's', strategic_function: 'presenca', editorial_slug: 'provocacao-de-crenca', channels: [{ account_id: acc.linkedin, platform: 'linkedin' }], suggested_pieces: 1, rationale: 'r' },
+      { title: 'Ideia repetida', summary: 's', strategic_function: 'presenca', editorial_slug: 'provocacao-de-crenca', channels: [{ account_id: acc.linkedin, platform: 'linkedin' }], suggested_pieces: 1, rationale: 'r',
+        repeat_of: { text: 'Buscamos ferramentas complexas para evitar conversas simples. — legenda', said_at: '2026-09-14T12:00:00Z', reason: 'Mesma tese com sinônimos.' } },
+    ] }));
+    await page.goto(`/producao?campaign=${camp.id}&cycle=${camp.cycleIds[0]}`);
+    await page.getByRole('button', { name: /Confirmar planejamento e gerar ideias/ }).click();
+    await expect(page.getByTestId('idea-repeat')).toHaveCount(1);
+    await expect(page.getByTestId('idea-repeat')).toContainText('Buscamos ferramentas complexas');
+    const rows = await sql<{ title: string; repeat_of: { reason: string } | null }>(`select title, repeat_of from ideas where cycle_id='${camp.cycleIds[0]}' order by position`);
+    expect(rows.find((r) => r.title === 'Ideia repetida')?.repeat_of?.reason).toBe('Mesma tese com sinônimos.');
+    expect(rows.find((r) => r.title === 'Ideia nova')?.repeat_of).toBeNull();
+  });
+
+  test('LinkedIn: importar histórico (scraper) → base de posts → memória', async ({ page }) => {
+    const { mockEdge } = await import('./helpers/mocks');
+    const calls: Array<Record<string, unknown>> = [];
+    const mem: Array<Record<string, unknown>> = [];
+    let polls = 0;
+    await mockEdge(page, 'linkedin-import', (b) => {
+      if (b.action === 'start') return { success: true, status: 'RUNNING', run_id: 'r1' };
+      polls++;
+      return polls < 2 ? { success: true, status: 'RUNNING', done: false } : { success: true, status: 'SUCCEEDED', done: true, found: 120, inserted: 118, skipped: 2 };
+    }, calls);
+    let pending = 2;
+    await mockEdge(page, 'content-memory', () => ({ success: true, added: 40, updated: 0, pending: Math.max(0, --pending) }), mem);
+    await seedAccounts();
+    await page.goto('/configuracoes');
+    await page.getByRole('tab', { name: 'Contas' }).click();
+    page.once('dialog', (d) => d.accept('https://www.linkedin.com/in/marcospiccini'));
+    await page.getByTestId('li-import-history').click();
+    await expect(page.getByTestId('li-import-progress')).toBeVisible();
+    await expect(page.getByText(/120 posts encontrados · 118 novos/)).toBeVisible({ timeout: 30_000 });
+    expect(calls[0]).toMatchObject({ action: 'start', profile: 'https://www.linkedin.com/in/marcospiccini' });
+    expect(mem.length).toBeGreaterThanOrEqual(2);
+  });
 });
+

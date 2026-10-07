@@ -395,10 +395,17 @@ async function retrieveContext(
   themeQuery: string,
   briefing: string | undefined,
   userId: string,
+  diversify = false,
 ): Promise<string> {
   const brief = briefing?.trim();
   const focused = brief && brief.length >= 5 ? await matchChunks(apiKey, brief, userId, RAG_TOP_K) : [];
-  const theme = await matchChunks(apiKey, themeQuery, userId, focused.length ? 4 : RAG_TOP_K);
+  let theme = await matchChunks(apiKey, themeQuery, userId, diversify ? 14 : (focused.length ? 4 : RAG_TOP_K));
+  // Anti-repetição: a query temática é parecida a cada geração e trazia SEMPRE os
+  // mesmos trechos (mesmos casos/imagens nos posts). Mantém os 2 melhores e sorteia o resto.
+  if (diversify && theme.length > 4) {
+    const rest = theme.slice(2).map((r) => ({ r, k: Math.random() })).sort((a, b) => a.k - b.k).map((x) => x.r);
+    theme = [...theme.slice(0, 2), ...rest.slice(0, focused.length ? 2 : 5)];
+  }
 
   const seen = new Set<string>();
   const merged: RagHit[] = [];
@@ -1219,7 +1226,10 @@ Deno.serve(async (req: Request) => {
       ctx.avatars[0]?.sofrimento,
       referencePost?.carousel_text?.quote,
     ].filter(Boolean).join(' . ');
-    const ragContext = await retrieveContext(apiKey, themeQuery, input.briefing, userId);
+    // Campanhas: a busca focada é a PRÓPRIA IDEIA (antes era o briefing = contexto fixo
+    // da campanha → todos os conteúdos da campanha recebiam os mesmos fatos e repetiam casos).
+    const ragFocus = input.mother_idea ? [input.mother_idea.title, input.mother_idea.direction].filter(Boolean).join('. ') : input.briefing;
+    const ragContext = await retrieveContext(apiKey, themeQuery, ragFocus, userId, !!input.mother_idea);
 
     // Catalogo de templates visuais (so Instagram): faz o modelo pensar FORMA +
     // conteudo juntos e escolher o template com variedade. LinkedIn: null (M01-A fixo).

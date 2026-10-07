@@ -14,6 +14,7 @@ import {
 import { callGeminiJson, fetchRest } from '../_shared/gemini.ts';
 import { retrieveContext } from '../_shared/bee-context.ts';
 import { acjCatalog, acjDef, normAcj, type AcjId } from '../_shared/acj.ts';
+import { judgeRepetition, neighborsFor, recentSaid, repeatedStructures, syncMemory } from '../_shared/content-memory.ts';
 
 type Fn = 'presenca' | 'posicionamento' | 'autoridade' | 'relacionamento' | 'produtos';
 const FNS: Fn[] = ['presenca', 'posicionamento', 'autoridade', 'relacionamento', 'produtos'];
@@ -41,6 +42,7 @@ export interface OutIdea {
   title: string; summary: string; strategic_function: Fn; editorial_slug: string;
   channels: Array<{ account_id: string; platform: 'linkedin' | 'instagram' }>; suggested_pieces: number; rationale: string;
   acj_primary: AcjId | null; acj_secondary: AcjId | null; acj_role: string; acj_rationale: string;
+  repeat_of?: { text: string; said_at: string | null; reason: string } | null;
 }
 
 // ACJ primária: mesma lógica das funções — respeita a escolha da IA quando ela
@@ -148,11 +150,17 @@ Deno.serve(async (req: Request) => {
     ]);
 
     const edSlugs = new Set(editorials.map((e) => e.slug));
-    const avoid = [
+    // Memória: TUDO o que já foi dito (inclui histórico importado do Instagram/LinkedIn,
+    // que tem a data original e ficava fora da janela de 90 dias por created_at).
+    await syncMemory(apiKey, userId, 30).catch((e) => console.warn('[cycle-pauta] memória:', (e as Error).message));
+    const said = await recentSaid(userId, 70).catch(() => [] as Array<{ text: string; said_at: string | null }>);
+    const tics = repeatedStructures(said.slice(0, 30).map((r) => r.text));
+    const avoid = [...new Set([
       ...cycleIdeas.map((i) => i.title),
       ...contents.map((c) => c.title),
+      ...said.map((r) => r.text.split(' — ')[0]),
       ...recent.map((r) => r.carousel_text?.quote ?? r.title ?? '').filter(Boolean),
-    ].slice(0, 80);
+    ].map((t) => t.trim()).filter(Boolean))].slice(0, 110);
 
     // Quantas e quais funções pedir.
     let needs: Array<{ function: Fn; count: number }>;
@@ -201,7 +209,8 @@ Deno.serve(async (req: Request) => {
       arsenal.length ? `\nÂNGULOS DO ARSENAL (inspiração, não fonte de fatos):\n${arsenal.map((a) => `- ${a.title}${a.summary ? `: ${a.summary.slice(0, 110)}` : ''}`).join('\n')}` : '',
       backlog.length ? `\nIDEIAS DO BACKLOG DO AUTOR (pode aproveitar se couber):\n${backlog.map((b) => `- ${b.title}${b.summary ? `: ${b.summary}` : ''}`).join('\n')}` : '',
       rag ? `\nFATOS REAIS DO AUTOR:\n${rag}` : '',
-      avoid.length ? `\nNÃO REPITA estes temas/títulos recentes:\n${avoid.map((t) => `- ${t.slice(0, 120)}`).join('\n')}` : '',
+      avoid.length ? `\nJÁ PUBLICADO / JÁ NA PAUTA — NÃO repita a TESE, o CASO nem a FÓRMULA destes (trocar sinônimos ou o sujeito continua sendo repetição):\n${avoid.map((t) => `- ${t.slice(0, 120)}`).join('\n')}` : '',
+      tics.length ? `\nTIQUES RECENTES — evite nestes títulos:\n${tics.map((t) => `- ${t}`).join('\n')}` : '',
       '',
       'Devolva JSON puro:',
       '{ "ideas": [ { "title": "...", "summary": "...", "strategic_function": "presenca|posicionamento|autoridade|relacionamento|produtos", "editorial_slug": "...", "platforms": ["linkedin","instagram"], "rationale": "<por que esta ideia agora, 1 frase>", "acj_primary": "ACJ-0X", "acj_secondary": null, "acj_role": "<papel na jornada: ponto de entrada, ponte para…, sustentação…>", "acj_rationale": "<como a ideia realiza o movimento, 1 frase>" } ] }',
@@ -228,6 +237,41 @@ Deno.serve(async (req: Request) => {
     });
 
     logUsage({ userId, provider: 'gemini', product: 'text', model: model_used, tokens_input: usage.input, tokens_output: usage.output, metadata: { fn: 'cycle-pauta', mode } });
+
+    // ---- Guardião anti-repetição: cada ideia × o que já foi publicado (por significado) ----
+    try {
+      const textOf = (i: OutIdea) => [i.title, i.summary].filter(Boolean).join('. ');
+      const judge = async (list: OutIdea[]) => {
+        const nb = await neighborsFor(apiKey, userId, list.map(textOf), 4);
+        const j = await judgeRepetition(apiKey, list.map((i, k) => ({ text: textOf(i), neighbors: nb[k] })));
+        if (j.model !== 'none') logUsage({ userId, provider: 'gemini', product: 'text', model: j.model, tokens_input: j.usage.input, tokens_output: j.usage.output, metadata: { fn: 'cycle-pauta', step: 'anti-repeticao' } });
+        return j.verdicts;
+      };
+      const verdicts = await judge(ideas);
+      const rep = ideas.map((_, k) => k).filter((k) => verdicts[k].verdict === 'repeat');
+      if (rep.length) {
+        const fixUsr = [
+          usr, '',
+          `ESTAS ${rep.length} IDEIA(S) REPETEM POSTS JÁ PUBLICADOS. Gere ${rep.length} substituta(s), na MESMA ordem, mantendo função, editorial e ACJ de cada uma, com tese/caso/entrada realmente novos:`,
+          ...rep.map((k) => `- "${ideas[k].title}" (função ${ideas[k].strategic_function}, editorial ${ideas[k].editorial_slug}${ideas[k].acj_primary ? `, ${ideas[k].acj_primary}` : ''}) repete: "${verdicts[k].of?.text.slice(0, 200) ?? ''}" — ${verdicts[k].reason}`),
+        ].join('\n');
+        const r2 = await callGeminiJson<{ ideas?: RawIdea[] }>(apiKey, sys, fixUsr, { temperature: 0.95, maxOutputTokens: 2500 });
+        const repl = (r2.data.ideas ?? []).filter((i) => i.title && i.title.trim().length > 3);
+        rep.forEach((k, n) => {
+          const r = repl[n];
+          if (!r) return;
+          ideas[k] = { ...ideas[k], title: r.title!.trim(), summary: (r.summary ?? '').trim(), rationale: (r.rationale ?? ideas[k].rationale).trim(), acj_role: (r.acj_role ?? ideas[k].acj_role).trim(), acj_rationale: (r.acj_rationale ?? ideas[k].acj_rationale).trim() };
+        });
+        const v2 = await judge(rep.map((k) => ideas[k]));
+        rep.forEach((k, n) => { verdicts[k] = v2[n]; });
+      }
+      ideas.forEach((i, k) => {
+        const v = verdicts[k];
+        i.repeat_of = v.verdict === 'repeat' ? { text: v.of?.text.slice(0, 240) ?? '', said_at: v.of?.said_at ?? null, reason: v.reason } : null;
+      });
+    } catch (e) {
+      console.warn('[cycle-pauta] guardião anti-repetição indisponível:', (e as Error).message);
+    }
     return jsonResponse({ success: true, mode, ideas });
   } catch (e) {
     console.error('[cycle-pauta]', e);

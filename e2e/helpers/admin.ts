@@ -30,7 +30,7 @@ export async function sql<T = Record<string, unknown>>(query: string): Promise<T
 // (Cresce conforme as fases adicionam tabelas.)
 export const E2E_OWNED_TABLES = [
   'acj_learning_decisions', 'acj_learning_evidence', 'acj_learning_entries', 'acj_signal_readings', 'post_comments',
-  'acj_content_contracts', 'acj_cycle_plans', 'acj_campaign_plans',
+  'acj_content_contracts', 'acj_cycle_plans', 'acj_campaign_plans', 'content_memory',
   'photo_style_approvals', 'photo_generations',
   'meta_ad_insights_daily', 'meta_ads', 'meta_adsets', 'meta_campaigns', 'meta_ad_accounts', 'meta_businesses', 'meta_connections',
   'ai_reviews',

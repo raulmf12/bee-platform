@@ -240,6 +240,12 @@ export function DevelopStep({ campaign, cycle, ideas, editorials, accounts, onId
         </section>
       )}
 
+      {c.metadata?.repeat?.verdict === 'repeat' && (
+        <p className="rounded-xl bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300" data-testid="content-repeat">
+          A Hive achou este texto parecido com um post de {c.metadata.repeat.of_date ? new Date(c.metadata.repeat.of_date).toLocaleDateString('pt-BR') : 'antes'}{c.metadata.repeat.retried ? ' (mesmo depois de refazer uma vez)' : ''}: “{(c.metadata.repeat.of_text ?? '').split(' — ')[0].slice(0, 140)}”. Peça uma nova versão ou ajuste o ângulo.
+        </p>
+      )}
+
       <AcjContractSummary contract={contracts[c.id] ?? null} onChange={(k) => setContracts((m) => ({ ...m, [k.content_id]: k }))} />
 
       {adjusting && (

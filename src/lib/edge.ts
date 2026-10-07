@@ -442,9 +442,20 @@ export const edge = {
       editorial_slug: string; channels: Array<{ account_id: string; platform: 'linkedin' | 'instagram' }>;
       suggested_pieces: number; rationale: string;
       acj_primary?: AcjId | null; acj_secondary?: AcjId | null; acj_role?: string; acj_rationale?: string;
+      repeat_of?: { text: string; said_at: string | null; reason: string } | null;
     }>;
   }> {
     return postEdge('cycle-pauta', input);
+  },
+
+  // Histórico do LinkedIn (Apify) e memória anti-repetição.
+  async linkedinImport(input: { action: 'start' | 'status'; account_id: string; profile?: string }): Promise<{
+    success: boolean; status: string; done?: boolean; found?: number; inserted?: number; skipped?: number; run_id?: string;
+  }> {
+    return postEdge('linkedin-import', input);
+  },
+  async contentMemorySync(input: { limit?: number } = {}): Promise<{ success: boolean; added: number; updated: number; pending: number }> {
+    return postEdge('content-memory', { action: 'sync', ...input });
   },
 
   // ACJ-00 (docs/acj): plano da campanha, atribuição, portão do movimento e leitura de sinais.
@@ -492,7 +503,10 @@ export const edge = {
   }): Promise<{
     success: boolean; frase: string; texto: string;
     considered: { base: string; coerencia: string; formato: string };
-    meta: { headline_type: string | null; analogy: string | null; virality_score: number | null; virality_reason: string | null; qa_score: number | null };
+    meta: {
+      headline_type: string | null; analogy: string | null; virality_score: number | null; virality_reason: string | null; qa_score: number | null;
+      repeat?: { verdict: string; reason: string; retried: boolean; of_text: string | null; of_date: string | null } | null;
+    };
     // Contrato ACJ (novo ou reaproveitado) + portão "o movimento aconteceu?" — o cliente persiste.
     acj?: { contract: AcjContractFields & { id?: string }; reused: boolean; campaign_plan_id: string | null; cycle_plan_id: string | null; validation?: AcjValidation | null; error?: string } | null;
   }> {

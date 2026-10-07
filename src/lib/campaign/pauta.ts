@@ -43,6 +43,7 @@ export async function generatePauta(cycle: CampaignCycle, mode: 'full' | 'refres
     acj_secondary: i.acj_secondary ?? null,
     acj_role: i.acj_role || null,
     acj_rationale: i.acj_rationale || null,
+    repeat_of: i.repeat_of ?? null,
     origin: 'hive' as const,
     status: 'proposed' as const,
     position: kept.length + idx,
@@ -60,6 +61,7 @@ export async function swapIdea(cycle: CampaignCycle, idea: Idea): Promise<Idea> 
     title: n.title, summary: n.summary, editorial_slug: n.editorial_slug, rationale: n.rationale, origin: 'hive',
     // Troca mantém o movimento (ACJ) da ideia original, como mantém a função.
     acj_primary: idea.acj_primary ?? n.acj_primary ?? null, acj_role: n.acj_role || idea.acj_role || null, acj_rationale: n.acj_rationale || null,
+    repeat_of: n.repeat_of ?? null,
   });
 }
 

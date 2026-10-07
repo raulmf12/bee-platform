@@ -61,7 +61,7 @@ export async function developIdeas(
         position: idea.position,
         metadata: {
           ...ids, ai_rounds: 0, manual_edits: 0, qa_score: r.meta.qa_score, virality_score: r.meta.virality_score,
-          virality_reason: r.meta.virality_reason, headline_type: r.meta.headline_type, analogy: r.meta.analogy,
+          virality_reason: r.meta.virality_reason, headline_type: r.meta.headline_type, analogy: r.meta.analogy, repeat: r.meta.repeat ?? null,
         },
       });
       await persistAcj(content.id, r);
@@ -87,6 +87,7 @@ export async function reviseWithHive(content: Content, idea: Idea, mode: 'adjust
     metadata: {
       ...content.metadata, ...ids, ai_rounds: (content.metadata?.ai_rounds ?? 0) + 1, qa_score: r.meta.qa_score,
       virality_score: r.meta.virality_score, virality_reason: r.meta.virality_reason, headline_type: r.meta.headline_type, analogy: r.meta.analogy,
+      repeat: r.meta.repeat ?? null,
     },
   });
 }

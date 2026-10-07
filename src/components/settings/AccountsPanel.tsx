@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { accountApi } from '@/lib/campaignApi';
 import { edge } from '@/lib/edge';
 import { importInstagramHistory, type ImportProgress } from '@/lib/instagramImport';
+import { importLinkedInHistory, type LiImportProgress } from '@/lib/linkedinImport';
 import { getMetaConnection, saveMetaConnection, syncMetaAds, type MetaConnectionStatus } from '@/lib/metaAds';
 import { useAuthStore } from '@/store/authStore';
 import type { SocialAccount } from '@/types';
@@ -35,6 +36,7 @@ export function AccountsPanel() {
   const [busy, setBusy] = useState(false);
   // Importação do histórico do Instagram em andamento (por conta).
   const [importing, setImporting] = useState<Record<string, ImportProgress>>({});
+  const [liImporting, setLiImporting] = useState<Record<string, LiImportProgress>>({});
   // Tráfego pago (Meta Ads): só o status (os dados ficam no banco pra uso futuro).
   const [meta, setMeta] = useState<MetaConnectionStatus | null>(null);
   const [metaSync, setMetaSync] = useState<{ queue_left: number } | null>(null);
@@ -88,6 +90,23 @@ export function AccountsPanel() {
       toast.error(`Falha ao importar "${a.label}": ${(e as Error).message.slice(0, 200)}`);
     } finally {
       setImporting((m) => { const n = { ...m }; delete n[a.id]; return n; });
+      await load();
+    }
+  }, [load]);
+
+  // LinkedIn: histórico via scraper (só o texto, sem métricas) → base de posts + memória anti-repetição.
+  const runLinkedInImport = useCallback(async (a: SocialAccount) => {
+    const prev = (a.metadata as { li_import?: { profile?: string } })?.li_import?.profile ?? '';
+    const profile = window.prompt('URL do perfil do LinkedIn (ex.: linkedin.com/in/marcospiccini)', prev ? `https://www.linkedin.com/in/${prev}` : '');
+    if (!profile?.trim()) return;
+    setLiImporting((m) => ({ ...m, [a.id]: { phase: 'scraping' } }));
+    try {
+      const r = await importLinkedInHistory(a.id, profile.trim(), (p) => setLiImporting((m) => ({ ...m, [a.id]: p })));
+      toast.success(`LinkedIn "${a.label}": ${r.found ?? 0} posts encontrados · ${r.inserted ?? 0} novos na base. A Hive já os considera para não repetir.`);
+    } catch (e) {
+      toast.error(`Falha ao importar o LinkedIn: ${(e as Error).message.slice(0, 200)}`);
+    } finally {
+      setLiImporting((m) => { const n = { ...m }; delete n[a.id]; return n; });
       await load();
     }
   }, [load]);
@@ -269,6 +288,7 @@ export function AccountsPanel() {
                       {a.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} · {a.label}
                     </p>
                     {a.platform === 'instagram' && <ImportLine a={a} progress={importing[a.id]} />}
+                    {a.platform === 'linkedin' && <LiImportLine a={a} progress={liImporting[a.id]} />}
                     <p className="truncate text-xs text-muted-foreground">
                       {a.metadata?.source === 'integrations' ? 'via Integrações' : (a.handle ?? (a.platform === 'linkedin' ? (a.linkedin_author_urn ?? 'sem URN') : (a.instagram_business_account_id ?? 'sem perfil')))}
                       {a.platform === 'instagram' && (a.metadata?.source === 'integrations' ? settings?.instagram_token_expires_at : a.instagram_token_expires_at)
@@ -288,6 +308,12 @@ export function AccountsPanel() {
                     <Button size="sm" variant="outline" disabled={!!importing[a.id]} onClick={() => void runImport(a)} data-testid="import-history">
                       {importing[a.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                       {(a.metadata as { ig?: { imported_at?: string } })?.ig?.imported_at ? 'Atualizar histórico' : 'Importar histórico'}
+                    </Button>
+                  )}
+                  {a.platform === 'linkedin' && (
+                    <Button size="sm" variant="outline" disabled={!!liImporting[a.id]} onClick={() => void runLinkedInImport(a)} data-testid="li-import-history">
+                      {liImporting[a.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                      {(a.metadata as { li_import?: { imported_at?: string } })?.li_import?.imported_at ? 'Atualizar histórico' : 'Importar histórico'}
                     </Button>
                   )}
                   <Button size="icon" variant="ghost" aria-label={`Remover ${a.label}`} onClick={() => remove(a)}>
@@ -425,5 +451,21 @@ function MetaAdsLine({ meta, syncing, onSync }: { meta: MetaConnectionStatus | n
         {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Sincronizar agora
       </Button>
     </div>
+  );
+}
+
+function LiImportLine({ a, progress }: { a: SocialAccount; progress?: LiImportProgress }) {
+  const li = (a.metadata as { li_import?: { imported_at?: string; found?: number; inserted?: number; profile?: string } })?.li_import;
+  if (progress) {
+    const label = progress.phase === 'scraping' ? 'Buscando os posts no LinkedIn… (pode levar alguns minutos)'
+      : progress.phase === 'memory' ? `Ensinando a Hive o que já foi dito… ${progress.memoryPending ? `faltam ${progress.memoryPending}` : ''}`
+        : 'Importando…';
+    return <p className="mt-1 text-xs text-accent" data-testid="li-import-progress">{label}</p>;
+  }
+  if (!li?.imported_at) return <p className="text-xs text-amber-600">Histórico ainda não importado.</p>;
+  return (
+    <p className="text-xs text-muted-foreground" data-testid="li-import-status">
+      {li.found ?? 0} posts lidos de /in/{li.profile} · histórico de {new Date(li.imported_at).toLocaleDateString('pt-BR')} (sem métricas)
+    </p>
   );
 }

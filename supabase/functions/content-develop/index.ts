@@ -13,6 +13,7 @@ import {
   checkRateLimit, errorResponse, getUserGeminiKey, internalUserId, jsonResponse, logUsage, preflight, userIdFromAuth,
 } from '../_shared/security.ts';
 import { fetchRest } from '../_shared/gemini.ts';
+import { judgeRepetition, memoryPromptBlock, neighborsFor, recentSaid, repeatedStructures, syncMemory, type MemoryHit } from '../_shared/content-memory.ts';
 import { buildContract, contractPromptBlock, validateMovement, type AcjContract, type AcjValidation } from '../_shared/acj.ts';
 
 type Fn = 'presenca' | 'posicionamento' | 'autoridade' | 'relacionamento' | 'produtos';
@@ -119,7 +120,19 @@ Deno.serve(async (req: Request) => {
       ...(acj ? { acj_context: contractPromptBlock(acj.contract) } : {}),
     });
 
-    const briefing = [context, extra].filter(Boolean).join('\n\n');
+    // ---- Memória anti-repetição: o que já foi dito perto desta ideia + tiques recentes ----
+    let memoryBlock = '';
+    if (apiKey && mode !== 'adjust') {
+      try {
+        await syncMemory(apiKey, userId, 20).catch(() => null);
+        const [[near], recent] = await Promise.all([
+          neighborsFor(apiKey, userId, [[idea.title, idea.summary].filter(Boolean).join('. ')], 5),
+          recentSaid(userId, 25),
+        ]);
+        memoryBlock = memoryPromptBlock(near, repeatedStructures(recent.map((r) => r.text)));
+      } catch (e) { console.warn('[content-develop] memória indisponível:', (e as Error).message); }
+    }
+    const briefing = [context, extra, memoryBlock].filter(Boolean).join('\n\n');
     let best = await callFn<Gen & { success: boolean }>('generate-content', userId, genBody(briefing));
     let qa: { score: number | null; checks?: Array<{ titulo: string; passed: boolean; nota: string }> } = { score: null };
     let qaError: string | null = null;
@@ -134,6 +147,29 @@ Deno.serve(async (req: Request) => {
     } catch (e) {
       qaError = (e as Error).message.slice(0, 200);
       console.warn('[content-develop] QA indisponível:', qaError);
+    }
+
+    // ---- Checagem pós-escrita: repetiu algo já publicado? Refaz UMA vez com o alvo explícito. ----
+    let repeat: { verdict: string; reason: string; of: MemoryHit | null; retried: boolean } | null = null;
+    if (apiKey && mode !== 'adjust') {
+      try {
+        const check = async (g: Gen) => {
+          const text = `${g.quote} — ${String(g.caption ?? '').slice(0, 500)}`;
+          const [nb] = await neighborsFor(apiKey, userId, [text], 4);
+          const j = await judgeRepetition(apiKey, [{ text, neighbors: nb }]);
+          return j.verdicts[0];
+        };
+        let v = await check(best);
+        let retried = false;
+        if (v.verdict === 'repeat') {
+          retried = true;
+          const fix = `ATENÇÃO: a versão anterior REPETIU um post já publicado (${v.of?.said_at?.slice(0, 10) ?? ''}): "${v.of?.text.slice(0, 300) ?? ''}". Motivo: ${v.reason}. Escreva com tese, entrada, exemplo e estrutura DIFERENTES — mesma ideia-mãe, outro caminho.`;
+          const retry = await callFn<Gen & { success: boolean }>('generate-content', userId, genBody(`${briefing}\n\n${fix}`));
+          const v2 = await check(retry);
+          if (v2.verdict !== 'repeat') { best = retry; v = v2; }
+        }
+        repeat = v.verdict === 'new' ? null : { verdict: v.verdict, reason: v.reason, of: v.of ?? null, retried };
+      } catch (e) { console.warn('[content-develop] checagem de repetição indisponível:', (e as Error).message); }
     }
 
     // Portão ACJ (G3/G4): avisa se o movimento não aconteceu — não reescreve.
@@ -163,6 +199,7 @@ Deno.serve(async (req: Request) => {
       meta: {
         headline_type: best.headline_type_used ?? null, analogy: best.analogy_used ?? null,
         virality_score: best.virality_score ?? null, virality_reason: best.virality_reason ?? null, qa_score: qa.score, qa_error: qaError,
+        repeat: repeat ? { verdict: repeat.verdict, reason: repeat.reason, retried: repeat.retried, of_text: repeat.of?.text.slice(0, 240) ?? null, of_date: repeat.of?.said_at ?? null } : null,
       },
       acj,
     });
