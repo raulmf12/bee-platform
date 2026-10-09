@@ -227,8 +227,11 @@ export function paidInsights(a: PaidAnalysis, organic: OrganicRef[] = []): PaidI
   for (const x of accs) {
     const wasted = x.worstAds.reduce((s, w) => s + w.totals.spend, 0);
     if (wasted > 0) out.push({ kind: 'atencao', text: `@${x.username}: ${brl(wasted)} foram para os ${x.worstAds.length} anúncios de maior gasto sem nenhuma compra (ex.: "${x.worstAds[0].label}").` });
-    const best = x.campaigns.filter((c) => c.totals.purchases >= 2).sort((m, n) => (m.derived.cpa ?? Infinity) - (n.derived.cpa ?? Infinity))[0];
-    if (best) out.push({ kind: 'recomendacao', text: `@${x.username}: a campanha mais eficiente foi "${best.label}" (${best.totals.purchases} compras a ${brl(best.derived.cpa)}). Use como base de criativo e público para os próximos testes.` });
+    // Campanha com 2–4 compras pode ter CPA baixo por sorte: prefere as que têm volume (5+) e só cai pra amostra pequena se não houver.
+    const byCpaC = (m: { derived: Derived }, n: { derived: Derived }) => (m.derived.cpa ?? Infinity) - (n.derived.cpa ?? Infinity);
+    const solid = x.campaigns.filter((c) => c.totals.purchases >= 5).sort(byCpaC)[0];
+    const best = solid ?? x.campaigns.filter((c) => c.totals.purchases >= 2).sort(byCpaC)[0];
+    if (best) out.push({ kind: 'recomendacao', text: `@${x.username}: a campanha mais eficiente foi "${best.label}" (${best.totals.purchases} compras a ${brl(best.derived.cpa)})${solid ? '' : ' — amostra pequena'}. Use como base de criativo e público para os próximos testes.` });
   }
   const dows = T.weekdays.filter((d) => d.purchases >= 3).sort((m, n) => (m.cpa ?? Infinity) - (n.cpa ?? Infinity));
   if (dows.length >= 2) out.push({ kind: 'recomendacao', text: `Dia da semana com menor custo por compra: ${dows[0].label} (${brl(dows[0].cpa)}); maior: ${dows[dows.length - 1].label} (${brl(dows[dows.length - 1].cpa)}). Diferença indicativa — amostra pequena por dia.` });
