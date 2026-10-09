@@ -34,5 +34,9 @@ test.describe('unit · memória anti-repetição e LinkedIn', () => {
     const p = liMapPost({ urn: 'urn:li:activity:1', url: 'https://www.linkedin.com/posts/x?utm=1', text: '#lideranca\nNunca se investiu tanto em liderança.\nSegunda linha', posted_at: { timestamp: 1714557600000 } });
     expect(p).toMatchObject({ key: 'urn:li:activity:1', url: 'https://www.linkedin.com/posts/x', quote: 'Nunca se investiu tanto em liderança.' });
     expect(liMapPost({ urn: 'urn:li:activity:2', text: '', reshared_post: {} })).toBeNull(); // repost sem texto próprio
+    // formato real do scraper (Apify, out/2026): urn como objeto e data em texto
+    const real = liMapPost({ urn: { activity_urn: '7513980032831078400', share_urn: null, ugcPost_urn: '7513980032084770816' }, url: 'https://www.linkedin.com/posts/x_abc', text: 'Um post de verdade com texto suficiente.', posted_at: { date: '2026-10-08 17:14:02', timestamp: 1791472442825 } });
+    expect(real?.key).toBe('urn:li:activity:7513980032831078400');
+    expect(real?.posted_at).toBe(new Date(1791472442825).toISOString());
   });
 });

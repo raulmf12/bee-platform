@@ -3,7 +3,8 @@
 import { quoteFromCaption } from './instagram-map.ts';
 
 export interface LiScraped {
-  urn?: string; url?: string; text?: string; post_type?: string;
+  // O scraper devolve o URN como objeto ({ activity_urn, share_urn, ugcPost_urn }); versões antigas, como texto.
+  urn?: string | { activity_urn?: string | null; share_urn?: string | null; ugcPost_urn?: string | null } | null; url?: string; text?: string; post_type?: string;
   posted_at?: { date?: string; timestamp?: number } | string | null;
   reshared_post?: unknown; media?: unknown;
 }
@@ -25,7 +26,15 @@ export function liPostedAt(p: LiScraped): string | null {
   return null;
 }
 
-export const liKey = (p: LiScraped): string | null => p.urn ?? p.url?.split('?')[0] ?? null;
+export function liKey(p: LiScraped): string | null {
+  const u = p.urn;
+  if (typeof u === 'string' && u) return u;
+  if (u && typeof u === 'object') {
+    const id = u.activity_urn ?? u.ugcPost_urn ?? u.share_urn;
+    if (id) return String(id).startsWith('urn:') ? String(id) : `urn:li:activity:${id}`;
+  }
+  return p.url?.split('?')[0] ?? null;
+}
 
 // Só o que o autor ESCREVEU: repost sem comentário próprio não entra.
 export function liMapPost(p: LiScraped): { key: string; quote: string; text: string; posted_at: string | null; url: string | null; post_type: string } | null {

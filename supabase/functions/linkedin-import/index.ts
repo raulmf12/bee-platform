@@ -39,7 +39,7 @@ Deno.serve(async (req: Request) => {
     if (!userId) return errorResponse('Nao autenticado', 401);
     const rl = checkRateLimit(userId, 60_000, 30);
     if (!rl.ok) return errorResponse(`Rate limit. Tente em ${Math.ceil(rl.resetIn / 1000)}s`, 429);
-    const input = (await req.json().catch(() => ({}))) as { action?: string; account_id?: string; profile?: string };
+    const input = (await req.json().catch(() => ({}))) as { action?: string; account_id?: string; profile?: string; max_posts?: number };
     const token = Deno.env.get('APIFY_TOKEN');
     if (!token) return errorResponse('A chave do Apify ainda não foi configurada no servidor (APIFY_TOKEN).', 400);
     if (!input.account_id) return errorResponse('account_id obrigatório', 400);
@@ -51,7 +51,7 @@ Deno.serve(async (req: Request) => {
       const username = liUsername(input.profile ?? meta.li_import?.profile ?? '');
       if (!username) return errorResponse('Informe a URL do perfil (linkedin.com/in/…)', 400);
       const run = await apify<{ data: { id: string; defaultDatasetId: string; status: string } }>(`/acts/${ACTOR}/runs`, token, {
-        method: 'POST', body: JSON.stringify({ username, total_posts: MAX_POSTS, limit: 100 }),
+        method: 'POST', body: JSON.stringify({ username, total_posts: Math.max(1, Math.min(MAX_POSTS, Math.round(input.max_posts ?? MAX_POSTS))), limit: 100 }),
       });
       meta.li_import = { ...(meta.li_import ?? {}), profile: username, run_id: run.data.id, dataset_id: run.data.defaultDatasetId, status: run.data.status, started_at: new Date().toISOString() };
       await saveMeta(account.id, meta);
