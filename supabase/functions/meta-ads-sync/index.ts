@@ -9,6 +9,15 @@ import { corsHeaders, errorResponse, isServiceCall, jsonResponse, preflight, use
 import { fetchRest } from '../_shared/gemini.ts';
 import { syncUser } from '../_shared/meta-ads.ts';
 
+// Anúncios novos entram sem conta do Instagram: atribui só os pendentes (barato e
+// idempotente) pra o comparativo de contas já mostrar o tráfego certo.
+async function attributeNew(userId: string): Promise<void> {
+  const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+  await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/meta-ads-attribution`, {
+    method: 'POST', headers: { apikey: key, Authorization: `Bearer ${key}`, 'x-bee-user-id': userId, 'Content-Type': 'application/json' }, body: '{}',
+  }).catch((e) => console.warn('[meta-ads-sync] atribuição:', (e as Error).message));
+}
+
 Deno.serve(async (req: Request) => {
   const cors = preflight(req);
   if (cors) return cors;
@@ -18,11 +27,19 @@ Deno.serve(async (req: Request) => {
     const userId = isService ? req.headers.get('x-bee-user-id') : userIdFromAuth(req);
     if (!isService && !userId) return errorResponse('Nao autenticado', 401);
     const body = (await req.json().catch(() => ({}))) as { force_structure?: boolean };
-    if (userId) return jsonResponse({ success: true, ...(await syncUser(userId, 100_000, { forceStructure: !!body.force_structure })) });
+    if (userId) {
+      const r = await syncUser(userId, 100_000, { forceStructure: !!body.force_structure });
+      if ((r as { done?: boolean }).done !== false) await attributeNew(userId);
+      return jsonResponse({ success: true, ...r });
+    }
     const conns = await fetchRest<Array<{ user_id: string }>>(`/meta_connections?status=in.(connected,error)&select=user_id&limit=200`);
-    const results = [];
+    const results: unknown[] = [];
     const budget = Math.max(20_000, Math.floor(120_000 / Math.max(1, conns.length)));
-    for (const c of conns) results.push(await syncUser(c.user_id, budget));
+    for (const c of conns) {
+      const r = await syncUser(c.user_id, budget);
+      results.push(r);
+      if ((r as { done?: boolean }).done !== false) await attributeNew(c.user_id);
+    }
     return jsonResponse({ success: true, users: results.length, results });
   } catch (e) {
     console.error('[meta-ads-sync]', e);
