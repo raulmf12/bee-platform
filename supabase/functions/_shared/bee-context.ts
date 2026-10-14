@@ -12,6 +12,7 @@
 // intenção é, num segundo passo, fundir a geração aqui também. Se mudar a regra
 // de contexto, atualize os DOIS lugares até a unificação.
 
+import { contextBlock, resolveContext, speakerLine, type ResolvedContext } from './context.ts';
 import { embedText } from './embed.ts';
 
 // Cadeia de modelos — a mesma capacidade da geração (flash forte → pro).
@@ -66,10 +67,20 @@ export interface BeeContextInput {
   arsenal_item_id?: string;
   target_avatar?: 'identificado' | 'incomodado' | 'ambos';
   target_platform?: 'linkedin' | 'instagram';
+  // Contexto de atuação: a peça/snapshot em edição (ou o perfil escolhido).
+  post_id?: string | null;
+  context_snapshot_id?: string | null;
+  profile_id?: string | null;
 }
 
 // ---- Carrega o MESMO contexto que a geração usa ----
 export async function loadBeeContext(input: BeeContextInput, userId: string) {
+  // Mesmo contexto da criação: o snapshot da peça (ou perfil/padrão visível).
+  const rctx: ResolvedContext | null = await resolveContext(userId, {
+    snapshot_id: input.context_snapshot_id, post_id: input.post_id, profile_id: input.profile_id,
+    interlocutor_state: input.target_avatar && input.target_avatar !== 'ambos' ? input.target_avatar : null,
+  }).catch(() => null);
+  const B = rctx ? `&brand_id=eq.${rctx.brand.id}` : '';
   const avatarSlugs = !input.target_avatar || input.target_avatar === 'ambos'
     ? ['identificado', 'incomodado']
     : [input.target_avatar];
@@ -80,23 +91,23 @@ export async function loadBeeContext(input: BeeContextInput, userId: string) {
     doRules, dontRules, generalRules,
     genesisCore, genesisPrincipios, genesisLentes, genesisTensoes, genesisFluxo, directives,
   ] = await Promise.all([
-    fetchRest<BeeEditorial[]>(`/bee_editorials?slug=eq.${input.editorial_slug}&limit=1`),
+    fetchRest<BeeEditorial[]>(`/bee_editorials?slug=eq.${input.editorial_slug}&limit=1${B}`),
     input.arsenal_item_id
-      ? fetchRest<BeeArsenal[]>(`/bee_arsenal?id=eq.${input.arsenal_item_id}&limit=1`)
-      : fetchRest<BeeArsenal[]>(`/bee_arsenal?editorial_slug=eq.${input.editorial_slug}&is_active=eq.true&order=last_used_at.asc.nullsfirst,usage_count.asc&limit=1`),
-    fetchRest<GenesisAvatar[]>(`/genesis_avatares?order=ordem.asc${avatarFilter}`),
-    fetchRest<BeeExamplePost[]>(`/bee_example_posts?editorial_slug=eq.${input.editorial_slug}&is_active=eq.true&order=last_used_at.asc.nullsfirst,position.asc&limit=2`),
-    fetchRest<BeeGlossaryTerm[]>(`/bee_glossary?select=term,meaning,usage_note,must_appear`),
-    fetchRest<BeeStyleRule[]>(`/bee_style_rules?category=eq.do&order=position.asc`),
-    fetchRest<BeeStyleRule[]>(`/bee_style_rules?category=eq.dont&order=position.asc`),
-    fetchRest<BeeStyleRule[]>(`/bee_style_rules?category=eq.general&order=position.asc`),
-    fetchRest<GenesisCore[]>(`/genesis_core?limit=1`),
-    fetchRest<GenesisPrincipio[]>(`/genesis_principios?ativo=eq.true&select=camada,codigo,titulo,principio,aplicacao,inviolavel&order=camada.asc,ordem.asc`),
-    fetchRest<GenesisLente[]>(`/genesis_lentes?select=nome,oitava,frase_sistemica,natureza&order=ordem.asc`),
-    fetchRest<GenesisTensao[]>(`/genesis_tensoes?select=nome,arquetipo,logica,sofrimento_tipico&order=ordem.asc`),
-    fetchRest<GenesisFluxo[]>(`/genesis_fluxo?select=ordem,pergunta,nota&order=ordem.asc`),
+      ? fetchRest<BeeArsenal[]>(`/bee_arsenal?id=eq.${input.arsenal_item_id}&limit=1${B}`)
+      : fetchRest<BeeArsenal[]>(`/bee_arsenal?editorial_slug=eq.${input.editorial_slug}&is_active=eq.true&order=last_used_at.asc.nullsfirst,usage_count.asc&limit=1${B}`),
+    fetchRest<GenesisAvatar[]>(`/genesis_avatares?order=ordem.asc${avatarFilter}${B}`),
+    fetchRest<BeeExamplePost[]>(`/bee_example_posts?editorial_slug=eq.${input.editorial_slug}&is_active=eq.true&order=last_used_at.asc.nullsfirst,position.asc&limit=2${B}`),
+    fetchRest<BeeGlossaryTerm[]>(`/bee_glossary?select=term,meaning,usage_note,must_appear${B}`),
+    fetchRest<BeeStyleRule[]>(`/bee_style_rules?category=eq.do&order=position.asc${B}`),
+    fetchRest<BeeStyleRule[]>(`/bee_style_rules?category=eq.dont&order=position.asc${B}`),
+    fetchRest<BeeStyleRule[]>(`/bee_style_rules?category=eq.general&order=position.asc${B}`),
+    fetchRest<GenesisCore[]>(`/genesis_core?limit=1${B}`),
+    fetchRest<GenesisPrincipio[]>(`/genesis_principios?ativo=eq.true&select=camada,codigo,titulo,principio,aplicacao,inviolavel&order=camada.asc,ordem.asc${B}`),
+    fetchRest<GenesisLente[]>(`/genesis_lentes?select=nome,oitava,frase_sistemica,natureza&order=ordem.asc${B}`),
+    fetchRest<GenesisTensao[]>(`/genesis_tensoes?select=nome,arquetipo,logica,sofrimento_tipico&order=ordem.asc${B}`),
+    fetchRest<GenesisFluxo[]>(`/genesis_fluxo?select=ordem,pergunta,nota&order=ordem.asc${B}`),
     fetchRest<BeeDirective[]>(
-      `/bee_directives?ativo=eq.true&select=scope,scope_ref,tipo,inviolavel,titulo,instrucao,ordem&or=(scope.eq.universal,and(scope.eq.platform,scope_ref.eq.${input.target_platform ?? 'linkedin'}),and(scope.eq.editorial,scope_ref.eq.${input.editorial_slug}))&order=scope.asc,ordem.asc`,
+      `/bee_directives?ativo=eq.true&select=scope,scope_ref,tipo,inviolavel,titulo,instrucao,ordem&or=(scope.eq.universal,and(scope.eq.platform,scope_ref.eq.${input.target_platform ?? 'linkedin'}),and(scope.eq.editorial,scope_ref.eq.${input.editorial_slug}))${B}${rctx ? `&and=(or(front_id.is.null,front_id.eq.${rctx.front.id}),or(emitter_id.is.null,emitter_id.eq.${rctx.emitter.id}),or(profile_id.is.null,profile_id.eq.${rctx.profile.id}))` : ''}&order=scope.asc,ordem.asc`,
     ),
   ]);
 
@@ -108,6 +119,7 @@ export async function loadBeeContext(input: BeeContextInput, userId: string) {
       p_platform: input.target_platform ?? 'linkedin',
       p_avatar: input.target_avatar ?? 'ambos',
       p_facets: ['texto', 'legenda'],
+      p_front: rctx?.front.id ?? null, p_emitter: rctx?.emitter.id ?? null, p_profile: rctx?.profile.id ?? null,
     },
   );
 
@@ -115,7 +127,7 @@ export async function loadBeeContext(input: BeeContextInput, userId: string) {
     editorial: editorial[0], arsenalItem: arsenalItem[0], avatars, examples, glossary,
     doRules, dontRules, generalRules,
     genesis: { core: genesisCore[0], principios: genesisPrincipios, lentes: genesisLentes, tensoes: genesisTensoes, fluxo: genesisFluxo },
-    directives, learnings,
+    directives, learnings, rctx,
   };
 }
 export type BeeContext = Awaited<ReturnType<typeof loadBeeContext>>;
@@ -193,9 +205,12 @@ export function renderBrain(ctx: BeeContext, ragContext: string): string {
   }
 
   // PERSONA
-  L.push(`\nVocê é ${core?.persona_nome ?? 'Marcos Piccini'}, escrevendo para a Bee.`);
-  if (core?.persona_postura) L.push(`Postura: ${core.persona_postura}`);
-  if (core?.voz_como_escreve) L.push(`Como escreve: ${core.voz_como_escreve}`);
+  L.push(`\n${speakerLine(ctx.rctx)}`);
+  if (ctx.rctx) L.push(contextBlock(ctx.rctx, { short: true }));
+  const isPerson = !ctx.rctx || ctx.rctx.emitter.kind === 'person';
+  if (isPerson && core?.persona_postura) L.push(`Postura: ${core.persona_postura}`);
+  if (isPerson && core?.voz_como_escreve) L.push(`Como escreve: ${core.voz_como_escreve}`);
+  if (!isPerson && ctx.rctx?.emitter.voice) L.push(`Como escreve: ${ctx.rctx.emitter.voice}`);
   if (core?.voz_verbos?.length) L.push(`Verbos de percepção a preferir: ${core.voz_verbos.join(', ')}.`);
   if (core?.voz_nunca?.length) L.push(`Nunca: ${core.voz_nunca.join(', ')}.`);
 

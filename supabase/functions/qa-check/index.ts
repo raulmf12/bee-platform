@@ -8,6 +8,7 @@
 // NÃO regenera nem bloqueia — é "nota + sinaliza, você decide". A decisão
 // (aprovar/corrigir/rejeitar) continua 100% humana no wizard.
 
+import { contextBlock, resolveContext } from '../_shared/context.ts';
 import {
   errorResponse,
   getUserGeminiKey,
@@ -31,6 +32,9 @@ interface QaInput {
   caption: string;
   target_platform?: 'linkedin' | 'instagram';
   editorial_slug?: string;
+  // Mesmo snapshot da geração: uma peça de Consulting não é reprovada por norma da Academy.
+  context_snapshot_id?: string;
+  post_id?: string;
 }
 
 interface BeeDirective {
@@ -119,10 +123,12 @@ Deno.serve(async (req: Request) => {
     if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
 
     const platform = input.target_platform ?? 'linkedin';
-    // Critérios + proibições do escopo desta variação.
+    const rctx = await resolveContext(userId, { snapshot_id: input.context_snapshot_id, post_id: input.post_id }).catch(() => null);
+    // Critérios + proibições do escopo desta variação (e da frente/emissor/perfil do contexto).
     const dirs = await fetchRest<BeeDirective[]>(
       `/bee_directives?ativo=eq.true&tipo=in.(criterio,evitar)&select=scope,scope_ref,tipo,titulo,instrucao` +
       `&or=(scope.eq.universal,and(scope.eq.platform,scope_ref.eq.${platform}),and(scope.eq.editorial,scope_ref.eq.${input.editorial_slug ?? ''}))` +
+      (rctx ? `&brand_id=eq.${rctx.brand.id}&and=(or(front_id.is.null,front_id.eq.${rctx.front.id}),or(emitter_id.is.null,emitter_id.eq.${rctx.emitter.id}),or(profile_id.is.null,profile_id.eq.${rctx.profile.id}))` : '') +
       `&order=scope.asc,ordem.asc`,
     );
 
@@ -148,6 +154,8 @@ Deno.serve(async (req: Request) => {
       'Seja específico e severo: se um item falha parcialmente, marque passed=false. Aponte o trecho problemático na nota.',
       'Itens que começam com "NÃO PODE:" são proibições — passed=true significa que o conteúdo NÃO cometeu a violação.',
       'A nota deve ser curta (máx 140 chars), concreta e acionável — nunca genérica.',
+      // Avalia à luz do MESMO contexto da geração (quem fala, frente, público, intenção).
+      ...(rctx ? ['', 'Avalie à luz deste contexto de atuação (é ele que define público, lugar de fala e oferta):', contextBlock(rctx, { short: true })] : []),
     ].join('\n');
 
     const listBlock = items.map((it) => `#${it.idx} [${it.titulo}] ${it.criterio}`).join('\n');

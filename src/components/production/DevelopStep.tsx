@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { contentApi } from '@/lib/campaignApi';
 import { acjContractApi } from '@/lib/acj/api';
 import { AcjContractSummary } from '@/components/acj/AcjContractSummary';
+import { identityApi } from '@/lib/identityApi';
 import { isAvulso } from '@/lib/campaign/avulso';
 import { developIdeas, discardContent, editContent, finishValidation, reviseWithHive, validateContent } from '@/lib/campaign/develop';
 import {
@@ -45,6 +46,13 @@ export function DevelopStep({ campaign, cycle, ideas, editorials, accounts, onId
   // Contrato ACJ de cada conteúdo (recarrega quando a Hive refaz uma versão).
   const [contracts, setContracts] = useState<Record<string, AcjContentContract>>({});
   const contractKey = live.map((c) => `${c.id}:${c.updated_at}`).join(',');
+  // Contexto de atuação do conteúdo na tela (snapshot): "Quem fala · Frente · Público".
+  const [ctxLine, setCtxLine] = useState<{ id: string; summary: string; fallback: boolean } | null>(null);
+  const snapId = (focusId ? live.find((x) => x.id === focusId) : live.find((x) => x.status === 'pending_validation' || x.status === 'developing'))?.context_snapshot_id ?? null;
+  useEffect(() => {
+    if (!snapId) { setCtxLine(null); return; }
+    identityApi.snapshot(snapId).then((s) => setCtxLine(s ? { id: s.id, summary: s.summary, fallback: s.fallback } : null)).catch(() => setCtxLine(null));
+  }, [snapId]);
   useEffect(() => {
     if (!live.length) return;
     acjContractApi.listByContents(live.map((c) => c.id))
@@ -226,6 +234,11 @@ export function DevelopStep({ campaign, cycle, ideas, editorials, accounts, onId
           {f && <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: FUNCTION_COLORS[f] }} />Função estratégica: <b className="text-foreground">{FUNCTION_LABELS[f]}</b></span>}
           <span>Origem: {isAvulso(campaign) ? 'Conteúdo avulso' : `${CAMPAIGN_TYPE_LABELS[campaign.type]} · Ciclo ${String(cycle.idx).padStart(2, '0')}`}</span>
         </p>
+        {ctxLine && ctxLine.id === c.context_snapshot_id && (
+          <p className="mt-1 text-xs text-muted-foreground" data-testid="content-context">
+            Contexto: <b className="text-foreground">{ctxLine.summary}</b>{ctxLine.fallback ? ' · perfil padrão (a campanha ainda não tem perfil definido)' : ''}
+          </p>
+        )}
       </div>
 
       <section className="space-y-2">

@@ -8,6 +8,7 @@
 // bee_suggestions como 'pending'. NADA entra no arsenal real aqui — a
 // curadoria humana aprova depois. Portao de qualidade pra voz nao derivar.
 
+import { contextBlock, emitterHasPhotos, resolveContext } from '../_shared/context.ts';
 import {
   errorResponse,
   getUserGeminiKey,
@@ -51,12 +52,12 @@ async function fetchEditorials(): Promise<Editorial[]> {
   return await res.json();
 }
 
-function buildSystemPrompt(editorials: Editorial[]): string {
+function buildSystemPrompt(editorials: Editorial[], brandName = 'marca'): string {
   const eds = editorials
     .map((e) => `- ${e.slug}: ${e.name} — ${e.description ?? ''}`)
     .join('\n');
   return [
-    'Voce e um EDITOR da Bee Consulting (consultoria de lideranca do Marcos Piccini).',
+    `Voce e um EDITOR da ${brandName}.`,
     'Sua tarefa: ler um material bruto (transcricao/texto) e DESTILAR dele pepitas reutilizaveis',
     'pra metodologia editorial da Bee. Nao invente — extraia apenas o que esta no material.',
     '',
@@ -182,7 +183,8 @@ Deno.serve(async (req: Request) => {
 
   try {
     const editorials = await fetchEditorials();
-    const sys = buildSystemPrompt(editorials);
+    const rctx = await resolveContext(userId).catch(() => null);
+    const sys = buildSystemPrompt(editorials, rctx?.brand.name);
     const validSlugs = new Set(editorials.map((e) => e.slug));
 
     const usr = [

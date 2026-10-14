@@ -6,6 +6,7 @@
 // A função transforma esse pedido em uma regra acionável e generalizável,
 // e a insere/reforça na tabela ai_learnings.
 
+import { learningScopeForPost } from '../_shared/context.ts';
 import {
   errorResponse,
   getUserGeminiKey,
@@ -53,6 +54,7 @@ interface Scope {
   editorial_slug: string | null;
   platform: string | null;
   target_avatar: string | null;
+  front_id?: string | null;   // frente onde a lição nasceu (Academy ≠ Consulting)
 }
 
 // Duas lições no mesmo alcance? (a faceta já é filtrada antes) — mesma
@@ -60,7 +62,8 @@ interface Scope {
 function sameScope(a: Partial<Scope>, b: Scope): boolean {
   return (a.editorial_slug ?? null) === b.editorial_slug
     && (a.platform ?? null) === b.platform
-    && (a.target_avatar ?? null) === b.target_avatar;
+    && (a.target_avatar ?? null) === b.target_avatar
+    && (a.front_id ?? null) === (b.front_id ?? null);
 }
 
 interface DistilledLearning {
@@ -255,15 +258,17 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: true, learnings: [], skipped: 'nada generalizavel' });
     }
 
+    const where = await learningScopeForPost(userId, body.post_id);
     const scope: Scope = {
       editorial_slug: body.editorial_slug || null,
       platform: body.platform || null,
       target_avatar: body.target_avatar || null,
+      front_id: where.front_id,
     };
 
     const exRes = await fetch(
       `${SUPABASE_URL}/rest/v1/ai_learnings?user_id=eq.${userId}` +
-        `&select=id,texto,categoria,facet,evidencias,editorial_slug,platform,target_avatar`,
+        `&select=id,texto,categoria,facet,evidencias,editorial_slug,platform,target_avatar,front_id`,
       { headers: sbHeaders() },
     );
     const existing = exRes.ok ? ((await exRes.json()) as Learning[]) : [];
@@ -313,6 +318,7 @@ Deno.serve(async (req: Request) => {
           editorial_slug: body.editorial_slug || null,
           platform: body.platform || null,
           target_avatar: body.target_avatar || null,
+          brand_id: where.brand_id, front_id: where.front_id,
         }),
       });
       if (ins.ok) {

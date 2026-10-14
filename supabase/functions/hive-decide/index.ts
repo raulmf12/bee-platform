@@ -21,6 +21,7 @@
 // Entrada: { text, platform?, editorial_slug?, target_avatar?, post_id?, history_variants? }
 // Saida:   { success, decision, model_used }
 
+import { contextBlock, emitterHasPhotos, resolveContext } from '../_shared/context.ts';
 import {
   errorResponse,
   getUserGeminiKey,
@@ -314,7 +315,11 @@ Deno.serve(async (req: Request) => {
 
     // Elegibilidade: variacao M02 que exige imagem, nao tem foto real e nao pode
     // gerar honestamente -> INELEGIVEL (nao se fabrica o rosto). Cai p/ C/D ou M01.
+    // Contexto da peça: fotos do Marcos só quando quem fala tem perfil fotográfico.
+    const rctx = await resolveContext(userId, { post_id: input.post_id }).catch(() => null);
+    const hasPhotos = emitterHasPhotos(rctx);
     const eligibleVars = vars.filter((v) => {
+      if (!hasPhotos && v.manifestacao_id === 'M02') return false;
       const plan = assetPlan[v.id];
       if (!plan) return true;                 // M01 ou sem exigencia
       return Boolean(plan.asset) || plan.canGenerate;
@@ -379,7 +384,7 @@ Deno.serve(async (req: Request) => {
 
       // --- Prompt: o modelo LE as regras e pontua (nao inventa criterio) ---
       const sys = [
-        'Voce e o MOTOR DE DECISAO VISUAL da Hive (Marcos Piccini / Bee).',
+        `Voce e o MOTOR DE DECISAO VISUAL da Hive (${rctx ? `${rctx.brand.name} · quem fala: ${rctx.emitter.name}` : 'marca'}).`,
         'Recebe um TEXTO JA APROVADO. REGRA ABSOLUTA: NUNCA reescreva, resuma, corrija ou altere o texto — voce so decide a FORMA visual.',
         'Escolha entre as manifestacoes disponiveis e, dentro dela, a variacao. Comece pela hipotese M01 (a ideia se sustenta sozinha) e so va para M02 (Rosto + Pensamento) quando a PRESENCA HUMANA acrescentar significado que o texto sozinho nao tem — nunca so para variar o feed ou porque existe foto.',
         'REGRA-MAE da M02: a foto NAO ilustra o texto; foto e pensamento formam UMA mensagem. Teste: se retirarmos a foto, alguma dimensao importante da mensagem desaparece? Se nao, nao e M02.',

@@ -136,7 +136,7 @@ export async function mockPauta(page: Page, calls: Array<Record<string, unknown>
 }
 
 // content-develop: frase + texto previsíveis por modo.
-export async function mockDevelop(page: Page, calls: Array<Record<string, unknown>> = [], opts: { acj?: boolean } = {}) {
+export async function mockDevelop(page: Page, calls: Array<Record<string, unknown>> = [], opts: { acj?: boolean; context?: { snapshot_id: string; profile_id: string; summary: string; fallback?: boolean } } = {}) {
   await mockEdge(page, 'content-develop', async (body) => {
     const [idea] = await sql<{ title: string; acj_primary: string | null }>(`select title, acj_primary from ideas where id='${body.idea_id}'`);
     const acj = opts.acj ? {
@@ -160,6 +160,7 @@ export async function mockDevelop(page: Page, calls: Array<Record<string, unknow
       considered: { base: 'Diagnóstico Sistêmico · Genesis', coerencia: 'Fortalece autoridade sem aproximação comercial direta.', formato: 'LinkedIn · frase + texto' },
       meta: { headline_type: 'contradicao-direta', analogy: null, virality_score: 80, virality_reason: 'motivo', qa_score: 75 },
       ...acj,
+      ...(opts.context ? { context: { profile_name: 'perfil', fallback: false, ...opts.context } } : {}),
     };
   }, calls);
 }

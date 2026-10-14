@@ -33,6 +33,7 @@ interface EditInput {
   instruction: string;
   counterpart?: string;          // o outro campo (só pra manter coerência)
   editorial_slug?: string;
+  post_id?: string;            // contexto de atuação da peça (perfil/snapshot)
   target_platform?: 'linkedin' | 'instagram';
   max_chars?: number;            // limite duro (o título tem ~200)
 }
@@ -111,7 +112,7 @@ Deno.serve(async (req: Request) => {
     let brain = '';
     try {
       const ctx = await loadBeeContext(
-        { editorial_slug: input.editorial_slug ?? '', target_platform: input.target_platform },
+        { editorial_slug: input.editorial_slug ?? '', target_platform: input.target_platform, post_id: input.post_id },
         userId,
       );
       const themeQuery = [input.counterpart, input.text.slice(0, 400)].filter(Boolean).join(' . ');

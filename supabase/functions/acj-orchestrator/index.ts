@@ -5,6 +5,7 @@
 //   assign        { title, summary?, strategic_function?, editorial_slug?, cycle_id? } → { assignment }
 //   validate      { contract, body:{frase,texto} } → { validation }
 //   read_signals  { post_id } → { reading }  (comentários da audiência à luz da ACJ)
+import { contextBlock, emitterHasPhotos, resolveContext } from '../_shared/context.ts';
 import {
   checkRateLimit, errorResponse, getUserGeminiKey, internalUserId, jsonResponse, logUsage, preflight, userIdFromAuth,
 } from '../_shared/security.ts';
@@ -23,6 +24,7 @@ const list = (v: unknown, n = 6) => (Array.isArray(v) ? v.map((x) => (typeof x =
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
 
 async function campaignPlan(apiKey: string, userId: string, input: Row) {
+  const rctx = await resolveContext(userId, { campaign_id: input.campaign_id ?? null, profile_id: input.draft?.profile_id ?? null }).catch(() => null);
   let c: Row = input.draft ?? {};
   let late: Row | null = null;
   if (input.campaign_id) {
@@ -53,7 +55,8 @@ async function campaignPlan(apiKey: string, userId: string, input: Row) {
   const phasesStrategy = (c.strategy?.phases ?? c.strategy?.matrix?.map((b: Row) => b.levels) ?? []) as Row[];
 
   const sys = [
-    'Você é a ACJ-00 da Hive (Bee Consulting / Marcos Piccini): transforma a estratégia de uma campanha em um PLANO RELACIONAL.',
+    `Você é a ACJ-00 da Hive (${rctx?.brand.name ?? 'marca'}${rctx ? ` · ${rctx.front.name} · quem fala: ${rctx.emitter.name}` : ''}): transforma a estratégia de uma campanha em um PLANO RELACIONAL.`,
+    ...(rctx ? [contextBlock(rctx, { short: true })] : []),
     'A estratégia (mix de funções: presença, posicionamento, autoridade, relacionamento, produtos) diz o que a campanha precisa produzir para o negócio. O mix ACJ é OUTRO EIXO: diz que movimentos relacionais a jornada precisa (ACJ-01..05). Não confunda: Autoridade ≠ Aprofundamento; Relacionamento ≠ Conexão.',
     'As cinco ACJs NÃO são funil linear: pessoas entram em pontos diferentes, voltam, permanecem. Trabalhe com hipóteses de sequência, pontes e sustentação.',
     'Proporções são hipóteses operacionais, não cotas. Nenhuma ACJ precisa estar em todas as fases; ausência intencional deve ser registrada em exclusions.',

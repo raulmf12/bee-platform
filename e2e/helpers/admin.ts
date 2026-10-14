@@ -29,6 +29,7 @@ export async function sql<T = Record<string, unknown>>(query: string): Promise<T
 // Tabelas com user_id que os testes podem sujar. Ordem = filhos antes dos pais.
 // (Cresce conforme as fases adicionam tabelas.)
 export const E2E_OWNED_TABLES = [
+  'ai_learnings', 'setup_sessions', 'context_snapshots',
   'acj_learning_decisions', 'acj_learning_evidence', 'acj_learning_entries', 'acj_signal_readings', 'post_comments',
   'acj_content_contracts', 'acj_cycle_plans', 'acj_campaign_plans', 'content_memory',
   'photo_style_approvals', 'photo_generations',

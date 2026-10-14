@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { MixBars } from '@/components/campaign/MixBars';
 import { StrategyMatrix } from '@/components/campaign/StrategyMatrix';
 import { AcjCampaignPanel } from '@/components/acj/AcjCampaignPanel';
+import { ProfilePicker } from '@/components/identity/ProfilePicker';
 import { accountApi, campaignApi, cycleApi } from '@/lib/campaignApi';
 import { campaignWeek, formatDay, formatRange } from '@/lib/campaign/dates';
 import { CAMPAIGN_STATUS_LABELS, CYCLE_STATUS_LABELS } from '@/lib/campaign/labels';
@@ -158,6 +159,10 @@ export function CampaignDetail() {
         </div>
 
         <div className="space-y-6">
+          <section className="space-y-2 rounded-2xl border bg-card p-5" data-testid="campaign-profile">
+            <ProfilePicker value={campaign.profile_id} needsReview={campaign.profile_needs_review}
+              onChange={(id) => void patch({ profile_id: id, profile_needs_review: false }, 'Perfil de comunicação atualizado — vale para as próximas criações.')} />
+          </section>
           {campaign.moment && (
             <section className="space-y-2 rounded-2xl border bg-card p-5">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Momento</p>

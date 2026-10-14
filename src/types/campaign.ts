@@ -100,6 +100,9 @@ export interface Campaign {
   account_ids: string[];
   cadence: Record<string, number>;                 // account_id → peças por semana
   activated_at?: string | null;
+  // Perfil de comunicação (quem fala · frente · público). null + needs_review = curadoria pendente.
+  profile_id?: string | null;
+  profile_needs_review?: boolean;
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -163,6 +166,7 @@ export interface Idea {
   acj_confidence?: string | null;
   // Guardião anti-repetição: a ideia ainda parece repetir algo já publicado.
   repeat_of?: { text: string; said_at: string | null; reason: string } | null;
+  profile_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -207,6 +211,8 @@ export interface Content {
   status: ContentStatus;
   versions: ContentVersion[];
   position: number;
+  profile_id?: string | null;
+  context_snapshot_id?: string | null;
   metadata: ContentMetadata;
   created_at: string;
   updated_at: string;

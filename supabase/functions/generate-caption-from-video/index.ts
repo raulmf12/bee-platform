@@ -3,6 +3,7 @@
 // Devolve { caption } no estilo Bee.
 // Reusa o mesmo prompt-engine do generate-content, so muda a entrada.
 
+import { contextBlock, resolveContext, speakerLine, type ResolvedContext } from '../_shared/context.ts';
 import {
   errorResponse,
   getUserGeminiKey,
@@ -58,7 +59,7 @@ interface Avatar { name: string; state: string; dor: string; gatilhos: string[];
 interface StyleRule { rule: string }
 interface Hashtag { tag: string; required: boolean }
 
-async function loadBeeCtx(editorialSlug?: string, targetAvatar?: string) {
+async function loadBeeCtx(editorialSlug?: string, targetAvatar?: string, rctx: ResolvedContext | null = null) {
   const avatarFilter = targetAvatar && targetAvatar !== 'ambos' ? `&slug=eq.${targetAvatar}` : '';
   const editorialFilter = editorialSlug ? `slug=eq.${editorialSlug}&` : '';
   const [editorial, avatars, doRules, dontRules, generalRules, hashtags] = await Promise.all([
@@ -69,13 +70,14 @@ async function loadBeeCtx(editorialSlug?: string, targetAvatar?: string) {
     fetchRest<StyleRule[]>(`/bee_style_rules?category=eq.general&order=position.asc`),
     fetchRest<Hashtag[]>(`/bee_hashtags?order=position.asc`),
   ]);
-  return { editorial: editorial[0], avatars, doRules, dontRules, generalRules, hashtags };
+  return { editorial: editorial[0], avatars, doRules, dontRules, generalRules, hashtags, rctx };
 }
 
 function buildPrompt(input: Input, ctx: Awaited<ReturnType<typeof loadBeeCtx>>): string {
   const lines: string[] = [];
 
-  lines.push('Voce e Marcos Piccini / Bee Academy. Vai escrever a CAPTION pra acompanhar um VIDEO ja gravado.');
+  lines.push(`${speakerLine(ctx.rctx ?? null)} Vai escrever a CAPTION pra acompanhar um VIDEO ja gravado.`);
+  if (ctx.rctx) lines.push(contextBlock(ctx.rctx, { short: true }));
   lines.push('A caption deve dialogar com a fala do video, criar gancho no scroll e levar a uma reflexao sistemica.');
   lines.push('');
 
@@ -251,7 +253,7 @@ Deno.serve(async (req: Request) => {
     const apiKey = await getUserGeminiKey(userId);
     if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
 
-    const ctx = await loadBeeCtx(input.editorial_slug, input.target_avatar);
+    const ctx = await loadBeeCtx(input.editorial_slug, input.target_avatar, await resolveContext(userId, { profile_id: (input as { profile_id?: string }).profile_id }).catch(() => null));
     const sys = buildPrompt(input, ctx);
     const usr = 'Gere o JSON conforme as regras.';
     const { text, usage, model_used } = await callGemini(apiKey, sys, usr);

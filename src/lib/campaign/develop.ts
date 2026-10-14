@@ -56,6 +56,8 @@ export async function developIdeas(
       const content = await contentApi.create({
         idea_id: idea.id, campaign_id: cycle.campaign_id, cycle_id: cycle.id,
         title: idea.title, strategic_function: idea.strategic_function ?? null, editorial_slug: idea.editorial_slug ?? null,
+        // Perfil/contexto: as peças herdam (trigger) e QA/edições usam o mesmo snapshot.
+        ...(r.context ? { profile_id: r.context.profile_id, context_snapshot_id: r.context.snapshot_id } : {}),
         body: { frase: r.frase, texto: r.texto }, considered: r.considered, status: 'pending_validation',
         versions: [{ at: new Date().toISOString(), body: { frase: r.frase, texto: r.texto }, note: 'Hive' }],
         position: idea.position,

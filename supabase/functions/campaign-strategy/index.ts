@@ -6,6 +6,7 @@
 //   autoridade", "falar menos de produtos") e reorganiza a proposta.
 // O servidor SEMPRE normaliza o mix pra inteiros que somam 100 e tem fallback
 // determinístico coerente com o momento — o wizard nunca trava por causa da IA.
+import { contextBlock, resolveContext } from '../_shared/context.ts';
 import {
   checkRateLimit, errorResponse, getUserGeminiKey, internalUserId, jsonResponse, logUsage, preflight, userIdFromAuth,
 } from '../_shared/security.ts';
@@ -25,6 +26,8 @@ interface Input {
   current_mix?: Partial<Record<Fn, number>>;
   instruction?: string;
   product_id?: string;
+  profile_id?: string;          // perfil de comunicação (default: o padrão da marca)
+  campaign_id?: string;
 }
 
 const DEFAULT_MIX: Record<string, Record<Fn, number>> = {
@@ -99,12 +102,14 @@ Deno.serve(async (req: Request) => {
       if (rows[0]) product = `${rows[0].name}${rows[0].promessa ? ` — ${rows[0].promessa}` : ''}`;
     }
 
+    const rctx = await resolveContext(userId, { profile_id: input.profile_id, campaign_id: input.campaign_id }).catch(() => null);
     const sys = [
-      'Você é a Hive, estrategista de conteúdo da Bee Consulting. Define o EQUILÍBRIO estratégico de uma campanha de conteúdo entre 5 funções:',
+      `Você é a Hive, estrategista de conteúdo da ${rctx?.brand.name ?? 'marca'}. Define o EQUILÍBRIO estratégico de uma campanha de conteúdo entre 5 funções:`,
       FN_DESC,
       'Regras: percentuais inteiros somando 100. Em campanha orgânica, "produtos" costuma ficar em 5–10% (presença antes de comércio), salvo pedido explícito. Em vendas/lançamento, "produtos" sobe (20–35%) sem abandonar relacionamento e autoridade.',
       'A "matriz" descreve como a intensidade de cada função evolui em 4 FASES da campanha (início → fim), com níveis: muito_baixo, baixo, medio, alto. Deve ser coerente com o mix e ter uma progressão natural (ex.: autoridade cresce, produtos aparece mais no fim).',
       'A justificativa fala com a pessoa ("Sua presença já possui..."), 2 a 3 frases, sóbria, sem jargão. Português do Brasil.',
+      ...(rctx ? ['', contextBlock(rctx, { short: true })] : []),
     ].join('\n');
 
     const ctx = [

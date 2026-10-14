@@ -13,6 +13,7 @@ import {
   checkRateLimit, errorResponse, getUserGeminiKey, internalUserId, jsonResponse, logUsage, preflight, userIdFromAuth,
 } from '../_shared/security.ts';
 import { fetchRest } from '../_shared/gemini.ts';
+import { resolveAndSnapshot } from '../_shared/context.ts';
 import { judgeRepetition, memoryPromptBlock, neighborsFor, recentSaid, repeatedStructures, syncMemory, type MemoryHit } from '../_shared/content-memory.ts';
 import { buildContract, contractPromptBlock, validateMovement, type AcjContract, type AcjValidation } from '../_shared/acj.ts';
 
@@ -62,8 +63,8 @@ Deno.serve(async (req: Request) => {
     if (!input.idea_id) return errorResponse('idea_id obrigatório', 400);
     if (mode === 'adjust' && !input.instruction?.trim()) return errorResponse('Diga o que ajustar.', 400);
 
-    const [idea] = await fetchRest<Array<{ title: string; summary: string | null; strategic_function: Fn | null; editorial_slug: string | null; campaign_id: string | null; cycle_id: string | null; rationale: string | null; acj_primary: string | null; acj_secondary: string | null; acj_role: string | null; acj_rationale: string | null }>>(
-      `/ideas?id=eq.${input.idea_id}&user_id=eq.${userId}&select=title,summary,strategic_function,editorial_slug,campaign_id,cycle_id,rationale,acj_primary,acj_secondary,acj_role,acj_rationale&limit=1`);
+    const [idea] = await fetchRest<Array<{ title: string; summary: string | null; strategic_function: Fn | null; editorial_slug: string | null; campaign_id: string | null; cycle_id: string | null; profile_id: string | null; rationale: string | null; acj_primary: string | null; acj_secondary: string | null; acj_role: string | null; acj_rationale: string | null }>>(
+      `/ideas?id=eq.${input.idea_id}&user_id=eq.${userId}&select=title,summary,strategic_function,editorial_slug,campaign_id,cycle_id,profile_id,rationale,acj_primary,acj_secondary,acj_role,acj_rationale&limit=1`);
     if (!idea) return errorResponse('Ideia não encontrada', 404);
     const fn: Fn = idea.strategic_function ?? 'presenca';
     // Conteúdo avulso ("Um conteúdo") vive num contêiner metadata.kind='avulso': não é campanha.
@@ -111,12 +112,18 @@ Deno.serve(async (req: Request) => {
         ? `Traga uma NOVA VERSÃO desta mesma ideia com OUTRA entrada/ângulo — diferente desta anterior:\nFrase: ${cur.frase ?? ''}\nTexto:\n${cur.texto ?? ''}`
         : '';
 
+    // Contexto de atuação (perfil): conteúdo existente reusa o snapshot; novo cria um.
+    const rctx = await resolveAndSnapshot(userId, {
+      content_id: input.content_id ?? null, campaign_id: idea.campaign_id, profile_id: idea.profile_id,
+    }).catch((e) => { console.warn('[content-develop] contexto indisponível:', (e as Error).message); return null; });
+
     const genBody = (briefing: string) => ({
       editorial_slug: idea.editorial_slug ?? 'provocacao-de-crenca',
       target_platform: 'linkedin',
       variations: 1,
       briefing,
       mother_idea: { title: idea.title, direction: idea.summary ?? undefined, strategic_function: FN_LABEL[fn] },
+      ...(rctx?.snapshot_id ? { context_snapshot_id: rctx.snapshot_id } : {}),
       ...(acj ? { acj_context: contractPromptBlock(acj.contract) } : {}),
     });
 
@@ -137,11 +144,11 @@ Deno.serve(async (req: Request) => {
     let qa: { score: number | null; checks?: Array<{ titulo: string; passed: boolean; nota: string }> } = { score: null };
     let qaError: string | null = null;
     try {
-      qa = await callFn('qa-check', userId, { quote: best.quote, caption: best.caption, target_platform: 'linkedin', editorial_slug: idea.editorial_slug });
+      qa = await callFn('qa-check', userId, { quote: best.quote, caption: best.caption, target_platform: 'linkedin', editorial_slug: idea.editorial_slug, context_snapshot_id: rctx?.snapshot_id ?? undefined });
       if (mode !== 'adjust' && qa.score !== null && qa.score < QA_PASS) {
         const failed = (qa.checks ?? []).filter((c) => !c.passed).map((c) => `- ${c.titulo}: ${c.nota}`).join('\n');
         const retry = await callFn<Gen & { success: boolean }>('generate-content', userId, genBody(`${briefing}\n\nCORRIJA estes pontos da tentativa anterior:\n${failed}`));
-        const qa2 = await callFn<{ score: number | null }>('qa-check', userId, { quote: retry.quote, caption: retry.caption, target_platform: 'linkedin', editorial_slug: idea.editorial_slug });
+        const qa2 = await callFn<{ score: number | null }>('qa-check', userId, { quote: retry.quote, caption: retry.caption, target_platform: 'linkedin', editorial_slug: idea.editorial_slug, context_snapshot_id: rctx?.snapshot_id ?? undefined });
         if ((qa2.score ?? 0) >= (qa.score ?? 0)) { best = retry; qa = qa2; }
       }
     } catch (e) {
@@ -202,6 +209,8 @@ Deno.serve(async (req: Request) => {
         repeat: repeat ? { verdict: repeat.verdict, reason: repeat.reason, retried: repeat.retried, of_text: repeat.of?.text.slice(0, 240) ?? null, of_date: repeat.of?.said_at ?? null } : null,
       },
       acj,
+      // O cliente grava no conteúdo-mãe; as peças herdam (trigger) e o QA reusa.
+      context: rctx ? { snapshot_id: rctx.snapshot_id, profile_id: rctx.profile.id, profile_name: rctx.profile.name, summary: rctx.summary, fallback: rctx.fallback } : null,
     });
   } catch (e) {
     console.error('[content-develop]', e);

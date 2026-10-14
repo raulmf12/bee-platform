@@ -4,12 +4,13 @@
 // campanhas anteriores) e pede ao modelo uma leitura do momento.
 // Entrada: { type: 'organica'|'vendas', intent?: string, user_note?: string }
 // Saída:   { success, moment: { label, summary, signals[] }, facts }
+import { contextBlock, resolveContext } from '../_shared/context.ts';
 import {
   checkRateLimit, errorResponse, getUserGeminiKey, internalUserId, jsonResponse, logUsage, preflight, userIdFromAuth,
 } from '../_shared/security.ts';
 import { callGeminiJson, fetchRest } from '../_shared/gemini.ts';
 
-interface Input { type?: 'organica' | 'vendas'; intent?: string; user_note?: string }
+interface Input { type?: 'organica' | 'vendas'; intent?: string; user_note?: string; profile_id?: string }
 
 const MOMENTS = [
   ['Construção de base', 'presença digital ainda pequena ou irregular; a prioridade é consistência e clareza de posicionamento'],
@@ -37,13 +38,14 @@ Deno.serve(async (req: Request) => {
     const apiKey = await getUserGeminiKey(userId);
     if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
 
+    const rctx = await resolveContext(userId, { profile_id: input.profile_id }).catch(() => null);
     const since = new Date(Date.now() - 180 * 86_400_000).toISOString();
     const [posts, metrics, campaigns, accounts, core] = await Promise.all([
       fetchRest<Post[]>(`/user_posts?user_id=eq.${userId}&select=platform,status,published_at,created_at,metadata&or=(published_at.gte.${since},status.in.(scheduled,approved,pending_approval))&limit=1000`),
       fetchRest<Array<{ likes: number | null; comments: number | null; reach: number | null; source: string }>>(`/post_metrics?user_id=eq.${userId}&select=likes,comments,reach,source&limit=1000`),
       fetchRest<Array<{ name: string; status: string; type: string; created_at: string }>>(`/campaigns?user_id=eq.${userId}&select=name,status,type,created_at&order=created_at.desc&limit=10`),
       fetchRest<Array<{ platform: string; label: string }>>(`/social_accounts?user_id=eq.${userId}&select=platform,label`),
-      fetchRest<Array<{ produto_real: string; frase_organizadora: string }>>(`/genesis_core?select=produto_real,frase_organizadora&limit=1`),
+      fetchRest<Array<{ produto_real: string; frase_organizadora: string }>>(`/genesis_core?select=produto_real,frase_organizadora&limit=1${rctx ? `&brand_id=eq.${rctx.brand.id}` : ''}`),
     ]);
 
     // ---- Fatos (determinísticos) ----
@@ -76,11 +78,12 @@ Deno.serve(async (req: Request) => {
     };
 
     const sys = [
-      'Você é a Hive, a inteligência estratégica de conteúdo da Bee Consulting. Faz a LEITURA DO MOMENTO da presença digital de um produtor de conteúdo antes de montar uma campanha.',
+      `Você é a Hive, a inteligência estratégica de conteúdo da ${rctx?.brand.name ?? 'marca'}. Faz a LEITURA DO MOMENTO da presença digital de um produtor de conteúdo antes de montar uma campanha.`,
       'Baseie-se SOMENTE nos fatos fornecidos. Nunca invente números. Se os dados forem poucos, diga isso com naturalidade.',
       'Escreva em português do Brasil, falando diretamente com a pessoa ("você"), tom sóbrio, claro e humano — sem jargão de marketing, sem exagero.',
       'Escolha o rótulo do momento dentre estes (use exatamente o texto):',
       ...MOMENTS.map(([l, d]) => `- "${l}": ${d}`),
+      ...(rctx ? ['', contextBlock(rctx, { short: true })] : []),
     ].join('\n');
     const usr = [
       `TIPO DE CAMPANHA: ${input.type === 'vendas' ? 'Vendas / Lançamento' : 'Orgânica'}`,

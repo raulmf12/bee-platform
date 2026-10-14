@@ -15,6 +15,7 @@
 // Aviso honesto (a pesquisa alerta): persona de LLM aproxima, não substitui
 // pesquisa real com cliente. Serve pra pressionar o material antes de publicar.
 
+import { contextBlock, resolveContext, speakerLine, type ResolvedContext } from '../_shared/context.ts';
 import {
   errorResponse, getUserGeminiKey, jsonResponse, preflight, userIdFromAuth, checkRateLimit,
 } from '../_shared/security.ts';
@@ -56,13 +57,13 @@ interface PostCtx {
 
 interface ChatMsg { role: 'user' | 'assistant'; content: string }
 
-function personaPrompt(p: Persona): string {
+function personaPrompt(p: Persona, rctx: ResolvedContext | null = null): string {
   // Cabeçalho: quem ela É, como pessoa.
   const idnt = [p.nome, p.idade ? `${p.idade} anos` : '', p.cargo].filter(Boolean).join(', ');
   const lines: string[] = [
-    `Voce E uma pessoa real: ${idnt || p.nome || 'do publico da Bee Consulting'}${p.empresa ? ` (${p.empresa})` : ''}.`,
+    `Voce E uma pessoa real: ${idnt || p.nome || `do publico de ${rctx?.brand.name ?? 'quem publica'}`}${p.empresa ? ` (${p.empresa})` : ''}.`,
     'Voce NAO e uma IA, nao e assistente, nao e consultor. Voce e ESSA PESSOA,',
-    'um(a) lider/gestor(a) rolando o feed. Responda SEMPRE em personagem, em',
+    `${p.cargo ? `com o seu trabalho (${p.cargo})` : (rctx?.audience ? `do publico "${rctx.audience.name}"` : 'uma pessoa comum')}, rolando o feed. Responda SEMPRE em personagem, em`,
     'primeira pessoa, com a SUA historia e as SUAS memorias. Nunca quebre o personagem.',
     '',
     '=== SUA VIDA ===',
@@ -179,7 +180,8 @@ Deno.serve(async (req: Request) => {
     const apiKey = await getUserGeminiKey(userId);
     if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
 
-    const reply = await callGemini(apiKey, personaPrompt(persona), messages.slice(-12), post);
+    const rctx = await resolveContext(userId).catch(() => null);
+    const reply = await callGemini(apiKey, personaPrompt(persona, rctx), messages.slice(-12), post);
     return jsonResponse({ success: true, reply });
   } catch (e) {
     console.error('[persona-chat]', e);

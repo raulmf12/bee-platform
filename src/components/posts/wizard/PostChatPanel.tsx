@@ -28,7 +28,7 @@ interface PostChatPanelProps {
   open: boolean;
   onClose: () => void;
   postId: string;              // pra persistir a conversa por post
-  post: { quote?: string; caption?: string; editorial_slug?: string; platform?: 'linkedin' | 'instagram'; target_avatar?: string };
+  post: { id?: string; quote?: string; caption?: string; editorial_slug?: string; platform?: 'linkedin' | 'instagram'; target_avatar?: string };
   onApply: (field: 'titulo' | 'legenda', text: string) => Promise<void>;
 }
 

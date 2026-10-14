@@ -516,6 +516,7 @@ export function NewPost() {
     let best: Cand | null = null;
     let briefing: string | undefined;
 
+    let lastCtx: { snapshot_id: string | null; profile_id: string } | null = null;
     for (let attempt = 0; attempt <= QA_MAX_RETRIES; attempt++) {
       const pctBase = ((idx + (attempt === 0 ? 0.15 : 0.5)) / quantity) * 100;
       setGenProgress(Math.round(pctBase));
@@ -538,6 +539,7 @@ export function NewPost() {
         check_repeat: true,
       });
       const v = res.variations?.[0] ?? res;
+      lastCtx = (res as { context?: { snapshot_id: string | null; profile_id: string } | null }).context ?? lastCtx;
 
       setGenLabel(`Checando a qualidade do post ${idx + 1}...`);
       let qa: QaResult | null = null;
@@ -574,6 +576,8 @@ export function NewPost() {
       hiveSeed: (v.hive_seed ?? undefined) as HiveSeed | undefined,
       qa: best!.qa,
       repeat: ((v as { repeat?: RepeatFlag | null }).repeat ?? null),
+      // Perfil/contexto de atuação usado (a peça guarda o snapshot).
+      context: lastCtx,
     };
   }
 
@@ -647,6 +651,7 @@ export function NewPost() {
             virality_reason: fresh.reason,
           },
           carousel_fabric_json: [fabricJson],
+          ...(fresh.context ? { profile_id: fresh.context.profile_id, context_snapshot_id: fresh.context.snapshot_id } : {}),
           metadata: {
             canvas_size: sizeId,
             editorial_slug: pick.editorial.slug,
@@ -823,6 +828,7 @@ export function NewPost() {
         counterpart: isTitulo ? item.caption : item.quote,
         target_platform: item.pick.platform === 'instagram' ? 'instagram' : 'linkedin',
         editorial_slug: item.pick.editorialSlug,
+        post_id: item.post.id,
         max_chars: isTitulo ? 200 : undefined,
       });
       const novo = (res.text ?? '').trim();
@@ -890,6 +896,7 @@ export function NewPost() {
         full_text: draft,
         snippet: snippetSel.text,
         instruction,
+        post_id: activeItem.post.id,
         count: 5,
         editorial_slug: activeItem.pick.editorialSlug,
         target_platform: activeItem.pick.platform === 'instagram' ? 'instagram' : 'linkedin',
@@ -1549,6 +1556,7 @@ export function NewPost() {
           onClose={() => setChatOpen(false)}
           postId={activeItem.post.id}
           post={{
+            id: activeItem.post.id,
             quote: activeItem.quote,
             caption: activeItem.caption,
             editorial_slug: activeItem.pick.editorialSlug,

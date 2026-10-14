@@ -4,6 +4,7 @@
 // Só PROPÕE — devolve o perfil pra o usuário revisar e salvar (a curadoria
 // humana protege a voz). Não grava nada.
 
+import { contextBlock, resolveContext, speakerLine, type ResolvedContext } from '../_shared/context.ts';
 import {
   errorResponse, getUserGeminiKey, jsonResponse, preflight, userIdFromAuth, checkRateLimit,
 } from '../_shared/security.ts';
@@ -21,15 +22,14 @@ interface EditorialInput {
   tom?: string;
 }
 
-function systemPrompt(): string {
+function systemPrompt(rctx: ResolvedContext | null): string {
   return [
-    'Voce e estrategista de audiencia da Bee Consulting (consultoria sistemica de',
-    'lideranca, do Marcos Piccini). A partir de um EDITORIAL (um pilar de conteudo),',
+    `Voce e estrategista de audiencia da ${rctx?.brand.name ?? 'marca'}. A partir de um EDITORIAL (um pilar de conteudo),`,
     'monte o PUBLICO-ALVO especifico daquele pilar: com quem ele fala.',
     '',
-    'A Bee fala com lideres/gestores. O publico NAO e generico — e o recorte que',
-    'ESTE editorial ataca. Seja concreto e especifico, na linguagem da Bee (olhar',
-    'sistemico, nao mecanico; sem jargao de coach raso).',
+    'O publico NAO e generico — e o recorte que ESTE editorial ataca, DENTRO do publico do perfil abaixo.',
+    'Seja concreto e especifico, sem jargao de coach raso. Nao presuma cargo quando o publico for definido por situacao.',
+    ...(rctx ? ['', contextBlock(rctx, { short: true })] : []),
     '',
     '=== SAIDA (JSON puro, sem markdown) ===',
     '{',
@@ -140,7 +140,8 @@ Deno.serve(async (req: Request) => {
     const apiKey = await getUserGeminiKey(userId);
     if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
 
-    const raw = await callGemini(apiKey, systemPrompt(), userPrompt(editorial));
+    const rctx = await resolveContext(userId).catch(() => null);
+    const raw = await callGemini(apiKey, systemPrompt(rctx), userPrompt(editorial));
     let audience;
     try { audience = parse(raw); } catch { return errorResponse('A IA devolveu um formato invalido, tente de novo', 502); }
 

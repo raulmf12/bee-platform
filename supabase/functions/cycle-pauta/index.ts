@@ -8,6 +8,7 @@
 // A IA propõe; o servidor GARANTE: quantidade, funções = necessidades do plano,
 // editorial válido e canais respeitando exatamente a cadência de cada conta.
 // Entrada: { cycle_id, mode?, idea_id? }   Saída: { success, ideas[] } (não persiste)
+import { contextBlock, resolveContext } from '../_shared/context.ts';
 import {
   checkRateLimit, errorResponse, getUserGeminiKey, internalUserId, jsonResponse, logUsage, preflight, userIdFromAuth,
 } from '../_shared/security.ts';
@@ -138,14 +139,17 @@ Deno.serve(async (req: Request) => {
     const swapTarget = mode === 'swap' ? cycleIdeas.find((i) => i.id === input.idea_id) : undefined;
     if (mode === 'swap' && !swapTarget) return errorResponse('Ideia a trocar não encontrada', 404);
 
+    // Perfil da campanha: quem fala, frente, público e intenção da pauta.
+    const rctx = await resolveContext(userId, { campaign_id: cycle.campaign_id }).catch(() => null);
+    const B = rctx ? `&brand_id=eq.${rctx.brand.id}` : '';
     const since = new Date(Date.now() - 90 * 86_400_000).toISOString();
     const [recent, contents, backlog, editorials, arsenal, core, products] = await Promise.all([
       fetchRest<Array<{ title: string | null; carousel_text: { quote?: string } | null }>>(`/user_posts?user_id=eq.${userId}&created_at=gte.${since}&select=title,carousel_text&order=created_at.desc&limit=60`),
       fetchRest<Array<{ title: string }>>(`/contents?user_id=eq.${userId}&select=title&order=created_at.desc&limit=40`),
       fetchRest<Array<{ title: string; summary: string | null; strategic_function: string | null }>>(`/ideas?user_id=eq.${userId}&status=eq.backlog&select=title,summary,strategic_function&limit=10`),
-      fetchRest<Array<{ slug: string; name: string; description: string | null; objetivo: string | null; temas: string[] | null }>>(`/bee_editorials?is_active=eq.true&select=slug,name,description,objetivo,temas&order=position.asc`),
-      fetchRest<Array<{ title: string; summary: string | null; editorial_slug: string | null }>>(`/bee_arsenal?is_active=eq.true&select=title,summary,editorial_slug&order=usage_count.asc,last_used_at.asc.nullsfirst&limit=25`),
-      fetchRest<Array<{ produto_real: string; frase_organizadora: string; persona_nome: string | null; voz_como_escreve: string | null }>>(`/genesis_core?select=produto_real,frase_organizadora,persona_nome,voz_como_escreve&limit=1`),
+      fetchRest<Array<{ slug: string; name: string; description: string | null; objetivo: string | null; temas: string[] | null }>>(`/bee_editorials?is_active=eq.true&select=slug,name,description,objetivo,temas&order=position.asc${B}`),
+      fetchRest<Array<{ title: string; summary: string | null; editorial_slug: string | null }>>(`/bee_arsenal?is_active=eq.true&select=title,summary,editorial_slug&order=usage_count.asc,last_used_at.asc.nullsfirst&limit=25${B}`),
+      fetchRest<Array<{ produto_real: string; frase_organizadora: string; persona_nome: string | null; voz_como_escreve: string | null }>>(`/genesis_core?select=produto_real,frase_organizadora,persona_nome,voz_como_escreve&limit=1${B}`),
       campaign?.product_id ? fetchRest<Array<{ name: string; promessa: string | null }>>(`/bee_products?id=eq.${campaign.product_id}&select=name,promessa&limit=1`) : Promise.resolve([]),
     ]);
 
@@ -180,13 +184,15 @@ Deno.serve(async (req: Request) => {
     const rag = await retrieveContext(apiKey, themeQuery, campaign?.intent ?? undefined, userId).catch(() => '');
 
     const sys = [
-      'Você é a Hive, a inteligência estratégica de conteúdo da Bee Consulting. Monta a PAUTA de um ciclo semanal: ideias-mãe que valem a pena desenvolver — NÃO escreve posts ainda.',
-      'Uma ideia-mãe define TERRITÓRIO e DIREÇÃO de pensamento. O título é uma pergunta ou frase provocativa na voz do autor (ex.: "Por que bons líderes repetem velhos padrões?", "E se aquilo que chamamos de resistência for apenas coerência?"). O resumo diz em 1–2 frases que linha de pensamento explorar.',
+      `Você é a Hive, a inteligência estratégica de conteúdo da ${rctx?.brand.name ?? 'marca'}. Monta a PAUTA de um ciclo semanal: ideias-mãe que valem a pena desenvolver — NÃO escreve posts ainda.`,
+      'Uma ideia-mãe define TERRITÓRIO e DIREÇÃO de pensamento. O título é uma pergunta ou frase provocativa na voz do autor (ex.: "Por que bons hábitos viram armadilhas?", "E se aquilo que chamamos de resistência for apenas coerência?"). O resumo diz em 1–2 frases que linha de pensamento explorar.',
       'Cada ideia cumpre UMA função estratégica e usa UM editorial (o formato de pensamento) da lista. Ideias distintas entre si, sem repetir temas recentes, sem clichê de coach/marketing.',
       'Cada ideia também tem UMA ACJ primária (Arquitetura de Conexão e Jornada): o MOVIMENTO RELACIONAL que ela deve produzir na pessoa. Decida o movimento PRIMEIRO e depois a ideia que o realiza naturalmente — a ACJ não é etiqueta posta depois. ACJ não é editoria nem função estratégica (Relacionamento ≠ Conexão; Autoridade ≠ Aprofundamento). Secundária só se acrescentar função distinta; nunca ACJ-00.',
       'Use os FATOS REAIS DO AUTOR quando ajudarem a dar concretude; nunca invente casos.',
       core[0] ? `PROPÓSITO DA MARCA: ${core[0].produto_real} — ${core[0].frase_organizadora}` : '',
-      core[0]?.voz_como_escreve ? `COMO O AUTOR ESCREVE: ${core[0].voz_como_escreve}` : '',
+      (!rctx || rctx.emitter.kind === 'person') && core[0]?.voz_como_escreve ? `COMO O AUTOR ESCREVE: ${core[0].voz_como_escreve}` : '',
+      rctx ? contextBlock(rctx, { short: true }) : '',
+      rctx ? 'As ideias falam com o PÚBLICO PRIORITÁRIO do perfil e cabem nos territórios da frente. Ofertas só quando a intenção da campanha pedir.' : '',
       'Português do Brasil.',
     ].filter(Boolean).join('\n');
 

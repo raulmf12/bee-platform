@@ -31,6 +31,7 @@ interface SnippetInput {
   instruction?: string;
   count?: number;
   editorial_slug?: string;
+  post_id?: string;            // contexto de atuação da peça (perfil/snapshot)
   target_platform?: 'linkedin' | 'instagram';
 }
 
@@ -117,7 +118,7 @@ Deno.serve(async (req: Request) => {
     let brain = '';
     try {
       const ctx = await loadBeeContext(
-        { editorial_slug: input.editorial_slug ?? '', target_platform: input.target_platform },
+        { editorial_slug: input.editorial_slug ?? '', target_platform: input.target_platform, post_id: input.post_id },
         userId,
       );
       const rag = await retrieveContext(apiKey, input.full_text.slice(0, 500), `${input.instruction ?? ''} ${input.snippet}`, userId);

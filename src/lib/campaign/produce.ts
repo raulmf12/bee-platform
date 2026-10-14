@@ -190,6 +190,7 @@ export async function adjustPieceText(userId: string, piece: UserPost, field: 't
   const r = await edge.editText({
     field, text: field === 'titulo' ? quote : caption, instruction, counterpart: field === 'titulo' ? caption : quote,
     editorial_slug: piece.metadata?.editorial_slug as string | undefined, target_platform: piece.platform as 'linkedin' | 'instagram',
+    post_id: piece.id,
   });
   const updated = field === 'titulo'
     ? await updatePiece(piece.id, { carousel_text: { ...(piece.carousel_text ?? {}), quote: r.text }, ai_edit_rounds: (piece.ai_edit_rounds ?? 0) + 1 })

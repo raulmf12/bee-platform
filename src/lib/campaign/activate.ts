@@ -34,7 +34,7 @@ export function defaultCampaignName(type: CampaignType, ownerName: string | unde
 export async function activateCampaign(p: {
   type: CampaignType; name: string; intent: string; moment: CampaignMoment; strategy: DraftStrategy;
   weeks: number; productId?: string | null; accounts: SocialAccount[]; cadence: Record<string, number>;
-  existingCount: number; today?: Date;
+  existingCount: number; today?: Date; profileId?: string | null;
 }): Promise<{ campaign: Campaign; cycles: CampaignCycle[] }> {
   const today = p.today ?? new Date();
   const start = mondayOf(today);
@@ -53,6 +53,7 @@ export async function activateCampaign(p: {
     account_ids: p.accounts.map((a) => a.id),
     cadence: p.cadence,
     activated_at: new Date().toISOString(),
+    profile_id: p.profileId ?? null,
   });
   const cycles = await cycleApi.createMany(buildCycleRanges(start, p.weeks).map((r) => ({
     campaign_id: campaign.id,

@@ -13,6 +13,7 @@
 // e o prompt vira ruido — o oposto de aprender. Licao parecida com uma que ja
 // existe REFORCA a existente (evidencias+1) em vez de criar outra.
 
+import { learningScopeForPost } from '../_shared/context.ts';
 import {
   errorResponse,
   getUserGeminiKey,
@@ -304,9 +305,11 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: true, learnings: [], skipped: 'nada generalizavel' });
     }
 
-    // Licoes que ja existem
+    // "Onde isso vale?": a frente do contexto em que a peça foi criada.
+    const where = await learningScopeForPost(userId, (review as { post_id?: string | null }).post_id);
+    // Licoes que ja existem (no mesmo escopo de frente — Academy não reforça Consulting)
     const exRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/ai_learnings?user_id=eq.${userId}&select=id,texto,categoria,facet,evidencias`,
+      `${SUPABASE_URL}/rest/v1/ai_learnings?user_id=eq.${userId}&select=id,texto,categoria,facet,evidencias&front_id=${where.front_id ? `eq.${where.front_id}` : 'is.null'}`,
       { headers: sbHeaders() },
     );
     const existing = (await exRes.json()) as Learning[];
@@ -357,6 +360,7 @@ Deno.serve(async (req: Request) => {
           exemplo_antes: (d.facet === 'legenda' ? review.caption_original : review.quote_original)?.slice(0, 400),
           exemplo_depois: (d.facet === 'legenda' ? review.caption_final : review.quote_final)?.slice(0, 400),
           origem_review_id: review.id,
+          brand_id: where.brand_id, front_id: where.front_id,
         }),
       });
       if (ins.ok) {

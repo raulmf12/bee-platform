@@ -26,6 +26,7 @@ const MODEL_CHAIN = BEE_MODEL_CHAIN;
 
 interface ChatMsg { role: 'user' | 'assistant'; content: string }
 interface PostCtx {
+  id?: string;                 // a peça: o contexto de atuação vem do snapshot dela
   quote?: string; caption?: string;
   editorial_slug?: string; platform?: 'linkedin' | 'instagram'; target_avatar?: string;
 }
@@ -145,7 +146,7 @@ Deno.serve(async (req: Request) => {
     let brain = '';
     try {
       const ctx = await loadBeeContext(
-        { editorial_slug: p.editorial_slug ?? '', target_platform: platform, target_avatar: (p.target_avatar as 'identificado' | 'incomodado' | 'ambos' | undefined) },
+        { editorial_slug: p.editorial_slug ?? '', target_platform: platform, target_avatar: (p.target_avatar as 'identificado' | 'incomodado' | 'ambos' | undefined), post_id: p.id ?? null },
         userId,
       );
       const lastUser = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';

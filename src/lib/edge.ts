@@ -303,6 +303,7 @@ export const edge = {
     editorial_slug?: string;
     target_platform?: 'linkedin' | 'instagram';
     max_chars?: number;
+    post_id?: string;            // contexto de atuação (perfil/snapshot) da peça
   }): Promise<{ success: boolean; text: string; error?: string }> {
     const headers = await authHeader();
     const res = await fetch(`${SUPABASE_URL}/functions/v1/edit-text`, {
@@ -325,6 +326,7 @@ export const edge = {
     count?: number;
     editorial_slug?: string;
     target_platform?: 'linkedin' | 'instagram';
+    post_id?: string;
   }): Promise<{ success: boolean; options: string[]; error?: string }> {
     const headers = await authHeader();
     const res = await fetch(`${SUPABASE_URL}/functions/v1/regenerate-snippet`, {
@@ -341,7 +343,7 @@ export const edge = {
   // propor textos prontos pra aplicar (suggestions).
   async postChat(input: {
     messages: Array<{ role: 'user' | 'assistant'; content: string }>;
-    post: { quote?: string; caption?: string; editorial_slug?: string; platform?: 'linkedin' | 'instagram'; target_avatar?: string };
+    post: { id?: string; quote?: string; caption?: string; editorial_slug?: string; platform?: 'linkedin' | 'instagram'; target_avatar?: string };
   }): Promise<{ success: boolean; reply: string; suggestions: Array<{ field: 'titulo' | 'legenda'; text: string; label?: string }>; error?: string }> {
     const headers = await authHeader();
     const res = await fetch(`${SUPABASE_URL}/functions/v1/post-chat`, {
@@ -412,14 +414,14 @@ export const edge = {
 
   // Valida um token do LinkedIn no servidor (o browser bloqueia por CORS).
   // --- Campanhas (F2) ---
-  async campaignMoment(input: { type: 'organica' | 'vendas'; intent?: string; user_note?: string }): Promise<{
+  async campaignMoment(input: { type: 'organica' | 'vendas'; intent?: string; user_note?: string; profile_id?: string }): Promise<{
     success: boolean; moment: { label: string; summary: string; signals: string[] }; facts: Record<string, unknown>;
   }> {
     return postEdge('campaign-moment', input);
   },
 
   async campaignStrategy(input: {
-    mode: 'recommend' | 'adjust'; type: 'organica' | 'vendas'; intent?: string;
+    mode: 'recommend' | 'adjust'; type: 'organica' | 'vendas'; intent?: string; profile_id?: string;
     moment?: { label: string; summary: string }; user_note?: string;
     current_mix?: Record<string, number>; instruction?: string; product_id?: string;
   }): Promise<{
@@ -467,7 +469,7 @@ export const edge = {
   // ACJ-00 (docs/acj): plano da campanha, atribuição, portão do movimento e leitura de sinais.
   async acjCampaignPlan(input: {
     campaign_id?: string; adoption?: 'native' | 'late'; instruction?: string; current?: { target_mix?: Record<string, number> };
-    draft?: { name?: string; type: string; intent?: string; moment?: { label: string; summary: string } | null; strategy: { mix: Record<string, number>; rationale?: string; phases?: unknown }; weeks: number; product_id?: string | null };
+    draft?: { profile_id?: string | null; name?: string; type: string; intent?: string; moment?: { label: string; summary: string } | null; strategy: { mix: Record<string, number>; rationale?: string; phases?: unknown }; weeks: number; product_id?: string | null };
   }): Promise<{ success: boolean; plan: AcjPlanDraft }> {
     return postEdge('acj-orchestrator', { action: 'campaign_plan', ...input });
   },
@@ -517,6 +519,8 @@ export const edge = {
       headline_type: string | null; analogy: string | null; virality_score: number | null; virality_reason: string | null; qa_score: number | null;
       repeat?: { verdict: string; reason: string; retried: boolean; of_text: string | null; of_date: string | null } | null;
     };
+    // Contexto de atuação (perfil + snapshot) usado na criação — o cliente grava no conteúdo-mãe.
+    context?: { snapshot_id: string | null; profile_id: string; profile_name: string; summary: string; fallback: boolean } | null;
     // Contrato ACJ (novo ou reaproveitado) + portão "o movimento aconteceu?" — o cliente persiste.
     acj?: { contract: AcjContractFields & { id?: string }; reused: boolean; campaign_plan_id: string | null; cycle_plan_id: string | null; validation?: AcjValidation | null; error?: string } | null;
   }> {

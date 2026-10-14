@@ -4,6 +4,7 @@
 // Mesmo prompt-engine da generate-caption-from-video, mas parte de um editorial
 // (nao de um transcript) e produz um script, nao uma caption.
 
+import { contextBlock, resolveContext, speakerLine, type ResolvedContext } from '../_shared/context.ts';
 import {
   errorResponse,
   getUserGeminiKey,
@@ -69,7 +70,7 @@ interface Editorial { slug: string; name: string; description: string; structure
 interface Avatar { name: string; state: string; dor: string; gatilhos: string[]; example_phrases: string[] }
 interface StyleRule { rule: string }
 
-async function loadBeeCtx(editorialSlug?: string, targetAvatar?: string) {
+async function loadBeeCtx(editorialSlug?: string, targetAvatar?: string, rctx: ResolvedContext | null = null) {
   const avatarFilter = targetAvatar && targetAvatar !== 'ambos' ? `&slug=eq.${targetAvatar}` : '';
   const editorialFilter = editorialSlug ? `slug=eq.${editorialSlug}&` : '';
   const [editorial, avatars, doRules, dontRules, generalRules] = await Promise.all([
@@ -79,13 +80,14 @@ async function loadBeeCtx(editorialSlug?: string, targetAvatar?: string) {
     fetchRest<StyleRule[]>(`/bee_style_rules?category=eq.dont&order=position.asc`),
     fetchRest<StyleRule[]>(`/bee_style_rules?category=eq.general&order=position.asc`),
   ]);
-  return { editorial: editorial[0], avatars, doRules, dontRules, generalRules };
+  return { editorial: editorial[0], avatars, doRules, dontRules, generalRules, rctx };
 }
 
 function buildPrompt(input: Input, ctx: Awaited<ReturnType<typeof loadBeeCtx>>, learnings: string[]): string {
   const lines: string[] = [];
 
-  lines.push('Voce e Marcos Piccini / Bee Academy. Vai escrever o ROTEIRO de um VIDEO curto pra redes sociais.');
+  lines.push(`${speakerLine(ctx.rctx ?? null)} Vai escrever o ROTEIRO de um VIDEO curto pra redes sociais.`);
+  if (ctx.rctx) lines.push(contextBlock(ctx.rctx, { short: true }));
   lines.push('O roteiro sera GRAVADO por uma pessoa falando pra camera. Escreva pra ser FALADO, nao lido — ritmo de fala, frases curtas, respiro.');
   lines.push('O video leva o espectador do Olhar Mecanico (a armadilha) pro Olhar Sistemico (a potencia).');
   lines.push('');
@@ -246,7 +248,7 @@ Deno.serve(async (req: Request) => {
     if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
 
     const [ctx, learnings] = await Promise.all([
-      loadBeeCtx(input.editorial_slug, input.target_avatar),
+      loadBeeCtx(input.editorial_slug, input.target_avatar, await resolveContext(userId, { profile_id: (input as { profile_id?: string }).profile_id }).catch(() => null)),
       fetchLearnings(userId, input.editorial_slug, input.platform, input.target_avatar),
     ]);
     const sys = buildPrompt(input, ctx, learnings);

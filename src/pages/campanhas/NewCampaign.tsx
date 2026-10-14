@@ -14,6 +14,8 @@ import { HiveNote } from '@/components/campaign/HiveNote';
 import { MixBars } from '@/components/campaign/MixBars';
 import { StrategyMatrix } from '@/components/campaign/StrategyMatrix';
 import { AcjPlanCard } from '@/components/acj/AcjPlanCard';
+import { ProfilePicker } from '@/components/identity/ProfilePicker';
+import { identityApi } from '@/lib/identityApi';
 import { acjPlanApi } from '@/lib/acj/api';
 import { edge } from '@/lib/edge';
 import { accountApi, campaignApi } from '@/lib/campaignApi';
@@ -58,6 +60,9 @@ export function NewCampaign() {
   const [acjPlan, setAcjPlan] = useState<AcjPlanDraft | null>(null);
   const [acjState, setAcjState] = useState<'idle' | 'loading' | 'error'>('idle');
   const [acjApproved, setAcjApproved] = useState(false);
+  // Perfil de comunicação da campanha (default = padrão da marca, visível e alterável).
+  const [profileId, setProfileId] = useState<string | null>(null);
+  useEffect(() => { identityApi.profiles().then((ps) => setProfileId((cur) => cur ?? ps.find((p) => p.is_default)?.id ?? ps[0]?.id ?? null)).catch(() => {}); }, []);
 
   useEffect(() => {
     accountApi.list().then((a) => setAccounts(a.filter((x) => x.status === 'connected'))).catch(() => setAccounts([]));
@@ -72,7 +77,7 @@ export function NewCampaign() {
   async function readMoment(note?: string) {
     setBusy('momento');
     try {
-      const r = await edge.campaignMoment({ type, intent: intent.trim() || undefined, user_note: note || undefined });
+      const r = await edge.campaignMoment({ type, intent: intent.trim() || undefined, user_note: note || undefined, profile_id: profileId ?? undefined });
       setMoment({ ...r.moment, confirmed: false, adjust_note: note || null });
       setAdjustingMoment(false);
       setStep('momento');
@@ -86,7 +91,7 @@ export function NewCampaign() {
     setBusy('estrategia');
     try {
       const r = await edge.campaignStrategy({
-        mode: 'recommend', type, intent: intent.trim() || undefined,
+        mode: 'recommend', type, intent: intent.trim() || undefined, profile_id: profileId ?? undefined,
         moment: { label: moment.label, summary: moment.summary }, user_note: moment.adjust_note ?? undefined,
         product_id: productId || undefined,
       });
@@ -105,7 +110,7 @@ export function NewCampaign() {
     setBusy('ajuste');
     try {
       const r = await edge.campaignStrategy({
-        mode: 'adjust', type, intent: intent.trim() || undefined,
+        mode: 'adjust', type, intent: intent.trim() || undefined, profile_id: profileId ?? undefined,
         moment: moment ? { label: moment.label, summary: moment.summary } : undefined,
         current_mix: normalizeMix(strategy.mix), instruction: text.trim(), product_id: productId || undefined,
       });
@@ -143,7 +148,7 @@ export function NewCampaign() {
     try {
       const r = await edge.acjCampaignPlan({
         adoption: 'native',
-        draft: { name: name || undefined, type, intent: intent.trim() || undefined, moment: moment ? { label: moment.label, summary: moment.summary } : null,
+        draft: { profile_id: profileId, name: name || undefined, type, intent: intent.trim() || undefined, moment: moment ? { label: moment.label, summary: moment.summary } : null,
           strategy: { mix: normalizeMix(strategy.mix), rationale: strategy.rationale, phases: strategy.phases }, weeks: w, product_id: productId || null },
       });
       setAcjPlan(r.plan); setAcjState('idle');
@@ -159,7 +164,7 @@ export function NewCampaign() {
     try {
       const r = await activateCampaign({
         type, name: name || defaultCampaignName(type, currentUser?.name, product?.name), intent, moment, strategy, weeks,
-        productId: productId || null, accounts, cadence: defaultCadence(accounts, settings?.distribution_prefs), existingCount,
+        productId: productId || null, accounts, cadence: defaultCadence(accounts, settings?.distribution_prefs), existingCount, profileId,
       });
       if (acjPlan) {
         // Sem travar a ativação: se falhar, o plano pode ser gerado no detalhe da campanha.
@@ -203,6 +208,7 @@ export function NewCampaign() {
             </select>
           </div>
         )}
+        <ProfilePicker value={profileId} onChange={setProfileId} label="Por qual perfil esta campanha fala?" />
         <div className="space-y-2">
           <Label htmlFor="intent">Conte para a Hive o que você pretende fazer.</Label>
           <Textarea id="intent" rows={4} value={intent} onChange={(e) => setIntent(e.target.value)}

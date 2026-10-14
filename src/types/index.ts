@@ -255,6 +255,10 @@ export interface UserPost {
   acj_snapshot?: AcjSnapshot | null;
   acj_status?: 'inherited' | 'legacy_unassigned' | 'not_applicable' | 'unknown' | null;
   acj_frozen_at?: string | null;
+  // Perfil de comunicação e snapshot de contexto usados na criação; curadoria como referência de voz.
+  profile_id?: string | null;
+  context_snapshot_id?: string | null;
+  reference_status?: 'not_reviewed' | 'current_voice' | 'historical' | 'excluded' | null;
   created_at: string;
   updated_at: string;
 }
@@ -1078,4 +1082,5 @@ export interface AiGate {
 
 export * from './campaign';
 export * from './acj';
+export * from './identity';
 import type { AcjId, AcjSnapshot } from './acj';

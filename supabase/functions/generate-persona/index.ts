@@ -7,6 +7,7 @@
 //
 // Só PROPÕE — devolve a ficha pra o usuário revisar/editar/salvar.
 
+import { contextBlock, resolveContext, speakerLine, type ResolvedContext } from '../_shared/context.ts';
 import {
   errorResponse, getUserGeminiKey, jsonResponse, preflight, userIdFromAuth, checkRateLimit,
 } from '../_shared/security.ts';
@@ -22,17 +23,17 @@ interface Base {
   gatilhos?: string[]; objecoes?: string[]; linguagem?: string;
 }
 
-function systemPrompt(): string {
+function systemPrompt(rctx: ResolvedContext | null): string {
   return [
-    'Voce cria PERSONAS realistas do publico da Bee Consulting (consultoria',
-    'sistemica de lideranca). Uma persona NAO e uma lista de atributos — e uma',
+    `Voce cria PERSONAS realistas do publico da ${rctx?.brand.name ?? 'marca'}${rctx?.audience ? ` — publico: ${rctx.audience.name}${rctx.audience.definition ? ` (${rctx.audience.definition})` : ''}` : ''}.`,
+    'Uma persona NAO e uma lista de atributos — e uma',
     'PESSOA INTEIRA: com nome, idade, um trabalho concreto, uma historia de vida,',
     'uma rotina, memorias que a marcaram, um jeito de ser.',
     '',
     'Regras:',
     '- Concreta e especifica. Nome brasileiro real. Cargo e empresa plausiveis',
     '  (setor/porte anonimizado, ex: "diretor de operacoes numa transportadora de',
-    '  medio porte"). Nada de "gestor generico".',
+    '  medio porte"). Nada de pessoa generica; cargo so quando o publico for definido por cargo.',
     '- A pessoa TEM que continuar sendo o publico-base: a dor, o desejo, as',
     '  objecoes e os gatilhos vem dele. Voce so DA CORPO a esse recorte.',
     '- Memorias e historia devem EXPLICAR a dor: de onde veio, o que a formou.',
@@ -169,7 +170,8 @@ Deno.serve(async (req: Request) => {
     const apiKey = await getUserGeminiKey(userId);
     if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
 
-    const raw = await callGemini(apiKey, systemPrompt(), userPrompt(base ?? {}, hints));
+    const rctx = await resolveContext(userId).catch(() => null);
+    const raw = await callGemini(apiKey, systemPrompt(rctx), userPrompt(base ?? {}, hints));
     let persona;
     try { persona = parse(raw); } catch { return errorResponse('A IA devolveu formato invalido, tente de novo', 502); }
     if (!persona.nome) persona.nome = 'Pessoa sem nome';

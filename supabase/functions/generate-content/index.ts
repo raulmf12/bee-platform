@@ -29,6 +29,7 @@ import {
 import { embedText } from '../_shared/embed.ts';
 import { contractPromptBlock, type AcjContract } from '../_shared/acj.ts';
 import { judgeRepetition, neighborsFor, syncMemory } from '../_shared/content-memory.ts';
+import { contextBlock, emitterHasPhotos, resolveAndSnapshot, speakerLine, type ResolvedContext } from '../_shared/context.ts';
 
 // Cadeia: Flash primeiro (sem thinking tokens que cortam saida), Pro como fallback.
 // Mesmo padrao da generate-caption-from-video — comprovadamente mais estavel pra JSON.
@@ -61,6 +62,10 @@ interface GenerateInput {
   // Guardião anti-repetição na CRIAÇÃO (Criar › Post): confere cada variação contra tudo
   // que já foi publicado; refaz a 1ª uma vez se repetir e devolve `repeat` por variação.
   check_repeat?: boolean;
+  // Perfil de comunicação / snapshot de contexto (quem fala · frente · público · intenção).
+  profile_id?: string;
+  context_snapshot_id?: string;
+  campaign_id?: string;
   target_platform?: 'linkedin' | 'instagram';
   // Rotação forçada de template (Instagram): template-alvo deste post, definido
   // pelo cliente pra garantir variedade. Quando setado, é OBRIGATÓRIO.
@@ -121,7 +126,7 @@ interface TemplateCatalog {
 // So Instagram: carrega o catalogo congelado + fotos reais do Marcos + historico
 // recente de variantes (pressao de diversidade). LinkedIn e travado no M01-A,
 // entao nao precisa — retorna null e o prompt segue o fluxo classico.
-async function loadTemplateCatalog(userId: string, platform: string | undefined): Promise<TemplateCatalog | null> {
+async function loadTemplateCatalog(userId: string, platform: string | undefined, hasPhotos = true): Promise<TemplateCatalog | null> {
   if (platform !== 'instagram') return null;
   const [manis, vars, photoAssets, recent] = await Promise.all([
     fetchRest<HiveManifest[]>(`/design_manifestacoes?ativo=eq.true&select=id,nome,operacao,auto_select,quando_usar,quando_nao&order=ordem.asc`),
@@ -131,7 +136,8 @@ async function loadTemplateCatalog(userId: string, platform: string | undefined)
   ]);
   // So manifestacoes auto-selecionaveis (M04 depende de dados de evento -> fora).
   const autoIds = new Set(manis.filter((m) => m.auto_select !== false).map((m) => m.id));
-  const variants = vars.filter((v) => autoIds.has(v.manifestacao_id));
+  // Quem fala sem perfil fotográfico (ex.: voz institucional) não usa M02 (rosto + pensamento).
+  const variants = vars.filter((v) => autoIds.has(v.manifestacao_id) && (hasPhotos || v.manifestacao_id !== 'M02'));
   if (variants.length === 0) return null; // base sem template congelado: fluxo classico
   const realMarcosCount = photoAssets.filter(
     (a) => ['real', 'real_adapted'].includes(a.origin) && String((a.semantic ?? {}).marcos_presente ?? '').toLowerCase() === 'sim',
@@ -221,7 +227,9 @@ async function fetchReferencePost(id: string): Promise<ReferencePost | null> {
   return rows[0] ?? null;
 }
 
-async function loadBeeContext(input: GenerateInput, userId: string) {
+async function loadBeeContext(input: GenerateInput, userId: string, rctx: ResolvedContext | null = null) {
+  // Escopo da marca do perfil (hoje tudo é Bee; prepara outros clientes).
+  const B = rctx ? `&brand_id=eq.${rctx.brand.id}` : '';
   // Mapeia o alvo (identificado/incomodado/ambos) pros slugs do genesis_avatares.
   const avatarSlugs = !input.target_avatar || input.target_avatar === 'ambos'
     ? ['identificado', 'incomodado']
@@ -248,9 +256,9 @@ async function loadBeeContext(input: GenerateInput, userId: string) {
     genesisFluxo,
     directives,
   ] = await Promise.all([
-    fetchRest<BeeEditorial[]>(`/bee_editorials?slug=eq.${input.editorial_slug}&limit=1`),
+    fetchRest<BeeEditorial[]>(`/bee_editorials?slug=eq.${input.editorial_slug}&limit=1${B}`),
     input.arsenal_item_id
-      ? fetchRest<BeeArsenal[]>(`/bee_arsenal?id=eq.${input.arsenal_item_id}&limit=1`)
+      ? fetchRest<BeeArsenal[]>(`/bee_arsenal?id=eq.${input.arsenal_item_id}&limit=1${B}`)
       // REAPROVEITAR: a FONTE é o post de referência, não o arsenal. Sem isto o
       // prompt puxava um item de arsenal rotacionado e o modelo gerava sobre OUTRO
       // tema (bug: "gerou conteúdo de outro post"). Então não carrega arsenal aqui.
@@ -258,29 +266,29 @@ async function loadBeeContext(input: GenerateInput, userId: string) {
         ? Promise.resolve([] as BeeArsenal[])
         // Sem item escolhido: ROTACIONA — pega o item ativo menos usado / mais antigo
         // (metodologia viva: a cada geracao varia o material e evita repetir).
-        : fetchRest<BeeArsenal[]>(`/bee_arsenal?editorial_slug=eq.${input.editorial_slug}&is_active=eq.true&order=last_used_at.asc.nullsfirst,usage_count.asc&limit=1`),
+        : fetchRest<BeeArsenal[]>(`/bee_arsenal?editorial_slug=eq.${input.editorial_slug}&is_active=eq.true&order=last_used_at.asc.nullsfirst,usage_count.asc&limit=1${B}`),
     // AVATARES — agora do genesis_avatares (os 5 estados da Matriz Cognitiva).
-    fetchRest<GenesisAvatar[]>(`/genesis_avatares?order=ordem.asc${avatarFilter}`),
+    fetchRest<GenesisAvatar[]>(`/genesis_avatares?order=ordem.asc${avatarFilter}${B}`),
     // Few-shot tambem rotaciona por frescor (exemplos ativos menos usados primeiro).
-    fetchRest<BeeExamplePost[]>(`/bee_example_posts?editorial_slug=eq.${input.editorial_slug}&is_active=eq.true&order=last_used_at.asc.nullsfirst,position.asc&limit=2`),
-    fetchRest<BeeGlossaryTerm[]>(`/bee_glossary?select=term,meaning,usage_note,must_appear`),
-    fetchRest<BeeStyleRule[]>(`/bee_style_rules?category=eq.do&order=position.asc`),
-    fetchRest<BeeStyleRule[]>(`/bee_style_rules?category=eq.dont&order=position.asc`),
-    fetchRest<BeeStyleRule[]>(`/bee_style_rules?category=eq.general&order=position.asc`),
-    fetchRest<BeeHeadlineType[]>(`/bee_headline_types?order=position.asc`),
-    fetchRest<BeeAnalogy[]>(`/bee_analogies?used=eq.false`),
-    fetchRest<BeeAnalogy[]>(`/bee_analogies?used=eq.true`),
-    fetchRest<BeeHashtag[]>(`/bee_hashtags?order=position.asc`),
+    fetchRest<BeeExamplePost[]>(`/bee_example_posts?editorial_slug=eq.${input.editorial_slug}&is_active=eq.true&order=last_used_at.asc.nullsfirst,position.asc&limit=2${B}`),
+    fetchRest<BeeGlossaryTerm[]>(`/bee_glossary?select=term,meaning,usage_note,must_appear${B}`),
+    fetchRest<BeeStyleRule[]>(`/bee_style_rules?category=eq.do&order=position.asc${B}`),
+    fetchRest<BeeStyleRule[]>(`/bee_style_rules?category=eq.dont&order=position.asc${B}`),
+    fetchRest<BeeStyleRule[]>(`/bee_style_rules?category=eq.general&order=position.asc${B}`),
+    fetchRest<BeeHeadlineType[]>(`/bee_headline_types?order=position.asc${B}`),
+    fetchRest<BeeAnalogy[]>(`/bee_analogies?used=eq.false${B}`),
+    fetchRest<BeeAnalogy[]>(`/bee_analogies?used=eq.true${B}`),
+    fetchRest<BeeHashtag[]>(`/bee_hashtags?order=position.asc${B}`),
     // CAMADA 0 — GENESIS (a Constituicao Cognitiva que governa tudo abaixo)
-    fetchRest<GenesisCore[]>(`/genesis_core?limit=1`),
-    fetchRest<GenesisPrincipio[]>(`/genesis_principios?ativo=eq.true&select=camada,codigo,titulo,principio,aplicacao,inviolavel&order=camada.asc,ordem.asc`),
-    fetchRest<GenesisLente[]>(`/genesis_lentes?select=nome,oitava,frase_sistemica,natureza&order=ordem.asc`),
-    fetchRest<GenesisTensao[]>(`/genesis_tensoes?select=nome,arquetipo,logica,sofrimento_tipico&order=ordem.asc`),
-    fetchRest<GenesisFluxo[]>(`/genesis_fluxo?select=ordem,pergunta,nota&order=ordem.asc`),
+    fetchRest<GenesisCore[]>(`/genesis_core?limit=1${B}`),
+    fetchRest<GenesisPrincipio[]>(`/genesis_principios?ativo=eq.true&select=camada,codigo,titulo,principio,aplicacao,inviolavel&order=camada.asc,ordem.asc${B}`),
+    fetchRest<GenesisLente[]>(`/genesis_lentes?select=nome,oitava,frase_sistemica,natureza&order=ordem.asc${B}`),
+    fetchRest<GenesisTensao[]>(`/genesis_tensoes?select=nome,arquetipo,logica,sofrimento_tipico&order=ordem.asc${B}`),
+    fetchRest<GenesisFluxo[]>(`/genesis_fluxo?select=ordem,pergunta,nota&order=ordem.asc${B}`),
     // DIRETRIZES DE CRIAÇÃO — universal + a plataforma-alvo + a linha editorial.
     // scope_ref: universal=is.null, platform=<plataforma>, editorial=<slug>.
     fetchRest<BeeDirective[]>(
-      `/bee_directives?ativo=eq.true&select=scope,scope_ref,tipo,inviolavel,titulo,instrucao,ordem&or=(scope.eq.universal,and(scope.eq.platform,scope_ref.eq.${input.target_platform ?? 'linkedin'}),and(scope.eq.editorial,scope_ref.eq.${input.editorial_slug}))&order=scope.asc,ordem.asc`,
+      `/bee_directives?ativo=eq.true&select=scope,scope_ref,tipo,inviolavel,titulo,instrucao,ordem&or=(scope.eq.universal,and(scope.eq.platform,scope_ref.eq.${input.target_platform ?? 'linkedin'}),and(scope.eq.editorial,scope_ref.eq.${input.editorial_slug}))${B}${rctx ? `&and=(or(front_id.is.null,front_id.eq.${rctx.front.id}),or(emitter_id.is.null,emitter_id.eq.${rctx.emitter.id}),or(profile_id.is.null,profile_id.eq.${rctx.profile.id}))` : ''}&order=scope.asc,ordem.asc`,
     ),
   ]);
 
@@ -296,6 +304,8 @@ async function loadBeeContext(input: GenerateInput, userId: string) {
       p_platform: input.target_platform ?? 'linkedin',
       p_avatar: input.target_avatar ?? 'ambos',
       p_facets: ['texto', 'legenda'],
+      // "Onde isso vale?": lições da frente/emissor/perfil + as da marca toda.
+      p_front: rctx?.front.id ?? null, p_emitter: rctx?.emitter.id ?? null, p_profile: rctx?.profile.id ?? null,
     },
   );
 
@@ -318,6 +328,7 @@ async function loadBeeContext(input: GenerateInput, userId: string) {
     },
     directives,
     learnings,
+    rctx,
   };
 }
 
@@ -553,14 +564,17 @@ function buildSystemPrompt(
     lines.push('');
   }
 
-  // PERSONA (do genesis_core — Marcos Piccini)
-  lines.push(`Voce e ${core?.persona_nome ?? 'Marcos Piccini'}, escrevendo para a Bee Academy.`);
-  if (core?.persona_postura) lines.push(`Postura: ${core.persona_postura}`);
-  lines.push('Autoridade que vem de 20 anos de cases reais e dois livros. Nao tem respostas prontas — tem perguntas que ninguem esta fazendo.');
-  if (core?.voz_como_escreve) lines.push(`Como escreve: ${core.voz_como_escreve}`);
+  // QUEM FALA — do perfil de comunicação (antes era fixo: "Marcos Piccini, escrevendo para a Bee Academy").
+  const rc = ctx.rctx;
+  lines.push(speakerLine(rc));
+  const isPerson = !rc || rc.emitter.kind === 'person';
+  if (isPerson && core?.persona_postura) lines.push(`Postura: ${core.persona_postura}`);
+  if (isPerson && core?.voz_como_escreve) lines.push(`Como escreve: ${core.voz_como_escreve}`);
+  if (!isPerson && rc?.emitter.voice) lines.push(`Como escreve: ${rc.emitter.voice}`);
   if (core?.voz_verbos?.length) lines.push(`Verbos de percepcao a preferir: ${core.voz_verbos.join(', ')}.`);
   if (core?.voz_nunca?.length) lines.push(`Nunca: ${core.voz_nunca.join(', ')}.`);
   lines.push('');
+  if (rc) { lines.push(contextBlock(rc)); lines.push(''); }
 
   // LENTES — formas de enxergar o tema (nao o centro; instrumentos de percepcao)
   if (g?.lentes?.length) {
@@ -1207,7 +1221,12 @@ Deno.serve(async (req: Request) => {
     const apiKey = await getUserGeminiKey(userId);
     if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
 
-    const ctx = await loadBeeContext(input, userId);
+    // Contexto de atuação: snapshot (conteúdo/peça) → campanha → perfil → padrão (visível).
+    const rctx = await resolveAndSnapshot(userId, {
+      snapshot_id: input.context_snapshot_id, content_id: input.acj_content_id, campaign_id: input.campaign_id,
+      profile_id: input.profile_id, interlocutor_state: input.target_avatar && input.target_avatar !== 'ambos' ? input.target_avatar : null,
+    }).catch((e) => { console.warn('[generate-content] contexto indisponível:', (e as Error).message); return null; });
+    const ctx = await loadBeeContext(input, userId, rctx);
     if (!ctx.editorial) return errorResponse(`Editorial '${input.editorial_slug}' nao encontrado`, 400);
 
     // Carrega posts passados que usaram este mesmo item de arsenal para nao repetir angulo
@@ -1237,7 +1256,7 @@ Deno.serve(async (req: Request) => {
 
     // Catalogo de templates visuais (so Instagram): faz o modelo pensar FORMA +
     // conteudo juntos e escolher o template com variedade. LinkedIn: null (M01-A fixo).
-    const templates = await loadTemplateCatalog(userId, input.target_platform);
+    const templates = await loadTemplateCatalog(userId, input.target_platform, emitterHasPhotos(rctx));
 
     const sys = buildSystemPrompt(ctx, ragContext, input, referencePost, pastArsenalPosts, templates);
     let usr = buildUserPrompt(input, ctx.arsenalItem);
@@ -1341,7 +1360,10 @@ Deno.serve(async (req: Request) => {
     // Campos de topo espelham a 1a variacao: quem ja chamava esperando
     // { quote, caption } continua funcionando sem saber de variacoes.
     const first = parsed.variations[0];
-    return jsonResponse({ success: true, ...first, variations: parsed.variations });
+    return jsonResponse({
+      success: true, ...first, variations: parsed.variations,
+      context: rctx ? { snapshot_id: rctx.snapshot_id, profile_id: rctx.profile.id, profile_name: rctx.profile.name, summary: rctx.summary, fallback: rctx.fallback } : null,
+    });
   } catch (e) {
     console.error('[generate-content]', e);
     return errorResponse('Erro ao gerar conteudo', 500, String(e));
