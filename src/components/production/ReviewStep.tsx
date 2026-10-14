@@ -364,6 +364,14 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
       <div>
         <h1 className="font-display text-2xl font-bold">{unit?.content.title}</h1>
         <p className="text-sm text-muted-foreground">{piece.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} · {accountLabel(piece.account_id)} · Imagem{variant ? ` · ${variant}${variantNames[variant] ? ` ${variantNames[variant]}` : ''}` : ''}{isApproved ? ' · Aprovada' : ''}</p>
+        {(piece.metadata as { repeat?: { verdict?: string; of_text?: string; of_date?: string; reason?: string } } | null)?.repeat?.verdict === 'repeat' && (() => {
+          const r = (piece.metadata as { repeat: { of_text?: string; of_date?: string; reason?: string } }).repeat;
+          return (
+            <p className="mt-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-800 dark:text-amber-300" data-testid="piece-repeat">
+              Parecida com um post de {r.of_date ? new Date(r.of_date).toLocaleDateString('pt-BR') : 'antes'}: “{(r.of_text ?? '').split(' — ')[0].slice(0, 120)}”. {r.reason}
+            </p>
+          );
+        })()}
         {piece.acj_primary && (
           <p className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground" data-testid="piece-acj">
             <AcjChip id={piece.acj_primary} size="xs" /> herdada do conteúdo-mãe{piece.acj_frozen_at ? ' · congelada na publicação' : ''}

@@ -28,6 +28,7 @@ import {
 } from '../_shared/security.ts';
 import { embedText } from '../_shared/embed.ts';
 import { contractPromptBlock, type AcjContract } from '../_shared/acj.ts';
+import { judgeRepetition, neighborsFor, syncMemory } from '../_shared/content-memory.ts';
 
 // Cadeia: Flash primeiro (sem thinking tokens que cortam saida), Pro como fallback.
 // Mesmo padrao da generate-caption-from-video — comprovadamente mais estavel pra JSON.
@@ -57,6 +58,9 @@ interface GenerateInput {
   // antes de o contrato existir); acj_content_id = busca o contrato vigente (desdobramentos).
   acj_context?: string;
   acj_content_id?: string;
+  // Guardião anti-repetição na CRIAÇÃO (Criar › Post): confere cada variação contra tudo
+  // que já foi publicado; refaz a 1ª uma vez se repetir e devolve `repeat` por variação.
+  check_repeat?: boolean;
   target_platform?: 'linkedin' | 'instagram';
   // Rotação forçada de template (Instagram): template-alvo deste post, definido
   // pelo cliente pra garantir variedade. Quando setado, é OBRIGATÓRIO.
@@ -1249,7 +1253,7 @@ Deno.serve(async (req: Request) => {
 
     const wanted = variationCount(input);
     const { text, usage, model_used } = await callGemini(apiKey, sys, usr, outputBudget(wanted));
-    const parsed = parseGeminiJson(text, wanted);
+    let parsed = parseGeminiJson(text, wanted);
 
     // ROTAÇÃO FORÇADA: garante o template-alvo no seed mesmo se o modelo teimar
     // em outro (a voz da Bee puxa tudo pra M01-B). Mantém destaque/subtítulo do
@@ -1272,6 +1276,33 @@ Deno.serve(async (req: Request) => {
           mode_reason: s?.mode_reason ?? '',
           variant_reason: `rotação forçada (${fv})`,
         };
+      }
+    }
+
+    // ---- Guardião anti-repetição (só criação nova; adaptação/conteúdo-mãe têm o próprio) ----
+    if (input.check_repeat && !input.reference_post_id && !input.mother_idea) {
+      try {
+        await syncMemory(apiKey, userId, 15).catch(() => null);
+        const judge = async (vars: typeof parsed.variations) => {
+          const texts = vars.map((v) => `${v.quote} — ${String(v.caption ?? '').slice(0, 500)}`);
+          const nb = await neighborsFor(apiKey, userId, texts, 4);
+          return (await judgeRepetition(apiKey, texts.map((t, i) => ({ text: t, neighbors: nb[i] })))).verdicts;
+        };
+        let verdicts = await judge(parsed.variations);
+        if (verdicts[0]?.verdict === 'repeat') {
+          const fix = `\n\nATENÇÃO: a primeira versão REPETIU um post já publicado (${verdicts[0].of?.said_at?.slice(0, 10) ?? ''}): "${verdicts[0].of?.text.slice(0, 300) ?? ''}". Motivo: ${verdicts[0].reason}. Escreva com tese, entrada, exemplo e estrutura DIFERENTES.`;
+          const again = await callGemini(apiKey, sys, usr + fix, outputBudget(wanted));
+          const parsed2 = parseGeminiJson(again.text, wanted);
+          const v2 = await judge(parsed2.variations);
+          if (v2[0]?.verdict !== 'repeat') { parsed = parsed2; verdicts = v2; }
+        }
+        parsed.variations.forEach((v, i) => {
+          const x = verdicts[i];
+          (v as unknown as Record<string, unknown>).repeat = x?.verdict === 'repeat'
+            ? { verdict: 'repeat', reason: x.reason, retried: true, of_text: x.of?.text.slice(0, 240) ?? null, of_date: x.of?.said_at ?? null } : null;
+        });
+      } catch (e) {
+        console.warn('[generate-content] guardião anti-repetição indisponível:', (e as Error).message);
       }
     }
 

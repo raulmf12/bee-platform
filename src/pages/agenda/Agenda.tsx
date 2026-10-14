@@ -887,6 +887,8 @@ export function Agenda() {
 
       <CampaignTimeline campaigns={campaigns.filter((c) => c.status !== 'draft')} lens={lens} onLens={setLens} />
 
+      <RepeatAlerts posts={posts.filter((p) => (!lens || p.campaign_id === lens) && (p.status === 'scheduled' || p.status === 'approved'))} onAudited={() => void load()} onOpen={(id) => setSelectedId(id)} />
+
       {acjAlerts.length > 0 && (
         <section className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4" data-testid="agenda-acj-alerts">
           <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">Jornada relacional (ACJ) — recomendações da Hive</p>
@@ -1382,5 +1384,46 @@ export function Agenda() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// Peças programadas que o guardião anti-repetição marcou (+ botão para reconferir tudo).
+function RepeatAlerts({ posts, onAudited, onOpen }: { posts: UserPost[]; onAudited: () => void; onOpen: (id: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const flagged = posts.filter((p) => (p.metadata as { repeat?: { verdict?: string } } | null)?.repeat?.verdict === 'repeat');
+  async function audit() {
+    setBusy(true);
+    try {
+      const r = await edge.contentRepeatAudit();
+      toast.success(`A Hive conferiu ${r.checked} itens ainda não publicados: ${r.flagged.length} parecem repetir algo já publicado.`);
+      onAudited();
+    } catch (e) { toast.error((e as Error).message.slice(0, 180)); } finally { setBusy(false); }
+  }
+  return (
+    <section className={`rounded-2xl border p-4 ${flagged.length ? 'border-amber-500/30 bg-amber-500/5' : ''}`} data-testid="agenda-repeat">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+          {flagged.length ? `${flagged.length} peça(s) programada(s) parecem repetir algo já publicado` : 'Repetição de conteúdo'}
+        </p>
+        <Button size="sm" variant="outline" onClick={() => void audit()} disabled={busy} data-testid="agenda-repeat-audit">
+          {busy ? 'Conferindo…' : 'Conferir repetições com a Hive'}
+        </Button>
+      </div>
+      {flagged.length > 0 && (
+        <ul className="mt-2 space-y-1.5 text-sm">
+          {flagged.slice(0, 6).map((p) => {
+            const r = (p.metadata as { repeat: { of_text?: string; of_date?: string; reason?: string } }).repeat;
+            return (
+              <li key={p.id} data-testid="agenda-repeat-item">
+                <button type="button" className="text-left hover:underline" onClick={() => onOpen(p.id)}>
+                  <b>{((p.carousel_text?.quote as string | undefined) ?? p.title ?? '').slice(0, 90)}</b>
+                </button>
+                <span className="text-muted-foreground"> — parecida com {r.of_date ? new Date(r.of_date).toLocaleDateString('pt-BR') : 'um post anterior'}: “{(r.of_text ?? '').split(' — ')[0].slice(0, 90)}”. {r.reason}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }

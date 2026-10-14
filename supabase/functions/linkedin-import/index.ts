@@ -6,7 +6,7 @@
 // Idempotente: posts já na base (mesmo URN/link) não duplicam.
 import { checkRateLimit, errorResponse, getUserGeminiKey, internalUserId, jsonResponse, preflight, userIdFromAuth } from '../_shared/security.ts';
 import { svcHeaders } from '../_shared/gemini.ts';
-import { liMapPost, liUsername, type LiScraped } from '../_shared/linkedin-map.ts';
+import { liMapPost, liMatchPlatform, liNormText, liUsername, type LiScraped } from '../_shared/linkedin-map.ts';
 import { syncMemory } from '../_shared/content-memory.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -70,15 +70,34 @@ Deno.serve(async (req: Request) => {
       return errorResponse(`O scraper terminou com status ${st}.`, 502);
     }
     const items = await apify<LiScraped[]>(`/datasets/${run.data.defaultDatasetId}/items?clean=true&format=json`, token);
-    const known = await rest<Row[]>(`/user_posts?user_id=eq.${userId}&platform=eq.linkedin&select=id,metadata,published_url&limit=5000`);
+    const known = await rest<Row[]>(`/user_posts?user_id=eq.${userId}&platform=eq.linkedin&select=id,metadata,published_url,caption,published_at,status&limit=5000`);
+    // Posts que a PLATAFORMA publicou no LinkedIn: o scraper os devolve com outro link/URN.
+    const platformPosts = known.filter((k) => !k.metadata?.imported_from && (k.status === 'published' || k.status === 'approved' || k.status === 'scheduled'));
+    const seenText = new Set<string>(known.filter((k) => k.metadata?.imported_from === 'linkedin').map((k) => liNormText(k.caption)));
     const keys = new Set<string>();
     for (const k of known) { if (k.metadata?.li_urn) keys.add(k.metadata.li_urn); if (k.published_url) keys.add(String(k.published_url).split('?')[0]); }
 
     let inserted = 0, skipped = 0;
+    let merged = 0;
+    // Do mais antigo pro mais novo: num post repetido no LinkedIn, fica o primeiro.
+    items.sort((a, b) => String(liMapPost(a)?.posted_at ?? '').localeCompare(String(liMapPost(b)?.posted_at ?? '')));
     for (const raw of items) {
       const p = liMapPost(raw);
       if (!p) { skipped++; continue; }
       if (keys.has(p.key) || (p.url && keys.has(p.url))) { skipped++; continue; }
+      // Já publicado pela plataforma → não duplica: só liga o URN ao post existente.
+      const platId = liMatchPlatform(p, platformPosts as Array<{ id: string; caption: string | null; published_at: string | null }>);
+      if (platId) {
+        const plat = known.find((k) => k.id === platId)!;
+        await rest(`/user_posts?id=eq.${platId}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' },
+          body: JSON.stringify({ metadata: { ...(plat.metadata ?? {}), li_urn: p.key, li_url: p.url }, ...(plat.status !== 'published' ? { status: 'published', published_at: p.posted_at } : {}) }) });
+        plat.metadata = { ...(plat.metadata ?? {}), li_urn: p.key };
+        keys.add(p.key); merged++; continue;
+      }
+      // O mesmo texto postado duas vezes no LinkedIn vira 1 só.
+      const norm = liNormText(p.text);
+      if (seenText.has(norm)) { skipped++; continue; }
+      seenText.add(norm);
       const [content] = await rest<Row[]>(`/contents`, {
         method: 'POST', headers: { Prefer: 'return=representation' },
         body: JSON.stringify({ user_id: userId, title: p.quote, body: { frase: p.quote, texto: p.text }, status: 'validated', metadata: { imported_from: 'linkedin', li_urn: p.key, account_id: account.id }, ...(p.posted_at ? { created_at: p.posted_at } : {}) }),
@@ -96,12 +115,12 @@ Deno.serve(async (req: Request) => {
       keys.add(p.key);
       inserted++;
     }
-    meta.li_import = { ...li, status: 'SUCCEEDED', imported_at: new Date().toISOString(), found: items.length, inserted: (li.inserted ?? 0) + inserted };
+    meta.li_import = { ...li, status: 'SUCCEEDED', imported_at: new Date().toISOString(), found: items.length, inserted: (li.inserted ?? 0) + inserted, merged };
     await saveMeta(account.id, meta);
     // Indexa o histórico na memória anti-repetição (o resto entra nas próximas pautas).
     const apiKey = await getUserGeminiKey(userId);
     const mem = apiKey ? await syncMemory(apiKey, userId, 40).catch(() => null) : null;
-    return jsonResponse({ success: true, status: st, done: true, found: items.length, inserted, skipped, memory: mem });
+    return jsonResponse({ success: true, status: st, done: true, found: items.length, inserted, skipped, merged, memory: mem });
   } catch (e) {
     console.error('[linkedin-import]', e);
     return errorResponse('Erro na importação do LinkedIn', 500, String(e));

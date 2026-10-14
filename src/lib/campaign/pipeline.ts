@@ -141,3 +141,17 @@ export function sortColumn(col: PipelineColumn, cards: PipelineCard[], cycles: C
     return s !== 0 ? s : b.updatedAt.localeCompare(a.updatedAt);
   });
 }
+
+// Marca de repetição na CRIAÇÃO (ideia/conteúdo/peça gerados aqui). Posts importados
+// (Instagram/LinkedIn) nunca entram: são o histórico, não criação.
+export function repeatOf(c: Pick<PipelineCard, 'idea' | 'content' | 'pieces'>): { text: string; date: string | null } | null {
+  const fromIdea = c.idea?.repeat_of;
+  if (fromIdea) return { text: fromIdea.text, date: fromIdea.said_at };
+  const fromContent = c.content?.metadata?.repeat;
+  if (fromContent?.verdict === 'repeat') return { text: fromContent.of_text ?? '', date: fromContent.of_date };
+  for (const p of c.pieces) {
+    const r = (p.metadata as { repeat?: { verdict?: string; of_text?: string | null; of_date?: string | null }; imported_from?: string } | null);
+    if (r?.repeat?.verdict === 'repeat' && !r.imported_from) return { text: r.repeat.of_text ?? '', date: r.repeat.of_date ?? null };
+  }
+  return null;
+}

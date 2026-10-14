@@ -117,3 +117,53 @@ export async function judgeRepetition(apiKey: string, items: Array<{ text: strin
 export async function neighborsFor(apiKey: string, userId: string, texts: string[], k = 4): Promise<MemoryHit[][]> {
   return Promise.all(texts.map((t) => similarPast(apiKey, userId, t, k).then((h) => h.filter((x) => x.similarity >= NEAR_THRESHOLD - 0.06)).catch(() => [])));
 }
+
+// ---------------------------------------------------------------------------
+// Auditoria: confere o que AINDA NÃO foi publicado (conteúdos pendentes, ideias não
+// desenvolvidas e peças agendadas) contra tudo que já foi dito, e marca/limpa o aviso.
+// Exclui da comparação as peças do PRÓPRIO conteúdo (senão cada um "repete" a si mesmo).
+// ---------------------------------------------------------------------------
+export async function auditRepetition(apiKey: string, userId: string, opts: { cycleId?: string } = {}) {
+  const cyc = opts.cycleId ? `&cycle_id=eq.${opts.cycleId}` : '';
+  const [contents, ideas, pieces, allPosts] = await Promise.all([
+    rest<Row[]>(`/contents?user_id=eq.${userId}&status=in.(pending_validation,developing)${cyc}&select=id,title,body,metadata`),
+    rest<Row[]>(`/ideas?user_id=eq.${userId}&status=in.(proposed,approved,backlog)${cyc}&select=id,title,summary,repeat_of`),
+    rest<Row[]>(`/user_posts?user_id=eq.${userId}&status=in.(scheduled,approved)${cyc}&select=id,content_id,title,caption,carousel_text,metadata,scheduled_date`),
+    rest<Row[]>(`/user_posts?user_id=eq.${userId}&select=id,content_id&limit=10000`),
+  ]);
+  const contentOfPost = new Map(allPosts.map((p) => [p.id, p.content_id]));
+  type Item = { kind: 'content' | 'idea' | 'post'; row: Row; text: string; contentId: string | null };
+  const items: Item[] = [
+    ...contents.map((c) => ({ kind: 'content' as const, row: c, contentId: c.id, text: `${c.body?.frase ?? c.title} — ${String(c.body?.texto ?? '').slice(0, 500)}` })),
+    ...ideas.map((i) => ({ kind: 'idea' as const, row: i, contentId: null, text: [i.title, i.summary].filter(Boolean).join('. ') })),
+    ...pieces.map((p) => ({ kind: 'post' as const, row: p, contentId: p.content_id ?? null, text: memoryText(p) ?? '' })),
+  ].filter((x) => x.text.trim().length > 15);
+
+  const flagged: Array<{ kind: string; id: string; text: string; of: string; reason: string }> = [];
+  let checked = 0;
+  for (let i = 0; i < items.length; i += 8) {
+    const batch = items.slice(i, i + 8);
+    const raw = await neighborsFor(apiKey, userId, batch.map((b) => b.text), 6);
+    const neigh = batch.map((b, k) => raw[k].filter((h) => {
+      if (b.kind === 'post' && h.post_id === b.row.id) return false;
+      const hc = h.post_id ? contentOfPost.get(h.post_id) : null;
+      return !(b.contentId && hc && hc === b.contentId);
+    }).slice(0, 4));
+    const { verdicts } = await judgeRepetition(apiKey, batch.map((b, k) => ({ text: b.text, neighbors: neigh[k] })));
+    for (const [k, b] of batch.entries()) {
+      checked++;
+      const v = verdicts[k];
+      const flag = v.verdict === 'repeat' ? { verdict: 'repeat', reason: v.reason, retried: false, of_text: v.of?.text.slice(0, 240) ?? null, of_date: v.of?.said_at ?? null, audited_at: new Date().toISOString() } : null;
+      if (flag) flagged.push({ kind: b.kind, id: b.row.id, text: b.text.slice(0, 120), of: flag.of_text ?? '', reason: v.reason });
+      const had = b.kind === 'idea' ? !!b.row.repeat_of : !!b.row.metadata?.repeat;
+      if (!flag && !had) continue;
+      if (b.kind === 'idea') {
+        await rest(`/ideas?id=eq.${b.row.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ repeat_of: flag ? { text: flag.of_text ?? '', said_at: flag.of_date, reason: flag.reason } : null }) });
+      } else {
+        const table = b.kind === 'content' ? 'contents' : 'user_posts';
+        await rest(`/${table}?id=eq.${b.row.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ metadata: { ...(b.row.metadata ?? {}), repeat: flag } }) });
+      }
+    }
+  }
+  return { checked, flagged };
+}

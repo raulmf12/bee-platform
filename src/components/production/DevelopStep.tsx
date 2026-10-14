@@ -19,8 +19,8 @@ import {
 
 const ADJUST_EXAMPLES = ['Quero uma abertura mais provocativa.', 'Quero algo menos corporativo.', 'Essa frase não parece comigo. Reescreva mantendo a ideia.'];
 
-export function DevelopStep({ campaign, cycle, ideas, editorials, accounts, onIdeasChange, onCycleChange, onDone }: {
-  campaign: Campaign; cycle: CampaignCycle; ideas: Idea[]; editorials: BeeEditorial[]; accounts: SocialAccount[];
+export function DevelopStep({ campaign, cycle, ideas, editorials, accounts, onIdeasChange, onCycleChange, onDone, focusContentId }: {
+  campaign: Campaign; cycle: CampaignCycle; ideas: Idea[]; editorials: BeeEditorial[]; accounts: SocialAccount[]; focusContentId?: string;
   onIdeasChange: (i: Idea[]) => void; onCycleChange: (c: CampaignCycle) => void; onDone: (cycle: CampaignCycle) => void;
 }) {
   const [contents, setContents] = useState<Content[] | null>(null);
@@ -36,7 +36,12 @@ export function DevelopStep({ campaign, cycle, ideas, editorials, accounts, onId
   const approvedIdeas = ideas.filter((i) => i.status === 'approved' || i.status === 'developed');
   const live = useMemo(() => (contents ?? []).filter((c) => c.status !== 'discarded').sort((a, b) => a.position - b.position), [contents]);
   const missing = approvedIdeas.filter((i) => i.status === 'approved' && !(contents ?? []).some((c) => c.idea_id === i.id));
-  const current = live.find((c) => c.status === 'pending_validation' || c.status === 'developing');
+  // Qual conteúdo está na tela: o escolhido (link direto ou seletor) ou o primeiro pendente.
+  // Antes era SEMPRE o primeiro pendente — abrir qualquer conteúdo caía no "01 de N".
+  const [focusId, setFocusId] = useState<string | null>(focusContentId ?? null);
+  const isPending = (c: Content) => c.status === 'pending_validation' || c.status === 'developing';
+  const focused = live.find((c) => c.id === focusId);
+  const current = focused ?? live.find(isPending);
   // Contrato ACJ de cada conteúdo (recarrega quando a Hive refaz uma versão).
   const [contracts, setContracts] = useState<Record<string, AcjContentContract>>({});
   const contractKey = live.map((c) => `${c.id}:${c.updated_at}`).join(',');
@@ -78,6 +83,7 @@ export function DevelopStep({ campaign, cycle, ideas, editorials, accounts, onId
     const r = await validateContent(c, ideaOf(c), campaign, edName(c.editorial_slug));
     replace(r.content);
     setJustApproved({ content: r.content, hasPiece: !!r.piece });
+    setFocusId(null); // depois de aprovar, segue para o próximo pendente
     setAdjusting(false); setEditing(null);
   });
   const revise = (c: Content, mode: 'adjust' | 'new_version') => act(mode, async () => {
@@ -91,6 +97,7 @@ export function DevelopStep({ campaign, cycle, ideas, editorials, accounts, onId
   const discard = (c: Content) => act('discard', async () => {
     if (!confirm('Descartar este conteúdo? A ideia sai do ciclo.')) return;
     replace(await discardContent(c));
+    setFocusId(null);
     onIdeasChange(ideas.map((i) => (i.id === c.idea_id ? { ...i, status: 'discarded' as const } : i)));
   });
   const finish = () => act('finish', async () => onDone(await finishValidation(cycle)));
@@ -196,8 +203,22 @@ export function DevelopStep({ campaign, cycle, ideas, editorials, accounts, onId
   // ---------------- TELA 11: validação do conteúdo N de M ----------------
   const c = current;
   const f = c.strategic_function;
+  const readOnly = c.status === 'validated';
   return (
     <div className="space-y-5" data-testid="validate-step">
+      {live.length > 1 && (
+        <nav className="flex flex-wrap items-center gap-1.5" aria-label="Conteúdos do ciclo" data-testid="content-nav">
+          {live.map((x, i) => (
+            <button key={x.id} type="button" onClick={() => { setFocusId(x.id); setAdjusting(false); setEditing(null); setJustApproved(null); }}
+              aria-current={x.id === c.id ? 'true' : undefined} title={x.title} data-testid="content-nav-item"
+              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs ${x.id === c.id ? 'border-accent bg-accent/15 font-semibold' : 'hover:bg-accent/5'}`}>
+              {String(i + 1).padStart(2, '0')}
+              {x.status === 'validated' ? <Check className="h-3 w-3 text-emerald-600" /> : <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />}
+              {x.metadata?.repeat?.verdict === 'repeat' && <span className="text-amber-600" title="Parecido com post já publicado">⚠</span>}
+            </button>
+          ))}
+        </nav>
+      )}
       <div>
         <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground" data-testid="validate-counter">Conteúdo {String(currentIdx + 1).padStart(2, '0')} de {String(live.length).padStart(2, '0')}</p>
         <h1 className="mt-1 font-display text-2xl font-bold">{c.title}</h1>
@@ -263,7 +284,13 @@ export function DevelopStep({ campaign, cycle, ideas, editorials, accounts, onId
         </div>
       )}
 
-      {!editing && (
+      {readOnly && (
+        <p className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-sm" data-testid="content-readonly">
+          <CheckCircle2 className="h-4 w-4 text-emerald-600" /> Conteúdo já aprovado. Ajustes agora são feitos nas peças, na etapa Revisão.
+        </p>
+      )}
+
+      {!editing && !readOnly && (
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap gap-1">
             <Button variant="ghost" size="sm" onClick={() => setAdjusting((v) => !v)} disabled={!!busy}><Sparkles className="h-3.5 w-3.5" /> Ajustar com a Hive</Button>

@@ -117,7 +117,7 @@ test.describe('unit · home regente', () => {
     const posts = [post('old', { status: 'pending_approval', metadata: {} })];
     const items = pendingItems(base({ campaigns: [camp('c1')], cycles, contents, posts, avulsoId: 'avulso-id' }));
     expect(items.find((i) => i.id === 'validate:k1')).toMatchObject({ title: '“Liderança e controle”', body: 'O conteúdo está pronto. Falta sua aprovação.' });
-    expect(items.find((i) => i.id === 'validate:k2')).toMatchObject({ eyebrow: 'Sem campanha · Conteúdo', to: '/producao?campaign=avulso-id&cycle=av1' });
+    expect(items.find((i) => i.id === 'validate:k2')).toMatchObject({ eyebrow: 'Sem campanha · Conteúdo', to: '/producao?campaign=avulso-id&cycle=av1&content=k2' }); // link direto para o conteúdo
     expect(items.find((i) => i.kind === 'legacy_text')?.title).toBe('1 post aguardando aprovação de texto');
   });
 

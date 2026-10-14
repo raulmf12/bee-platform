@@ -43,3 +43,25 @@ export function liMapPost(p: LiScraped): { key: string; quote: string; text: str
   if (!key || text.length < 15) return null;
   return { key, quote: quoteFromCaption(text) || text.slice(0, 120), text, posted_at: liPostedAt(p), url: p.url?.split('?')[0] ?? null, post_type: p.post_type ?? (p.reshared_post ? 'quote' : 'regular') };
 }
+
+// Texto normalizado para reconhecer o MESMO post: o publicado pela plataforma guarda
+// frase+legenda e o LinkedIn mostra só a legenda; hashtags/links/espaços variam.
+export function liNormText(t: string | null | undefined): string {
+  return String(t ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/https?:\/\/\S+/g, '').replace(/#[\p{L}\d_]+/gu, '').replace(/[^\p{L}\d]+/gu, ' ').trim().slice(0, 160);
+}
+
+// Este post importado é um post que a PLATAFORMA já publicou? (mesmo dia ±1 e o texto
+// de um contém o começo do outro). Devolve o id do post da plataforma.
+export function liMatchPlatform(p: { text: string; posted_at: string | null }, platform: Array<{ id: string; caption: string | null; published_at: string | null }>): string | null {
+  if (!p.posted_at) return null;
+  const t = liNormText(p.text).slice(0, 100);
+  if (t.length < 30) return null;
+  const at = new Date(p.posted_at).getTime();
+  for (const x of platform) {
+    if (!x.published_at || Math.abs(new Date(x.published_at).getTime() - at) > 1.5 * 86_400_000) continue;
+    const c = liNormText(x.caption);
+    if (c.includes(t.slice(0, 80)) || t.includes(c.slice(0, 80))) return x.id;
+  }
+  return null;
+}

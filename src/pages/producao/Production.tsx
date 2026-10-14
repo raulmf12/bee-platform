@@ -40,6 +40,8 @@ export function Production() {
 
   const campaignId = params.get('campaign') ?? undefined;
   const cycleId = params.get('cycle') ?? undefined;
+  // Link direto para UM conteúdo (Pipeline/Início): a etapa de desenvolvimento abre nele.
+  const contentId = params.get('content') ?? undefined;
   const campaign = campaigns?.find((c) => c.id === campaignId) ?? (avulso && avulso.id === campaignId ? avulso : undefined);
   const solo = isAvulso(campaign);
   const cycle = cycles.find((c) => c.id === cycleId);
@@ -128,7 +130,7 @@ export function Production() {
               onChange={(i, c) => { setIdeas(i); if (c) replaceCycle(c); }}
               onApproved={(c) => { replaceCycle(c); setViewStep(null); }} />
           ) : step === 4 ? (
-            <DevelopStep campaign={campaign} cycle={cycle} ideas={ideas} editorials={editorials} accounts={accounts}
+            <DevelopStep key={`${cycle.id}:${contentId ?? ''}`} campaign={campaign} cycle={cycle} ideas={ideas} editorials={editorials} accounts={accounts} focusContentId={contentId}
               onIdeasChange={setIdeas} onCycleChange={replaceCycle} onDone={(c) => { replaceCycle(c); setViewStep(null); }} />
           ) : (
             <ReviewStep campaign={campaign} cycle={cycle} ideas={ideas} editorials={editorials} accounts={accounts} onCycleChange={replaceCycle} />

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { hashText, memoryText, repeatedStructures } from '../supabase/functions/_shared/memory-text';
-import { liMapPost, liPostedAt, liUsername } from '../supabase/functions/_shared/linkedin-map';
+import { liMapPost, liMatchPlatform, liNormText, liPostedAt, liUsername } from '../supabase/functions/_shared/linkedin-map';
 
 test.describe('unit · memória anti-repetição e LinkedIn', () => {
   test('texto da memória = frase + legenda, sem hashtags nem placeholder', () => {
@@ -38,5 +38,17 @@ test.describe('unit · memória anti-repetição e LinkedIn', () => {
     const real = liMapPost({ urn: { activity_urn: '7513980032831078400', share_urn: null, ugcPost_urn: '7513980032084770816' }, url: 'https://www.linkedin.com/posts/x_abc', text: 'Um post de verdade com texto suficiente.', posted_at: { date: '2026-10-08 17:14:02', timestamp: 1791472442825 } });
     expect(real?.key).toBe('urn:li:activity:7513980032831078400');
     expect(real?.posted_at).toBe(new Date(1791472442825).toISOString());
+  });
+
+  test('LinkedIn: post já publicado pela plataforma é reconhecido (não duplica)', () => {
+    const plat = [
+      { id: 'plat-1', published_at: '2026-09-28T12:00:00Z', caption: 'Esta é uma das queixas mais comuns nas empresas.\nUm sentimento comum entre líderes que cobram senso de dono. #lideranca' },
+      { id: 'plat-2', published_at: '2026-09-01T12:00:00Z', caption: 'Outro post qualquer sobre cultura organizacional e o papel do RH nas empresas.' },
+    ];
+    // o LinkedIn devolve só a legenda (a frase está na imagem), com hashtags/espaços diferentes
+    expect(liMatchPlatform({ text: 'Esta é uma das queixas mais comuns nas empresas. Um sentimento comum entre líderes que cobram senso de dono.', posted_at: '2026-09-28T15:30:00Z' }, plat)).toBe('plat-1');
+    expect(liMatchPlatform({ text: 'Esta é uma das queixas mais comuns nas empresas. Um sentimento comum entre líderes que cobram senso de dono.', posted_at: '2026-10-10T15:30:00Z' }, plat)).toBeNull(); // outro dia
+    expect(liMatchPlatform({ text: 'Texto completamente diferente publicado no mesmo dia, sem relação nenhuma.', posted_at: '2026-09-28T15:30:00Z' }, plat)).toBeNull();
+    expect(liNormText('Há sim, muitas mentes sãs.\n\nhttps://lnkd.in/x #tag')).toBe(liNormText('Há sim,  muitas mentes sãs. https://lnkd.in/y'));
   });
 });

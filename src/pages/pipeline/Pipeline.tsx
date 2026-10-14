@@ -15,7 +15,7 @@ import { postClickRoute } from '@/lib/postReview';
 import { useOps } from '@/lib/campaign/useOps';
 import { dueLabel, pendingItems } from '@/lib/campaign/home';
 import { baselines, metricsByPost, resultFor, type PieceResult } from '@/lib/campaign/performance';
-import {
+import { repeatOf,
   NO_FILTER, PIPELINE_COLUMNS, buildPipeline, filterCards, sortColumn, stageOfPost,
   type PipelineCard, type PipelineColumn, type PipelineFilter,
 } from '@/lib/campaign/pipeline';
@@ -91,7 +91,7 @@ export function Pipeline() {
   const linkFor = (c: PipelineCard): string => {
     const campId = c.content?.campaign_id ?? c.idea?.campaign_id;
     const cyc = c.content?.cycle_id ?? c.idea?.cycle_id;
-    if (c.kind !== 'post' && campId && cyc) return `/producao?campaign=${campId}&cycle=${cyc}`;
+    if (c.kind !== 'post' && campId && cyc) return `/producao?campaign=${campId}&cycle=${cyc}${c.kind === 'content' && c.content ? `&content=${c.content.id}` : ''}`;
     if (c.kind !== 'post' && campId) return `/campanhas/${campId}`;
     return c.pieces[0] ? postClickRoute(c.pieces[0]) : '/pipeline';
   };
@@ -286,6 +286,14 @@ function CardView({ card: c, onOpen, link, editorial, cycle, cycleLabel, campaig
     <article className="rounded-lg border bg-card p-3 text-xs shadow-sm" data-testid="pipeline-card" data-kind={c.kind}>
       <button type="button" onClick={onOpen} className="block w-full text-left">
         <p className="line-clamp-2 text-sm font-semibold leading-snug">{c.title}</p>
+        {(() => {
+          const r = repeatOf(c);
+          return r ? (
+            <p className="mt-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-800 dark:text-amber-300" data-testid="pipeline-repeat" title={r.text}>
+              ⚠ Repete post de {r.date ? new Date(r.date).toLocaleDateString('pt-BR') : 'antes'}
+            </p>
+          ) : null;
+        })()}
         {c.fn && <p className="mt-1.5 flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: FUNCTION_COLORS[c.fn] }} />{FUNCTION_SHORT[c.fn]}</p>}
         {editorial && <p className="text-muted-foreground">{editorial}</p>}
       </button>

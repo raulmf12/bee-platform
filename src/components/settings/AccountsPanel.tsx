@@ -252,7 +252,19 @@ export function AccountsPanel() {
   }
 
   async function remove(a: SocialAccount) {
-    if (!confirm(`Remover a conta "${a.label}"? Peças ligadas a ela ficam sem conta até você escolher outra.`)) return;
+    // Conta em uso por campanha: transfere tudo para outra conta da mesma rede antes de
+    // apagar (senão campanha/ideias ficam apontando pra conta inexistente e a produção quebra).
+    const using = await accountApi.campaignsUsing(a.id).catch(() => []);
+    if (using.length) {
+      const target = accounts.find((x) => x.id !== a.id && x.platform === a.platform && x.status === 'connected');
+      if (!target) {
+        toast.error(`"${a.label}" está na campanha ${using.map((c) => `"${c.name}"`).join(', ')}. Conecte a nova conta de ${a.platform === 'instagram' ? 'Instagram' : 'LinkedIn'} antes de remover esta.`);
+        return;
+      }
+      if (!confirm(`"${a.label}" está em ${using.length} campanha(s): ${using.map((c) => c.name).join(', ')}.\n\nTransferir campanhas, ciclos, ideias e peças para "${target.label}" e remover "${a.label}"?`)) return;
+      const r = await accountApi.remap(a.id, target.id);
+      toast.success(`Transferido para "${target.label}": ${r.campaigns} campanha(s), ${r.ideas} ideia(s), ${r.posts} peça(s).`);
+    } else if (!confirm(`Remover a conta "${a.label}"? Peças ligadas a ela ficam sem conta até você escolher outra.`)) return;
     await accountApi.remove(a.id);
     toast.success('Conta removida.');
     await load();

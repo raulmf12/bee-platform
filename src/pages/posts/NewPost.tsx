@@ -72,6 +72,18 @@ const IG_VARIANT_ROTATION = ['M01-A', 'M01-D', 'M01-C', 'M02-A', 'M01-B', 'M01-E
 
 // Um post de imagem dentro do lote gerado. Cada um é independente e revisado
 // individualmente (título e legenda separados).
+type RepeatFlag = { verdict: string; reason: string; retried?: boolean; of_text: string | null; of_date: string | null };
+
+// Aviso de repetição na CRIAÇÃO (o guardião já tentou refazer uma vez).
+function RepeatWarning({ r }: { r?: RepeatFlag | null }) {
+  if (r?.verdict !== 'repeat') return null;
+  return (
+    <p className="rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-800 dark:text-amber-300" data-testid="newpost-repeat">
+      ⚠ Parecido com um post de {r.of_date ? new Date(r.of_date).toLocaleDateString('pt-BR') : 'antes'}: “{(r.of_text ?? '').split(' — ')[0].slice(0, 110)}”. {r.reason} Considere rejeitar e gerar outro.
+    </p>
+  );
+}
+
 interface BatchItem {
   post: UserPost;
   variation: AiVariation;        // texto PRISTINO (baseline da medição)
@@ -93,6 +105,7 @@ interface BatchItem {
   aiCaption: string;             // última legenda gerada pela IA (baseline da medição)
   manualEdits: number;           // quantas vezes o humano editou texto à mão
   qa?: QaResult | null;          // autochecagem interna (não exibida; guia a regeneração)
+  repeat?: RepeatFlag | null;    // guardião anti-repetição: parece repetir um post já publicado
 }
 
 function isSameDay(iso: string, ref: Date): boolean {
@@ -521,6 +534,8 @@ export function NewPost() {
         reference_post_id: (batchQuantity === 1 && referencePost) ? referencePost.id : undefined,
         // Rotação forçada de template (só IG; LinkedIn é travado M01-A no motor).
         force_variant: pick.platform === 'instagram' ? forceVariant : undefined,
+        // Guardião anti-repetição: confere contra tudo que já foi publicado.
+        check_repeat: true,
       });
       const v = res.variations?.[0] ?? res;
 
@@ -558,6 +573,7 @@ export function NewPost() {
       // Instagram: template+forma escolhidos junto com o texto (undefined no LinkedIn).
       hiveSeed: (v.hive_seed ?? undefined) as HiveSeed | undefined,
       qa: best!.qa,
+      repeat: ((v as { repeat?: RepeatFlag | null }).repeat ?? null),
     };
   }
 
@@ -639,6 +655,7 @@ export function NewPost() {
             batch_id: generation.id,
             auto_generated: true,
             qa_score: fresh.qa?.score ?? null,
+            ...(fresh.repeat ? { repeat: fresh.repeat } : {}),
             // Estágio do wizard — permite retomar a aprovação de textos depois.
             review_stage: 'texto',
             titulo_status: 'pending',
@@ -660,7 +677,7 @@ export function NewPost() {
           hiveSeed: fresh.hiveSeed,
           pick: { editorialSlug: pick.editorial.slug, platform: pick.platform, targetAvatar: pick.targetAvatar },
           tituloStatus: 'pending', legendaStatus: 'pending', editRounds: 0,
-          aiQuote: fresh.quote, aiCaption: fresh.caption, manualEdits: 0, qa: fresh.qa,
+          aiQuote: fresh.quote, aiCaption: fresh.caption, manualEdits: 0, qa: fresh.qa, repeat: fresh.repeat,
         });
       }
 
@@ -997,6 +1014,7 @@ export function NewPost() {
         quote_max_chars: 200,
         variations: 1,
         briefing: effectiveBriefing,
+        check_repeat: true,
       });
       const fresh = res.variations?.[0] ?? res;
       const score = fresh.virality_score ?? item.score;
@@ -1017,6 +1035,7 @@ export function NewPost() {
         tituloStatus: 'pending', legendaStatus: 'pending',
         editRounds: item.editRounds + 1,
         qa: null,
+        repeat: ((fresh as { repeat?: RepeatFlag | null }).repeat ?? null),
       });
       persistReview(item, { review_stage: 'texto', titulo_status: 'pending', legenda_status: 'pending' });
       toast.success('Post novo gerado — título e legenda do zero.');
@@ -1882,6 +1901,7 @@ export function NewPost() {
                     </Badge>
                     <p className="font-display text-sm font-medium leading-snug line-clamp-3">"{it.quote}"</p>
                     <ViralityBar score={it.score} />
+                    <RepeatWarning r={it.repeat} />
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                       <span title="Edições feitas à mão neste post">✋ {it.manualEdits} à mão</span>
                       <span title="Ajustes/regeneragões com IA neste post">🤖 {it.editRounds} com IA</span>
@@ -1921,7 +1941,7 @@ export function NewPost() {
             </div>
           </div>
 
-          <Card><CardContent className="p-4"><ViralityBar score={activeItem.score} reason={activeItem.reason} /></CardContent></Card>
+          <Card><CardContent className="p-4 space-y-2"><ViralityBar score={activeItem.score} reason={activeItem.reason} /><RepeatWarning r={activeItem.repeat} /></CardContent></Card>
 
           {/* TÍTULO (frase da imagem) */}
           <Card className="shadow-sm">

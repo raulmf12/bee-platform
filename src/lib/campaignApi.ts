@@ -42,6 +42,14 @@ export const accountApi = {
   async remove(id: string): Promise<void> {
     return db.delete('social_accounts', { id: `eq.${id}` });
   },
+  // Transfere campanhas, planos de ciclo, ideias e peças de uma conta para outra.
+  async remap(oldId: string, newId: string): Promise<{ campaigns: number; cycles: number; ideas: number; posts: number }> {
+    return db.rpc('remap_social_account', { old_id: oldId, new_id: newId });
+  },
+  // Campanhas (não encerradas) que usam a conta.
+  async campaignsUsing(id: string): Promise<Array<{ id: string; name: string }>> {
+    return db.select<{ id: string; name: string }>('campaigns', { account_ids: `cs.{${id}}`, status: 'neq.ended', select: 'id,name' });
+  },
 };
 
 // ---------------------------------------------------------------------------

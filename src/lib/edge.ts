@@ -29,6 +29,8 @@ export interface GenerateContentInput {
   mother_idea?: { title: string; direction?: string; strategic_function?: string };
   // ACJ: o generate-content busca o contrato vigente do conteúdo-mãe e escreve a serviço do movimento.
   acj_content_id?: string;
+  // Guardião anti-repetição na criação: cada variação volta com `repeat` (ou null).
+  check_repeat?: boolean;
   // Quantas variacoes gerar numa unica chamada (1..5).
   // As 5 saem no MESMO pedido de proposito: o prompt (persona + arsenal +
   // exemplos + Camada 0 da Alma) e enorme e a saida e curta, entao 5 variacoes
@@ -456,6 +458,10 @@ export const edge = {
   },
   async contentMemorySync(input: { limit?: number } = {}): Promise<{ success: boolean; added: number; updated: number; pending: number }> {
     return postEdge('content-memory', { action: 'sync', ...input });
+  },
+  // Confere o que ainda não foi publicado contra tudo que já foi dito e marca/limpa repetições.
+  async contentRepeatAudit(input: { cycle_id?: string } = {}): Promise<{ success: boolean; checked: number; flagged: Array<{ kind: string; id: string; text: string; of: string; reason: string }> }> {
+    return postEdge('content-memory', { action: 'audit', ...input });
   },
 
   // ACJ-00 (docs/acj): plano da campanha, atribuição, portão do movimento e leitura de sinais.

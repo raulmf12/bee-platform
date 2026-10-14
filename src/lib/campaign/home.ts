@@ -109,7 +109,7 @@ export function pendingItems(d: HomeData): PendingItem[] {
   // Conteúdos avulsos ("Um conteúdo") esperando você.
   if (d.avulsoId) {
     for (const x of d.contents.filter((c) => c.campaign_id === d.avulsoId && c.status === 'pending_validation')) {
-      push({ id: `validate:${x.id}`, kind: 'validate', eyebrow: 'Sem campanha · Conteúdo', title: `“${x.title}”`, body: 'O conteúdo está pronto. Falta sua aprovação.', due: null, cta: 'Revisar', to: `/producao?campaign=${d.avulsoId}&cycle=${x.cycle_id}` });
+      push({ id: `validate:${x.id}`, kind: 'validate', eyebrow: 'Sem campanha · Conteúdo', title: `“${x.title}”`, body: 'O conteúdo está pronto. Falta sua aprovação.', due: null, cta: 'Revisar', to: `/producao?campaign=${d.avulsoId}&cycle=${x.cycle_id}&content=${x.id}` });
     }
     const avulsoPieces = livePieces.filter((p) => p.campaign_id === d.avulsoId);
     const cyclesWithPending = [...new Set(avulsoPieces.filter((p) => p.status === 'pending_approval').map((p) => p.cycle_id))];

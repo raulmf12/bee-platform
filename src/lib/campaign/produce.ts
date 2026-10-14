@@ -12,7 +12,7 @@ import { aiApi } from '@/lib/api';
 import { db } from '@/lib/db';
 import { cycleApi } from '@/lib/campaignApi';
 import { getPhotoGeneration, reviewMarcosPhoto } from '@/lib/hive/marcosPhoto';
-import type { AiVariation, CampaignCycle, Content, Idea, IdeaChannel, UserPost } from '@/types';
+import type { AiVariation, CampaignCycle, Content, Idea, IdeaChannel, SocialAccount, UserPost } from '@/types';
 
 export const AI_IMAGE_VARIANT = (v?: string) => v === 'M01-D' || v === 'M01-E' || (v?.startsWith('M02-') ?? false);
 
@@ -141,9 +141,17 @@ export async function produceCycle(
   onProgress?: (done: number, total: number, piece?: UserPost) => void,
 ): Promise<UserPost[]> {
   const todo = productionTodo(data.contents, data.ideas, data.pieces);
+  // Canal apontando pra conta que não existe mais (ex.: reconexão apagou a antiga):
+  // usa a conta padrão da mesma rede em vez de falhar com 23503 na gravação da peça.
+  const accounts = await db.select<SocialAccount>('social_accounts', { select: 'id,platform,is_default,status' });
+  const fixChannel = (ch: IdeaChannel): IdeaChannel => {
+    if (!ch.account_id || accounts.some((a) => a.id === ch.account_id)) return ch;
+    const same = accounts.filter((a) => a.platform === ch.platform && a.status === 'connected');
+    return { ...ch, account_id: (same.find((a) => a.is_default) ?? same[0])?.id };
+  };
   const tasks: Array<() => Promise<UserPost[]>> = [
     ...todo.validation.map((p) => async () => [await renderPiece(userId, p, { approve: true })]),
-    ...todo.unfold.map((t) => () => createUnfold(userId, cycle, t, editorialName(t.content.editorial_slug))),
+    ...todo.unfold.map((t) => () => createUnfold(userId, cycle, { ...t, channel: fixChannel(t.channel) }, editorialName(t.content.editorial_slug))),
   ];
   const total = tasks.length;
   let done = 0;
