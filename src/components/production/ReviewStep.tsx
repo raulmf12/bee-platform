@@ -250,7 +250,7 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
                     <button type="button" onClick={() => openUnit(u)} className="block w-full text-left"><Preview piece={u.main} className="aspect-[4/5]" /></button>
                     <div className="flex items-center justify-between gap-2 text-xs">
                       <span className="flex items-center gap-1.5"><PlatformIcon p={u.main.platform} className="h-3.5 w-3.5" />{u.main.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} · {accountLabel(u.main.account_id)}
-                        {u.main.format === 'carousel' && <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px]" data-testid="unit-format">Carrossel{u.main.script_status === 'draft' ? ' · roteiro' : ''}</span>}</span>
+                        {(u.main.format === 'carousel' || u.main.format === 'story') && <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px]" data-testid="unit-format">{u.main.format === 'story' ? 'Stories' : 'Carrossel'}{u.main.script_status === 'draft' ? ' · roteiro' : ''}</span>}</span>
                       {u.approved ? <span className="flex items-center gap-1 font-semibold text-emerald-600" data-testid="unit-status"><Check className="h-3.5 w-3.5" /> Aprovado</span>
                         : <span className="font-semibold text-accent" data-testid="unit-status">Para revisar{u.pieces.length > 1 ? ` · ${u.pieces.length} propostas` : ''}</span>}
                     </div>
@@ -346,13 +346,13 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
   }
 
   // Sequência (carrossel): roteiro → direção visual → páginas → aprovação e exportação.
-  if (piece.format === 'carousel') {
+  if (piece.format === 'carousel' || piece.format === 'story') {
     return (
       <div className="space-y-5" data-testid="edit-view">
         <button type="button" onClick={() => setView({ kind: 'gallery' })} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> Voltar</button>
         <div>
           <h1 className="font-display text-2xl font-bold">{unit?.content.title}</h1>
-          <p className="text-sm text-muted-foreground">{piece.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} · {accountLabel(piece.account_id)} · Carrossel{plans.find((pl) => pl.post_id === piece.id)?.approach ? ` · ${plans.find((pl) => pl.post_id === piece.id)?.approach}` : ''}</p>
+          <p className="text-sm text-muted-foreground">{piece.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} · {accountLabel(piece.account_id)} · {piece.format === 'story' ? 'Stories' : 'Carrossel'}{plans.find((pl) => pl.post_id === piece.id)?.approach ? ` · ${plans.find((pl) => pl.post_id === piece.id)?.approach}` : ''}</p>
         </div>
         <SequenceWorkspace piece={piece} onChange={replacePiece} onApproved={(a) => { replacePiece(a); setView({ kind: 'approved', pieceId: a.id }); }} />
       </div>

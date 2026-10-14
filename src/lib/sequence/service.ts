@@ -121,7 +121,10 @@ const needsRender = (u: PostUnit) => !u.rendered_url || u.visual_status !== 'rea
 interface Rendered { fabric_json: unknown; rendered_url: string; assets: PostUnit['assets'] }
 
 async function renderOne(post: UserPost, u: PostUnit, total: number, dir: SequenceDirection, opts: { fileTag: string; newImage?: boolean; coverVariant?: string | null }): Promise<Rendered> {
-  if (u.layout === 'cover') {
+  // Stories (9:16): todas as telas, inclusive a capa, pelo compositor da sequência no tamanho da capacidade.
+  const story = post.format === 'story';
+  const canvas = story ? { w: 1080, h: 1920 } : { w: 1080, h: 1350 };
+  if (u.layout === 'cover' && !story) {
     const variant = opts.coverVariant ?? u.assets?.variant ?? dir.cover_variant ?? null;
     const asset = (u.assets?.asset ?? null) as { url?: string; width?: number; height?: number; espaco_texto?: string; texto_cor?: string; origin?: string; photo_generation_id?: string } | null;
     const kind = imageKind(variant);
@@ -141,8 +144,8 @@ async function renderOne(post: UserPost, u: PostUnit, total: number, dir: Sequen
       assets: { variant: (d.variant as string) ?? variant, image_ref: (d.image_ref as string | null) ?? null, asset: (d.asset as Record<string, unknown>) ?? null, decision: d } };
   }
   const design = await loadHiveDesign();
-  const slide = composeSequencePage({ layout: u.layout === 'closing' ? 'closing' : 'text', title: u.title ?? '', body: u.body ?? '', position: u.position, total, direction: dir, colors: design.colors, spiralUrl: design.spiralUrl });
-  const dataUrl = await renderFabricToDataUrl(slide, { width: 1080, height: 1350, format: 'jpeg' });
+  const slide = composeSequencePage({ layout: u.layout, title: u.title ?? '', body: u.body ?? '', position: u.position, total, direction: dir, colors: design.colors, spiralUrl: design.spiralUrl, canvas });
+  const dataUrl = await renderFabricToDataUrl(slide, { width: canvas.w, height: canvas.h, format: 'jpeg' });
   if (!dataUrl) throw new Error(`Falha ao renderizar a página ${u.position}.`);
   const { publicUrl } = await uploadAssetImage({ userId: post.user_id, assetId: post.id, dataUrl, filename: `unit-${u.id}-${opts.fileTag}.jpg` });
   return { fabric_json: slide, rendered_url: `${publicUrl.split('?')[0]}?v=${Date.now()}`, assets: { ...u.assets } };

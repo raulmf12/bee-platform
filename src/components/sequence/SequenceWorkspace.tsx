@@ -21,6 +21,7 @@ import {
   markPublishedManually, proposeCoverImage, proposeDirection, proposeText, renderPending, reopenScript, unitApi, type UnitCandidate,
 } from '@/lib/sequence/service';
 import type { SequenceDirection } from '@/lib/hive/composeSequence';
+import { PublishPanel } from './PublishPanel';
 import type { FormatCapability, PostUnit, UserPost } from '@/types';
 
 const VSTATUS: Record<PostUnit['visual_status'], { label: string; cls: string }> = {
@@ -93,6 +94,7 @@ function ScriptStage({ piece, units, cap, busy, run, setUnits, reloadUnits, relo
   const [sel, setSel] = useState<string[]>([]);
   const min = cap?.min_units ?? 2, max = cap?.max_units ?? 10;
   const empty = units.some((u) => !(u.title ?? '').trim() && !(u.body ?? '').trim());
+  const story = piece.format === 'story';                 // Stories não têm legenda
   const save = (u: PostUnit, patch: Partial<PostUnit>) => run(`u-${u.id}`, async () => { const n = await unitApi.update(u.id, patch); setUnits(units.map((x) => (x.id === n.id ? n : x))); });
   const move = (i: number, d: -1 | 1) => run('reorder', async () => {
     const ids = units.map((u) => u.id); [ids[i], ids[i + d]] = [ids[i + d], ids[i]];
@@ -137,6 +139,9 @@ function ScriptStage({ piece, units, cap, busy, run, setUnits, reloadUnits, relo
               <Input aria-label={`Título da página ${u.position}`} defaultValue={u.title ?? ''} onBlur={(e) => e.target.value !== (u.title ?? '') && save(u, { title: e.target.value })} />
               <Textarea aria-label={`Texto da página ${u.position}`} rows={u.layout === 'cover' ? 1 : 3} defaultValue={u.body ?? ''} onBlur={(e) => e.target.value !== (u.body ?? '') && save(u, { body: e.target.value })} />
               {u.visual_direction && <p className="text-[11px] italic text-muted-foreground">Direção visual: {u.visual_direction}</p>}
+              {(u as PostUnit & { interaction?: { type?: string; text?: string } | null }).interaction?.text && (
+                <p className="text-[11px] text-amber-800 dark:text-amber-300" data-testid="unit-interaction">Interação planejada ({(u as PostUnit & { interaction: { type?: string } }).interaction.type}): “{(u as PostUnit & { interaction: { text: string } }).interaction.text}” — colocar à mão no app (a API não publica figurinhas).</p>
+              )}
             </div>
             <div className="flex flex-row gap-1 sm:flex-col">
               <button type="button" aria-label={`Subir página ${u.position}`} disabled={i === 0 || !!busy} onClick={() => move(i, -1)} className="rounded p-1 hover:bg-secondary disabled:opacity-30"><ArrowUp className="h-3.5 w-3.5" /></button>
@@ -151,14 +156,14 @@ function ScriptStage({ piece, units, cap, busy, run, setUnits, reloadUnits, relo
       <TextAdjust piece={piece} units={units} selected={sel} busy={busy} run={run} cand={cand} setCand={setCand} allowManual={false} />
       {cand && <CandidateCompare cand={cand} units={units} piece={piece} busy={busy} run={run} onDone={async (applied) => { setCand(null); if (applied) { await reloadUnits(); await reloadPiece(); setSel([]); } }} />}
 
-      <div className="space-y-1.5 rounded-xl border bg-card p-3">
+      {!story && <div className="space-y-1.5 rounded-xl border bg-card p-3">
         <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Legenda da peça</p>
         <Textarea aria-label="Legenda da sequência" rows={5} value={caption} onChange={(e) => setCaption(e.target.value)} onBlur={() => caption !== (piece.caption ?? '') && run('cap', async () => { const [p] = await db.update<UserPost>('user_posts', { id: `eq.${piece.id}` }, { caption }); if (p) onChange(p); })} />
-      </div>
+      </div>}
 
       <div className="flex flex-wrap items-center justify-end gap-3">
-        {(empty || units.length < min || units.length > max || !caption.trim()) && <p className="text-xs text-muted-foreground">{empty ? 'Há página sem texto.' : !caption.trim() ? 'Falta a legenda.' : `A sequência precisa ter de ${min} a ${max} páginas.`}</p>}
-        <Button variant="accent" disabled={!!busy || empty || units.length < min || units.length > max || !caption.trim()} onClick={() => run('approve-script', async () => onChange(await approveScript(piece)))} data-testid="script-approve">
+        {(empty || units.length < min || units.length > max || (!story && !caption.trim())) && <p className="text-xs text-muted-foreground">{empty ? 'Há página sem texto.' : !story && !caption.trim() ? 'Falta a legenda.' : `A sequência precisa ter de ${min} a ${max} páginas.`}</p>}
+        <Button variant="accent" disabled={!!busy || empty || units.length < min || units.length > max || (!story && !caption.trim())} onClick={() => run('approve-script', async () => onChange(await approveScript(piece)))} data-testid="script-approve">
           <Check className="h-4 w-4" /> Aprovar roteiro
         </Button>
       </div>
@@ -182,7 +187,9 @@ function VisualStage({ piece, units, busy, run, progress, setProgress, reloadUni
   const [draftDir, setDraftDir] = useState<SequenceDirection>(dir);
   useEffect(() => { loadHiveDesign().then((d) => setTemplates((d.variacoes as Array<{ id: string; nome: string; manifestacao_id: string }>).filter((v) => ['M01', 'M02'].includes(v.manifestacao_id)))).catch(() => {}); }, []);
   const u = units[Math.min(current, units.length - 1)];
-  const allOk = units.length > 0 && units.every((x) => !needsRender(x) && x.review_status === 'approved') && !!(piece.caption ?? '').trim();
+  const story = piece.format === 'story';
+  const allOk = units.length > 0 && units.every((x) => !needsRender(x) && x.review_status === 'approved') && (story || !!(piece.caption ?? '').trim());
+  const ratio = story ? 'aspect-[9/16]' : 'aspect-[4/5]';
 
   async function produce() {
     await run('render', async () => {
@@ -199,7 +206,7 @@ function VisualStage({ piece, units, busy, run, progress, setProgress, reloadUni
     return (
       <div className="space-y-4" data-testid="direction">
         <p className="text-sm text-muted-foreground">Direção visual do conjunto: as páginas compartilham tipografia, cores, assinatura e ritmo; a composição varia pela função de cada página.</p>
-        <DirectionForm value={draftDir} onChange={setDraftDir} templates={templates} />
+        <DirectionForm value={draftDir} onChange={setDraftDir} templates={story ? [] : templates} />
         <div className="grid gap-2 sm:grid-cols-3">
           {units.map((x) => <div key={x.id} className="rounded-lg border bg-card p-2 text-xs"><b>{String(x.position).padStart(2, '0')}</b> · {x.layout === 'cover' ? 'capa (template da imagem única)' : x.layout === 'closing' ? 'encerramento (espiral + assinatura)' : 'página de texto'}<p className="truncate text-muted-foreground">{x.title}</p></div>)}
         </div>
@@ -243,7 +250,7 @@ function VisualStage({ piece, units, busy, run, progress, setProgress, reloadUni
       <div className="flex gap-2 overflow-x-auto pb-1" data-testid="pages-strip">
         {units.map((x, i) => (
           <div key={x.id} className={`w-24 shrink-0 space-y-1 ${i === current ? 'opacity-100' : 'opacity-80'}`} data-testid="page-thumb" data-unit={x.id} data-status={x.visual_status} data-review={x.review_status}>
-            <button type="button" onClick={() => setCurrent(i)} className={`block aspect-[4/5] w-full overflow-hidden rounded-md border-2 ${i === current ? 'border-accent' : 'border-transparent'}`}>
+            <button type="button" onClick={() => setCurrent(i)} className={`block ${ratio} w-full overflow-hidden rounded-md border-2 ${i === current ? 'border-accent' : 'border-transparent'}`}>
               {x.rendered_url ? <img src={x.rendered_url} alt={`Página ${x.position}`} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center bg-secondary text-[10px]">{x.position}</div>}
             </button>
             <div className="flex items-center justify-between text-[10px]">
@@ -258,8 +265,8 @@ function VisualStage({ piece, units, busy, run, progress, setProgress, reloadUni
       {u && (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,380px)_1fr]" data-testid="page-view" data-unit={u.id}>
           <div className="space-y-2">
-            {u.rendered_url ? <img src={u.rendered_url} alt={`Página ${u.position}`} className="aspect-[4/5] w-full rounded-xl border object-cover" data-testid="page-image" />
-              : <div className="flex aspect-[4/5] items-center justify-center rounded-xl border bg-secondary text-sm text-muted-foreground"><ImageIcon className="h-6 w-6" /></div>}
+            {u.rendered_url ? <img src={u.rendered_url} alt={`Página ${u.position}`} className={`${ratio} w-full rounded-xl border object-cover`} data-testid="page-image" />
+              : <div className={`flex ${ratio} items-center justify-center rounded-xl border bg-secondary text-sm text-muted-foreground`}><ImageIcon className="h-6 w-6" /></div>}
             <div className="flex items-center justify-between">
               <Button size="sm" variant="ghost" disabled={current === 0} onClick={() => setCurrent(current - 1)} aria-label="Página anterior"><ArrowLeft className="h-4 w-4" /></Button>
               <span className="text-xs text-muted-foreground">Página {u.position} de {units.length}</span>
@@ -313,9 +320,9 @@ function DirectionForm({ value, onChange, templates }: { value: SequenceDirectio
       <label className="space-y-1"><span className="text-muted-foreground">Fundo das páginas</span>
         <select aria-label="Fundo das páginas" className="h-8 w-full rounded-md border bg-background px-2" value={value.theme} onChange={(e) => onChange({ ...value, theme: e.target.value as 'claro' | 'escuro' })}>
           <option value="claro">Claro (creme)</option><option value="escuro">Escuro (azul)</option></select></label>
-      <label className="space-y-1"><span className="text-muted-foreground">Template da capa</span>
+      {templates.length > 0 && <label className="space-y-1"><span className="text-muted-foreground">Template da capa</span>
         <select aria-label="Template da capa" className="h-8 w-full rounded-md border bg-background px-2" value={value.cover_variant ?? ''} onChange={(e) => onChange({ ...value, cover_variant: e.target.value || null })}>
-          <option value="">A Hive escolhe</option>{templates.map((t) => <option key={t.id} value={t.id}>{t.id} {t.nome}</option>)}</select></label>
+          <option value="">A Hive escolhe</option>{templates.map((t) => <option key={t.id} value={t.id}>{t.id} {t.nome}</option>)}</select></label>}
       <label className="flex items-center gap-2"><input type="checkbox" aria-label="Numerar páginas" checked={value.numbering} onChange={(e) => onChange({ ...value, numbering: e.target.checked })} /> Numerar páginas</label>
       <Input aria-label="Assinatura" className="h-8 text-xs" value={value.signature ?? ''} onChange={(e) => onChange({ ...value, signature: e.target.value || null })} placeholder="Assinatura (opcional)" />
     </div>
@@ -454,7 +461,8 @@ function ExportStage({ piece, units, cap, caps, busy, run, onChange }: { piece: 
           {pkg && !current && <span className="text-xs text-amber-700">O pacote exportado é de outra versão (v{pkg.version}); exporte de novo.</span>}
         </div>
       </div>
-      <div className="space-y-2 rounded-xl border bg-card p-3" data-testid="publish-manual">
+      <PublishPanel piece={piece} cap={cap} onChange={onChange} />
+      {!cap?.auto_publish && <div className="space-y-2 rounded-xl border bg-card p-3" data-testid="publish-manual">
         <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Publicação</p>
         <p className="text-sm">{cap?.auto_publish ? 'Publicação automática disponível.' : 'Publicação automática deste formato ainda não está disponível (chega na próxima etapa). Agende para organizar a agenda, publique o pacote exportado e marque aqui como publicado.'}</p>
         {cap?.notes && <p className="text-[11px] text-muted-foreground">{cap.notes} Verificado em {cap.verified_at.split('-').reverse().join('/')}.</p>}
@@ -464,7 +472,7 @@ function ExportStage({ piece, units, cap, caps, busy, run, onChange }: { piece: 
             <Button size="sm" variant="outline" disabled={!!busy || !current} title={current ? undefined : 'Exporte o pacote aprovado antes'} onClick={() => run('pub', async () => onChange(await markPublishedManually(piece, url.trim())))} data-testid="mark-published">Marcar como publicado</Button>
           </div>
         )}
-      </div>
+      </div>}
       {piece.status === 'approved' && <p className="text-xs text-muted-foreground">Para agendar, siga para a programação: a agenda registra uma entrada para a peça inteira.</p>}
     </div>
   );

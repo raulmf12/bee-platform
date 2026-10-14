@@ -76,7 +76,7 @@ export async function generateHiveImage(params: {
   // 2) Composição: pega a receita frozen da variante escolhida (M01 ou M02).
   const design = await loadHiveDesign();
   const recipe = design.variacoes.find((v) => v.id === decision.variant) ?? design.variacoes[0];
-  if (!recipe) throw new Error('Nenhuma variação frozen na base.');
+  if (!recipe) throw new Error('Esta marca ainda não tem sistema visual (templates) configurado.');
 
   const allowHl = Boolean(recipe.limites?.destaque_permitido) && decision.highlight?.target;
   const highlight = allowHl ? { target: decision.highlight!.target } : null;

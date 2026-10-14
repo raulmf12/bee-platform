@@ -248,7 +248,7 @@ Deno.serve(async (req: Request) => {
       fetchRest<SelConfig[]>(`/design_selection_config?ativo=eq.true&select=weights,thresholds,diversity&limit=1${S}`),
       fetchRest<Asset[]>(`/design_assets?is_active=eq.true&kind=eq.photo&select=id,kind,url,width,height,origin,semantic,source_image_id,person_slug,usage_count${S}`),
     ]);
-    if (vars.length === 0) return errorResponse('Nenhuma variacao congelada na base', 409);
+    if (vars.length === 0) return errorResponse('Esta marca ainda não tem sistema visual (templates) configurado — a Hive não usa o de outra marca.', 409);
     // So manifestacoes de AUTO-SELECAO entram no motor (M04 depende de dados de
     // evento do usuario -> e acionado pela tela /hive/convite, nunca aqui).
     const autoManis = new Set(manis.filter((m) => m.auto_select !== false).map((m) => m.id));

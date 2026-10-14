@@ -680,6 +680,15 @@ export const edge = {
     return JSON.parse(text);
   },
 
+  // Verificação prévia (sequências): confere o pacote aprovado sem publicar.
+  async publishCheck(input: { post_id: string }): Promise<{ success: boolean; check: { ok: boolean; issues: string[]; plan: string[]; version: number | null; units: number } }> {
+    const headers = await authHeader();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/publish-post`, { method: 'POST', headers, body: JSON.stringify({ ...input, dry_run: true }) });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`publish-post HTTP ${res.status}: ${text.slice(0, 300)}`);
+    return JSON.parse(text);
+  },
+
   async publishPost(input: { post_id: string }): Promise<{
     success: boolean;
     platform: 'linkedin' | 'instagram';

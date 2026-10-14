@@ -6,6 +6,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { AlertTriangle, ArrowRight, BookOpen, BrainCircuit, Loader2, Plus, RefreshCw, ScrollText, Sparkles, UserRound, Building2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { CreateWorkspaceCard } from '@/components/identity/CreateWorkspaceCard';
 import { identityApi, profileSummary, type IdentityState } from '@/lib/identityApi';
 import { useAuthStore } from '@/store/authStore';
 import type { Brand, SetupMode, SetupSession } from '@/types';
@@ -44,13 +45,11 @@ export function IdentityHome() {
   }
 
   if (!brands) return <div className="flex h-64 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-accent" /></div>;
+  // Cliente novo (sem espaço de trabalho): cria a própria marca e abre a configuração inicial neutra.
   if (!brands.length) {
     return (
       <div className="mx-auto max-w-3xl p-4 lg:p-8">
-        <div className="rounded-2xl border border-dashed p-10 text-center" data-testid="identity-no-brand">
-          <p className="font-display text-lg font-semibold">Nenhuma marca configurada</p>
-          <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">Peça ao responsável pelo seu espaço de trabalho para criar a marca; depois você configura a identidade aqui.</p>
-        </div>
+        <CreateWorkspaceCard onCreated={(id) => { identityApi.resetCache(); navigate(`/identidade/configurar?modo=setup&marca=${id}`); }} />
       </div>
     );
   }

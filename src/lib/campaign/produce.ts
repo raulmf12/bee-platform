@@ -240,7 +240,7 @@ export async function swapPieceImage(userId: string, piece: UserPost, photoAdjus
 // e mede a edição humana (ai_reviews) contra a variação pristina.
 export async function approvePiece(piece: UserPost): Promise<UserPost> {
   // Sequência: aprovação final só com todas as páginas prontas/aprovadas (regra no banco).
-  if (piece.format === 'carousel') {
+  if (piece.format === 'carousel' || piece.format === 'story') {
     const r = await db.rpc<UserPost | UserPost[]>('approve_sequence', { pid: piece.id });
     return (Array.isArray(r) ? r[0] : r) as UserPost;
   }

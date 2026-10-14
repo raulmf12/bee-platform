@@ -166,7 +166,7 @@ test.describe('F18 · conteúdos sequenciais (carrossel)', () => {
     await page.getByRole('button', { name: /Ver produção do ciclo/ }).click();
     await page.getByTestId('gallery-unit').filter({ has: page.getByTestId('unit-format') }).getByRole('button').first().click();
     await expect(page.getByTestId('sequence')).toHaveAttribute('data-stage', 'export');
-    await expect(page.getByTestId('publish-manual')).toContainText('ainda não está disponível');
+    await expect(page.getByTestId('publish-panel')).toContainText('documento PDF');   // publicação automática (Fase 5)
     await page.getByTestId('export-run').click();
     await expect(page.getByTestId('export-link')).toContainText(`Baixar PDF · v${ap.version}`, { timeout: 60_000 });
     const [pkg] = await sql<{ kind: string; version: number; pdf_url: string; files: string[] }>(`select export_package->>'kind' kind, (export_package->>'version')::int version, export_package->>'pdf_url' pdf_url, export_package->'files' files from user_posts where id='${carousel.id}'`);
