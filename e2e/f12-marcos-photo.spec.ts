@@ -123,22 +123,43 @@ test.describe('F12 · motor fotográfico do Marcos', () => {
 
     await page.getByRole('button', { name: /Revisar produção/ }).click();
     await page.getByRole('button', { name: /Revisar propostas|Revisar peça|Revisar/ }).first().click();
-    // Outras opções de IMAGEM: mesmo design (M02-A) e mesma frase, foto nova pelo motor.
-    const gensBefore = calls.filter((c) => c.action === 'generate').length;
-    await page.getByTestId('vary-image').click();
-    await expect(page.getByTestId('proposal')).toHaveCount(3, { timeout: 60_000 });
-    await expect(page.getByTestId('proposal-tag').nth(1)).toHaveText('Nova imagem · mesmo design');
-    expect(calls.filter((c) => c.action === 'generate').length).toBe(gensBefore + 2);
-    const alts = await sql<{ variant: string; quote: string; gid: string }>(`select visual_decision->>'variant' variant, carousel_text->>'quote' quote, visual_decision->'asset'->>'photo_generation_id' gid from user_posts where cycle_id='${camp.cycleIds[0]}' and piece_role='unfold' and status<>'archived' order by alternative_rank`);
-    expect(alts.map((a) => a.variant)).toEqual(['M02-A', 'M02-A', 'M02-A']);
-    expect(new Set(alts.map((a) => a.quote)).size).toBe(1);
-    expect(new Set(alts.map((a) => a.gid)).size).toBe(3);                 // uma foto diferente por opção
-    await page.getByRole('button', { name: 'Escolher opção 1' }).click();
     const review = page.getByTestId('marcos-photo-review');
     await expect(review).toBeVisible();
     await expect(review.getByTestId('photo-candidate')).toBeVisible();
     await review.getByTestId('photo-approve').click();
     await expect.poll(async () => (await sql<{ r: string }>(`select review_status r from photo_generations where id='${piece.gid}'`))[0].r).toBe('approved');
     await expect.poll(async () => (await sql<{ s: string; bg: string }>(`select status s, metadata->>'bg_approved' bg from user_posts where id='${piece.id}'`))[0]).toEqual({ s: 'approved', bg: 'true' });
+  });
+
+  test('revisão da foto: rejeitar vira PROPOSTA de troca de imagem (mesma frase, legenda e template)', async ({ page }) => {
+    test.setTimeout(180_000);
+    const calls: Array<Record<string, unknown>> = [];
+    await mockProduction(page);
+    await mockPhotoEngine(page, calls);
+    await mockEdge(page, 'hive-decide', (b) => {
+      const variant = b.platform === 'linkedin' ? 'M01-A' : 'M02-A';
+      return { success: true, model_used: 'mock', decision: { mode: variant.split('-')[0], variant, highlight: null, subtitle: null, asset: null, diagram: null, explanation: {} } };
+    });
+    await mockEdge(page, 'generate-content', () => ({ success: true, variations: [{ quote: 'Frase 1', caption: 'Legenda 1', virality_score: 70, hive_seed: { variant: 'M02-A', manifestation: 'M02', highlight: null, subtitle: null, poles: null, image_scene_hint: '', human_presence_adds_meaning: true, mode_reason: '', variant_reason: '' } }], quote: 'Frase 1', caption: 'Legenda 1' }));
+    const acc = await seedAccounts();
+    const camp = await seedCampaign({ weeks: 8, name: 'Presença Marcos', accountIds: [acc.linkedin, acc.instagram] });
+    await seedValidatedContents(camp.id, camp.cycleIds[0], [{ title: 'Liderar é sustentar a pergunta', channels: [{ account_id: acc.instagram, platform: 'instagram' }] }]);
+    await page.goto(`/producao?campaign=${camp.id}&cycle=${camp.cycleIds[0]}`);
+    await expect(page.getByTestId('production-summary')).toBeVisible({ timeout: 120_000 });
+    const [piece] = await sql<{ id: string; gid: string; quote: string; caption: string }>(`select id, visual_decision->'asset'->>'photo_generation_id' gid, carousel_text->>'quote' quote, caption from user_posts where cycle_id='${camp.cycleIds[0]}' and piece_role='unfold' and status<>'archived' limit 1`);
+    await page.getByRole('button', { name: /Revisar produção/ }).click();
+    await page.getByRole('button', { name: /Revisar propostas/ }).first().click();
+    const gensBefore = calls.filter((c) => c.action === 'generate').length;
+    await page.getByTestId('marcos-photo-review').getByTestId('photo-reject').click();
+    await expect(page.getByTestId('candidate')).toBeVisible({ timeout: 60_000 });
+    for (const t of ['Frase mantida', 'Legenda mantida', 'Template mantido']) await expect(page.getByTestId('candidate-preserved')).toContainText(t);
+    expect(calls.filter((c) => c.action === 'generate').length).toBe(gensBefore + 1);
+    const [same] = await sql<{ gid: string }>(`select visual_decision->'asset'->>'photo_generation_id' gid from user_posts where id='${piece.id}'`);
+    expect(same.gid).toBe(piece.gid);                                    // peça ativa intacta até aplicar
+    await page.getByTestId('candidate-apply').click();
+    await expect(page.getByTestId('candidate')).toHaveCount(0);
+    const [after] = await sql<{ gid: string; variant: string; quote: string; caption: string; version: number }>(`select visual_decision->'asset'->>'photo_generation_id' gid, visual_decision->>'variant' variant, carousel_text->>'quote' quote, caption, version from user_posts where id='${piece.id}'`);
+    expect(after).toMatchObject({ variant: 'M02-A', quote: piece.quote, caption: piece.caption, version: 2 });
+    expect(after.gid).not.toBe(piece.gid);
   });
 });

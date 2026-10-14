@@ -63,6 +63,7 @@ interface DecideInput {
   editorial_slug?: string;
   target_avatar?: string;
   post_id?: string;
+  persist?: boolean;            // false = prévia de candidato (não grava no post)
   history_variants?: string[];
   // Quando presente, curto-circuita o Gemini: executa a variante ja escolhida.
   seed?: HiveSeed;
@@ -200,7 +201,7 @@ async function lockedLinkedinDecision(input: DecideInput, text: string, userId: 
     text_check: { chars: text.length, limit: charsLimit, needs_editorial_review: needsReview },
   };
 
-  if (input.post_id) {
+  if (input.post_id && input.persist !== false) {
     await patchRest(`/user_posts?id=eq.${input.post_id}&user_id=eq.${userId}`, {
       visual_decision: decision,
       image_status: 'pending',
@@ -543,7 +544,8 @@ Deno.serve(async (req: Request) => {
     };
 
     // --- Persiste no post, se veio post_id (image entra em 'pending') ---
-    if (input.post_id) {
+    // Prévia de candidato (persist=false): NUNCA grava na peça ativa.
+    if (input.post_id && input.persist !== false) {
       await patchRest(`/user_posts?id=eq.${input.post_id}&user_id=eq.${userId}`, {
         visual_decision: decision,
         image_status: 'pending',

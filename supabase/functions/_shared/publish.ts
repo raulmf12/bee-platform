@@ -27,6 +27,10 @@ export interface PublishablePost {
   // publicam depois de image_approved=true.
   visual_decision: unknown | null;
   image_approved: boolean | null;
+  // Versão da peça e versão programada (pacote congelado ao agendar).
+  status?: string;
+  version?: number;
+  scheduled_version?: number | null;
   // Campanhas: a conta social da peça. Nula nos posts antigos → credenciais de
   // user_settings (comportamento de sempre).
   account_id: string | null;
@@ -43,12 +47,24 @@ export interface PublishResult { url: string; id: string; platform: string }
 
 async function loadPost(id: string): Promise<PublishablePost | null> {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/user_posts?id=eq.${id}&select=id,user_id,platform,format,caption,rendered_slides,metadata,publish_attempts,visual_decision,image_approved,account_id&limit=1`,
+    `${SUPABASE_URL}/rest/v1/user_posts?id=eq.${id}&select=id,user_id,platform,format,caption,rendered_slides,metadata,publish_attempts,visual_decision,image_approved,account_id,status,version,scheduled_version&limit=1`,
     { headers: svcHeaders() },
   );
   if (!res.ok) return null;
   const rows = await res.json();
-  return rows[0] ?? null;
+  const post = rows[0] ?? null;
+  // Agendada publica o PACOTE PROGRAMADO: se a peça foi revisada depois, a versão nova
+  // só vai ao ar com "atualizar agendamento" (docs: Ajustes e alternativas §8).
+  if (post && post.status === 'scheduled' && post.scheduled_version && post.scheduled_version !== post.version) {
+    const vr = await fetch(`${SUPABASE_URL}/rest/v1/piece_versions?post_id=eq.${id}&version=eq.${post.scheduled_version}&select=components&limit=1`, { headers: svcHeaders() });
+    const [v] = vr.ok ? await vr.json() : [];
+    if (v?.components) {
+      post.caption = v.components.caption ?? post.caption;
+      post.rendered_slides = v.components.rendered_slides ?? post.rendered_slides;
+      post.visual_decision = v.components.visual_decision ?? post.visual_decision;
+    }
+  }
+  return post;
 }
 
 async function loadSettings(userId: string): Promise<UserSettings | null> {

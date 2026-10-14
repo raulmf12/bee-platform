@@ -44,44 +44,58 @@ test.describe('F5 · produção visual do ciclo', () => {
     await page.getByRole('button', { name: /Revisar produção/ }).click();
     await expect(page.getByTestId('gallery-counts')).toHaveText('3 peças · 1 aprovadas · 2 para revisar');
 
-    // 12B: a recomendada abre direto; pedir OUTRAS OPÇÕES DE DESIGN (mesma frase) e escolher a 02
+    // 12C: ajustes viram PROPOSTAS (candidatos) — a peça ativa só muda ao aplicar
     await page.getByRole('button', { name: /Revisar propostas/ }).first().click();
     await expect(page.getByTestId('edit-view')).toBeVisible();
-    await expect(page.getByTestId('vary-image')).toBeDisabled();          // M01-A não usa imagem
-    const quoteBefore = await page.getByTestId('piece-quote').textContent();
-    await page.getByTestId('vary-design').click();
-    await expect(page.getByTestId('proposal')).toHaveCount(3, { timeout: 60_000 });
-    await expect(page.getByTestId('proposal').first()).toContainText('Recomendação da Hive');
-    await expect(page.getByTestId('proposal-tag').nth(1)).toHaveText('Novo design');
-    await expect(page.getByTestId('proposal').nth(1)).toContainText('Mesma frase, outro layout.');
-    const opts = await sql<{ quote: string; variant: string }>(`select carousel_text->>'quote' quote, visual_decision->>'variant' variant from user_posts where cycle_id='${cycleId}' and piece_role='unfold' and alternative_group = (select alternative_group from user_posts where cycle_id='${cycleId}' and piece_role='unfold' and alternative_rank = 2 limit 1) order by alternative_rank`);
-    expect(opts).toHaveLength(3);
-    expect(new Set(opts.map((o) => o.quote)).size).toBe(1);               // a mesma frase em todas
-    expect(opts[0].quote).toBe(quoteBefore);
-    expect(new Set(opts.map((o) => o.variant)).size).toBe(3);             // designs diferentes
-    if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/vary-choose.png` });
-    await page.getByRole('button', { name: 'Escolher opção 2' }).click();
-    await expect(page.getByTestId('edit-view')).toBeVisible();
-    const archived = await sql(`select 1 from user_posts where cycle_id='${cycleId}' and piece_role='unfold' and status='archived'`);
-    expect(archived).toHaveLength(2);
+    const [before] = await sql<{ id: string; slide1: string; quote: string; caption: string; variant: string }>(`select id, rendered_slides->>'slide1' as slide1, carousel_text->>'quote' quote, caption, visual_decision->>'variant' variant
+      from user_posts where cycle_id='${cycleId}' and piece_role='unfold' and status<>'archived' order by alternative_rank, created_at limit 1`);
+    await expect(page.getByTestId('piece-quote')).toHaveText(before.quote);
+    await expect(page.getByTestId('action-swap_image')).toHaveAttribute('title', /não usa imagem/); // M01 sem imagem
 
-    // 12C: editar texto (re-render) + pedir ajuste da legenda à Hive
-    // a peça escolhida = a não arquivada do grupo que teve alternativas arquivadas
-    const [before] = await sql<{ id: string; slide1: string }>(`select id, rendered_slides->>'slide1' as slide1 from user_posts
-      where cycle_id='${cycleId}' and piece_role='unfold' and status<>'archived'
-        and alternative_group in (select alternative_group from user_posts where cycle_id='${cycleId}' and status='archived')`);
-    await page.getByRole('button', { name: 'Editar texto' }).click();
-    await page.getByLabel('Frase da imagem').fill('Frase editada na peça');
-    await page.getByRole('button', { name: 'Salvar texto' }).click();
+    // trocar template: frase e legenda idênticas, só o visual muda
+    await page.getByTestId('action-swap_template').click();
+    const opt = page.getByTestId('template-option').filter({ hasText: 'mantém a imagem' }).first();
+    const target = await opt.getAttribute('data-template');
+    await opt.click();
+    await expect(page.getByTestId('candidate')).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId('candidate-preserved')).toContainText('Frase mantida');
+    await expect(page.getByTestId('candidate-preserved')).toContainText('Legenda mantida');
+    const [still] = await sql<{ variant: string; version: number }>(`select visual_decision->>'variant' variant, version from user_posts where id='${before.id}'`);
+    expect(still).toMatchObject({ variant: before.variant, version: 1 });     // nada muda antes de aplicar
+    await page.getByTestId('candidate-apply').click();
+    await expect(page.getByTestId('candidate')).toHaveCount(0);
+    const [tpl] = await sql<{ variant: string; version: number; quote: string; caption: string; slide1: string }>(`select visual_decision->>'variant' variant, version, carousel_text->>'quote' quote, caption, rendered_slides->>'slide1' slide1 from user_posts where id='${before.id}'`);
+    expect(tpl).toMatchObject({ variant: target, version: 2, quote: before.quote, caption: before.caption });
+    expect(tpl.slide1).not.toBe(before.slide1);
+
+    // editar a frase eu mesmo: re-render no MESMO template
+    await page.getByTestId('action-adjust_text').click();
+    await page.getByRole('button', { name: 'Editar eu mesmo' }).click();
+    await page.getByLabel('Novo texto').fill('Frase editada na peça');
+    await page.getByTestId('generate-proposal').click();
+    await expect(page.getByTestId('candidate-new-quote')).toHaveText('Frase editada na peça', { timeout: 60_000 });
+    await page.getByTestId('candidate-apply').click();
     await expect(page.getByTestId('piece-quote')).toHaveText('Frase editada na peça');
-    const [afterEdit] = await sql<{ slide1: string; manual_edits: number }>(`select rendered_slides->>'slide1' as slide1, manual_edits from user_posts where id='${before.id}'`);
-    expect(afterEdit.manual_edits).toBe(1);
-    expect(afterEdit.slide1).not.toBe(before.slide1); // re-render com cache-buster
+    const [afterEdit] = await sql<{ slide1: string; variant: string; caption: string }>(`select rendered_slides->>'slide1' as slide1, visual_decision->>'variant' variant, caption from user_posts where id='${before.id}'`);
+    expect(afterEdit).toMatchObject({ variant: target, caption: before.caption });
+    expect(afterEdit.slide1).not.toBe(tpl.slide1);
+
+    // pedir à Hive um ajuste só da legenda: a imagem NÃO é refeita
+    await page.getByTestId('action-adjust_text').click();
     await page.getByRole('button', { name: 'Legenda', exact: true }).click();
-    await page.getByLabel('Pedido de ajuste da peça').fill('mais curta');
-    await page.getByRole('button', { name: 'Ajustar', exact: true }).click();
+    await page.getByRole('button', { name: 'Pedir à Hive' }).click();
+    await page.getByLabel('Pedido de ajuste do texto').fill('mais curta');
+    await page.getByTestId('generate-proposal').click();
+    await expect(page.getByTestId('candidate-new-caption')).toHaveText('Legenda ajustada pela Hive', { timeout: 60_000 });
+    await expect(page.getByTestId('candidate-preserved')).toContainText('Frase mantida');
+    await expect(page.getByTestId('candidate-preserved')).toContainText('Template mantido');
+    await page.getByTestId('candidate-apply').click();
     await expect(page.getByTestId('piece-caption')).toHaveText('Legenda ajustada pela Hive');
     expect(calls.edit.at(-1)).toMatchObject({ field: 'legenda', instruction: 'mais curta' });
+    const [afterCap] = await sql<{ slide1: string; version: number; quote: string }>(`select rendered_slides->>'slide1' as slide1, version, carousel_text->>'quote' quote from user_posts where id='${before.id}'`);
+    expect(afterCap).toMatchObject({ slide1: afterEdit.slide1, version: 4, quote: 'Frase editada na peça' });
+    const vers = await sql<{ version: number; action: string }>(`select version, action from piece_versions where post_id='${before.id}' order by version`);
+    expect(vers.map((v) => v.action)).toEqual(['base', 'swap_template', 'adjust_text', 'adjust_text']);
 
     // aprovar → próxima → escolher recomendada → aprovar → concluir
     await page.getByRole('button', { name: 'Aprovar peça' }).click();

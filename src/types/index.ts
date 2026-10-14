@@ -259,6 +259,9 @@ export interface UserPost {
   profile_id?: string | null;
   context_snapshot_id?: string | null;
   reference_status?: 'not_reviewed' | 'current_voice' | 'historical' | 'excluded' | null;
+  // Versão da peça (ajustes viram candidatos aplicados) e versão presa ao agendamento.
+  version?: number;
+  scheduled_version?: number | null;
   created_at: string;
   updated_at: string;
 }

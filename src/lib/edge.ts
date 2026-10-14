@@ -36,6 +36,9 @@ export interface GenerateContentInput {
   // exemplos + Camada 0 da Alma) e enorme e a saida e curta, entao 5 variacoes
   // custam ~8% a mais. Cinco chamadas separadas custariam ~5x.
   variations?: number;
+  profile_id?: string;
+  // Minha identidade: amostra de calibração com o perfil em RASCUNHO da sessão (nada é gravado no perfil).
+  calibration?: { session_id: string; profile_ref: string };
 }
 
 // SEED da Hive: a FORMA que o generate-content escolheu junto com o conteudo
@@ -414,6 +417,10 @@ export const edge = {
 
   // Valida um token do LinkedIn no servidor (o browser bloqueia por CORS).
   // --- Campanhas (F2) ---
+  // Minha identidade (Fase 3): próxima pergunta da conversa guiada / proposta de um bloco.
+  async identitySetup<T = Record<string, unknown>>(input: { action: 'next_question' | 'propose'; session_id: string; block?: string }): Promise<T & { success: boolean }> {
+    return postEdge('identity-setup', input);
+  },
   async campaignMoment(input: { type: 'organica' | 'vendas'; intent?: string; user_note?: string; profile_id?: string }): Promise<{
     success: boolean; moment: { label: string; summary: string; signals: string[] }; facts: Record<string, unknown>;
   }> {
@@ -762,6 +769,8 @@ export const edge = {
     history_variants?: string[];
     // Modo execucao: template ja escolhido na geracao — pula o Gemini.
     seed?: HiveSeed;
+    // false = prévia de candidato: não grava a decisão na peça ativa.
+    persist?: boolean;
   }): Promise<{
     success: boolean;
     decision: {

@@ -2,21 +2,21 @@
 // da proposta, edição/aprovação da peça e conclusão (→ programação).
 import { MarcosPhotoReview } from '@/components/hive/MarcosPhotoReview';
 import { AcjChip } from '@/components/acj/AcjChip';
+import { PieceActionsPanel, type ExternalRequest } from '@/components/pieces/PieceActionsPanel';
 import { isoToLocalInput, localInputToIso, nowLocalInput } from '@/lib/schedule';
 import { isAvulso } from '@/lib/campaign/avulso';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
-  ArrowLeft, ArrowRight, Check, CheckCircle2, ExternalLink, ImageIcon, Instagram, Linkedin, Loader2, Pencil, RefreshCw, Sparkles,
+  ArrowLeft, ArrowRight, Check, CheckCircle2, ExternalLink, ImageIcon, Instagram, Linkedin, Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import { contentApi, ideaApi, pieceApi } from '@/lib/campaignApi';
 import { formatRange } from '@/lib/campaign/dates';
 import {
-  AI_IMAGE_VARIANT, adjustPieceText, approvePiece, choosePiece, createAlternatives, editPieceText, reschedulePiece, finishProduction, imageKind, produceCycle, productionTodo, swapPieceImage,
+  AI_IMAGE_VARIANT, approvePiece, choosePiece, createAlternatives, reschedulePiece, finishProduction, imageKind, produceCycle, productionTodo,
 } from '@/lib/campaign/produce';
 import { loadHiveDesign } from '@/lib/hive/loadDesign';
 import { useAuthStore } from '@/store/authStore';
@@ -62,9 +62,8 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
   const [checked, setChecked] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [variantNames, setVariantNames] = useState<Record<string, string>>({});
-  const [draft, setDraft] = useState<{ quote: string; caption: string } | null>(null);
-  const [adjustField, setAdjustField] = useState<'titulo' | 'legenda'>('titulo');
-  const [instruction, setInstruction] = useState('');
+  // Pedido da revisão da foto ("gerar outra") → proposta de troca de imagem no painel de ações.
+  const [photoRequest, setPhotoRequest] = useState<ExternalRequest | null>(null);
 
   const edName = useCallback((slug?: string | null) => editorials.find((e) => e.slug === slug)?.name, [editorials]);
   const accountLabel = (id?: string | null) => accounts.find((a) => a.id === id)?.label ?? '';
@@ -148,7 +147,7 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
   }
 
   function openUnit(u: Unit) {
-    setDraft(null); setInstruction('');
+    setPhotoRequest(null);
     if (u.pieces.length > 1 && !u.approved) setView({ kind: 'choose', group: u.key });
     else setView({ kind: 'edit', pieceId: u.main.id });
   }
@@ -355,11 +354,10 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
           )}
         </div>
       </div>
-      {!isApproved && unit && varyBar(piece, unit.pieces)}
       {!isApproved && photoGenId && (
         <MarcosPhotoReview key={photoGenId} generationId={photoGenId} busy={!!busy} compact
           onApprove={() => act('approve', async () => { const a = await approvePiece(piece); replacePiece(a); setView({ kind: 'approved', pieceId: a.id }); })}
-          onRegenerate={(note) => act('swap', async () => replacePiece(await swapPieceImage(currentUser!.id, piece, note)))} />
+          onRegenerate={(note) => setPhotoRequest({ action: 'swap_image', instruction: note || undefined, nonce: Date.now() })} />
       )}
       <div>
         <h1 className="font-display text-2xl font-bold">{unit?.content.title}</h1>
@@ -384,31 +382,13 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
       <div className="grid gap-6 lg:grid-cols-[minmax(0,420px)_1fr]">
         <div className="space-y-2">
           <Preview piece={piece} className="aspect-[4/5]" />
-          {busy && ['adjust', 'edit', 'swap'].includes(busy) && <p className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> A Hive está refazendo a peça…</p>}
         </div>
         <div className="space-y-4">
           <section className="space-y-3 rounded-2xl border bg-card p-4" data-testid="piece-text">
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Texto</p>
-            {draft ? (
-              <>
-                <div className="space-y-1"><p className="text-xs text-muted-foreground">Frase da imagem</p>
-                  <Textarea aria-label="Frase da imagem" rows={2} value={draft.quote} onChange={(e) => setDraft({ ...draft, quote: e.target.value })} /></div>
-                <div className="space-y-1"><p className="text-xs text-muted-foreground">Legenda</p>
-                  <Textarea aria-label="Legenda" rows={8} value={draft.caption} onChange={(e) => setDraft({ ...draft, caption: e.target.value })} /></div>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="accent" disabled={!!busy} onClick={() => act('edit', async () => {
-                    replacePiece(await editPieceText(currentUser!.id, piece, draft)); setDraft(null);
-                  })}>Salvar texto</Button>
-                  <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>Cancelar</Button>
-                </div>
-              </>
-            ) : (
-              <>
-                <p className="font-display text-base font-semibold" data-testid="piece-quote">{quote}</p>
-                <p className="line-clamp-6 whitespace-pre-line text-sm text-muted-foreground" data-testid="piece-caption">{piece.caption}</p>
-                <Button size="sm" variant="ghost" onClick={() => setDraft({ quote, caption: piece.caption ?? '' })}><Pencil className="h-3.5 w-3.5" /> Editar texto</Button>
-              </>
-            )}
+            <p className="font-display text-base font-semibold" data-testid="piece-quote">{quote}</p>
+            <p className="line-clamp-6 whitespace-pre-line text-sm text-muted-foreground" data-testid="piece-caption">{piece.caption}</p>
+            {(piece.version ?? 1) > 1 && <p className="text-[11px] text-muted-foreground" data-testid="piece-version">Versão v{piece.version}</p>}
           </section>
           {isApproved && piece.status !== 'published' && (
             <section className="space-y-2 rounded-2xl border bg-card p-4" data-testid="piece-schedule">
@@ -418,26 +398,10 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
                   void act('schedule', async () => { replacePiece(await reschedulePiece(piece, iso)); toast.success('Reprogramado.'); }); }} />
             </section>
           )}
+          <PieceActionsPanel piece={piece} userId={currentUser!.id} externalRequest={photoRequest}
+            onApplied={(p) => { replacePiece(p); setPhotoRequest(null); }} />
           {piece.status !== 'published' && (
-            <section className="space-y-3 rounded-2xl border border-accent/40 bg-accent/5 p-4" data-testid="piece-hive">
-              <p className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="h-4 w-4 text-accent" /> Pedir ajuste à Hive</p>
-              <div className="flex gap-1 text-xs">
-                {(['titulo', 'legenda'] as const).map((f) => (
-                  <button key={f} type="button" onClick={() => setAdjustField(f)} aria-pressed={adjustField === f}
-                    className={`rounded-full border px-3 py-1 ${adjustField === f ? 'border-accent bg-accent/15' : ''}`}>{f === 'titulo' ? 'Frase da imagem' : 'Legenda'}</button>
-                ))}
-              </div>
-              <div className="flex gap-2">
-                <Input aria-label="Pedido de ajuste da peça" value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="Ex.: quero uma abertura mais provocativa" />
-                <Button variant="accent" disabled={!instruction.trim() || !!busy} onClick={() => act('adjust', async () => {
-                  replacePiece(await adjustPieceText(currentUser!.id, piece, adjustField, instruction)); setInstruction('');
-                })}>{busy === 'adjust' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Ajustar'}</Button>
-              </div>
-              <div className="flex flex-wrap gap-2">
-
-                <Button size="sm" variant="ghost" asChild><Link to={`/posts/${piece.id}`} state={{ from: `/producao?campaign=${campaign.id}&cycle=${cycle.id}` }}><ExternalLink className="h-3.5 w-3.5" /> Abrir no editor completo</Link></Button>
-              </div>
-            </section>
+            <Button size="sm" variant="ghost" asChild><Link to={`/posts/${piece.id}`} state={{ from: `/producao?campaign=${campaign.id}&cycle=${cycle.id}` }}><ExternalLink className="h-3.5 w-3.5" /> Abrir no editor completo</Link></Button>
           )}
         </div>
       </div>

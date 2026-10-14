@@ -47,6 +47,13 @@ export async function generateHiveImage(params: {
   previousDecision?: Record<string, unknown> | null;
   // Pedido de ajuste do revisor (motor fotográfico) — gera de novo aplicando a nota.
   photoAdjust?: string;
+  // ---- Candidatos (ajustes com preservação) ----
+  // Mantém EXATAMENTE este recurso de imagem (mesmo ID/URL): foto do emissor ou fundo M01.
+  // Antes o fundo M01 era sorteado pelo texto → ajustar a frase trocava a imagem.
+  keepAsset?: { url: string; kind: 'photo' | 'bg'; width?: number | null; height?: number | null; espaco_texto?: string | null; texto_cor?: string | null; origin?: string; photo_generation_id?: string } | null;
+  // Prévia: grava a imagem em outro arquivo e NÃO persiste a decisão na peça ativa.
+  uploadKey?: string;
+  persistDecision?: boolean;
 }): Promise<HiveVisualResult> {
   const text = params.text.trim();
   if (!text) throw new Error('Sem texto pra compor a imagem.');
@@ -61,6 +68,7 @@ export async function generateHiveImage(params: {
     target_avatar: params.targetAvatar,
     post_id: params.postId,
     seed: params.seed,
+    persist: params.persistDecision !== false,
   });
 
   // 2) Composição: pega a receita frozen da variante escolhida (M01 ou M02).
@@ -85,7 +93,13 @@ export async function generateHiveImage(params: {
     const prev = (params.previousDecision?.asset ?? null) as { url?: string; photo_generation_id?: string; espaco_texto?: string; width?: number; height?: number; origin?: string } | null;
     let asset: { url: string; width: number | null; height: number | null; espaco_texto: string; texto_cor: string; origin: string; preComposed?: boolean };
     let photoMeta: Record<string, unknown> = {};
-    if (params.seed && !params.forceBg && !params.photoAdjust && prev?.url && prev.photo_generation_id) {
+    const keep = params.keepAsset?.kind === 'photo' ? params.keepAsset : null;
+    if (keep && !params.forceBg && !params.photoAdjust) {
+      // Preservação: a MESMA foto (real ou gerada), só recomposta.
+      asset = { url: keep.url, width: keep.width ?? null, height: keep.height ?? null, espaco_texto: keep.espaco_texto ?? 'esquerda', texto_cor: keep.texto_cor ?? 'claro',
+        origin: keep.origin ?? 'real', preComposed: keep.origin === 'generated' && !!keep.photo_generation_id };
+      photoMeta = keep.photo_generation_id ? { photo_generation_id: keep.photo_generation_id } : { photo_origin: keep.origin ?? 'real' };
+    } else if (params.seed && !params.forceBg && !params.photoAdjust && prev?.url && prev.photo_generation_id) {
       asset = { url: prev.url, width: prev.width ?? null, height: prev.height ?? null, espaco_texto: prev.espaco_texto ?? 'esquerda', texto_cor: 'claro', origin: 'generated', preComposed: true };
       photoMeta = { photo_generation_id: prev.photo_generation_id };
     } else {
@@ -110,13 +124,19 @@ export async function generateHiveImage(params: {
       text, subtitle: decision.subtitle ?? null, highlight, canvas: CANVAS, asset,
     });
     (decision as Record<string, unknown>).asset = { ...asset, ...photoMeta };
+    (decision as Record<string, unknown>).image_ref = asset.url;
   } else {
     // M01-D (Campo) e M01-E (Matéria) têm fundo de IA: se a biblioteca não tem
     // asset, gera um agora (senão fica placeholder). Demais M01 = sem imagem.
     // forceBg = "Regenerar fundo": ignora o pool e gera um novo do zero.
     let assets = design.assets;
     const isD = recipe.id === 'M01-D', isE = recipe.id === 'M01-E';
-    if (params.forceBg && (isD || isE)) {
+    const keepBg = params.keepAsset?.kind === 'bg' && !params.forceBg ? params.keepAsset : null;
+    if (keepBg && (isD || isE)) {
+      // Preservação: o MESMO fundo, independentemente do texto.
+      const a = { url: keepBg.url } as (typeof design.assets.photos)[number];
+      assets = isD ? { ...design.assets, photos: [a] } : { ...design.assets, textures: [a] };
+    } else if (params.forceBg && (isD || isE)) {
       clearM01AssetCache(params.postId);
       const a = await ensureM01Asset(isD ? 'photo' : 'texture', params.postId);
       if (a) { assets = isD ? { ...design.assets, photos: [a] } : { ...design.assets, textures: [a] }; clearZoneCache(a.url); }
@@ -129,6 +149,7 @@ export async function generateHiveImage(params: {
     }
     // Posicionamento pós-imagem (D/E): leva o texto pra zona de espaço negativo.
     const bgUrl = pickM01BgUrl(recipe, assets, text);
+    (decision as Record<string, unknown>).image_ref = bgUrl ?? null;
     const layout = bgUrl ? await analyzeTextZone(bgUrl) : null;
     slide = composeM01({
       recipe, colors: design.colors, spiralUrl: design.spiralUrl, assets,
@@ -144,7 +165,7 @@ export async function generateHiveImage(params: {
     userId: params.userId,
     assetId: params.postId,
     dataUrl,
-    filename: 'hive-render.png',
+    filename: params.uploadKey ? `candidato-${params.uploadKey}.png` : 'hive-render.png',
   });
 
   return { slide, dataUrl, publicUrl, decision };
