@@ -61,7 +61,7 @@ export function NewCampaign() {
   const [acjState, setAcjState] = useState<'idle' | 'loading' | 'error'>('idle');
   const [acjApproved, setAcjApproved] = useState(false);
   // Perfil de comunicação da campanha (default = padrão da marca, visível e alterável).
-  const [profileId, setProfileId] = useState<string | null>(null);
+  const [profileId, setProfileId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('profile'));
   useEffect(() => { identityApi.profiles().then((ps) => setProfileId((cur) => cur ?? ps.find((p) => p.is_default)?.id ?? ps[0]?.id ?? null)).catch(() => {}); }, []);
 
   useEffect(() => {

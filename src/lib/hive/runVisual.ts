@@ -54,6 +54,8 @@ export async function generateHiveImage(params: {
   // Prévia: grava a imagem em outro arquivo e NÃO persiste a decisão na peça ativa.
   uploadKey?: string;
   persistDecision?: boolean;
+  // Sequências: arquivo próprio por página (ex.: unit-<id>-v3.jpg).
+  fileName?: string;
 }): Promise<HiveVisualResult> {
   const text = params.text.trim();
   if (!text) throw new Error('Sem texto pra compor a imagem.');
@@ -165,7 +167,7 @@ export async function generateHiveImage(params: {
     userId: params.userId,
     assetId: params.postId,
     dataUrl,
-    filename: params.uploadKey ? `candidato-${params.uploadKey}.png` : 'hive-render.png',
+    filename: params.fileName ?? (params.uploadKey ? `candidato-${params.uploadKey}.png` : 'hive-render.png'),
   });
 
   return { slide, dataUrl, publicUrl, decision };

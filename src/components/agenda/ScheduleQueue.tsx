@@ -54,7 +54,7 @@ export function ScheduleQueue({ groups, lens, draggingId, onDragStart, onDragEnd
                           {info && <span className={`block text-[10px] font-semibold ${LABEL_STYLE[info.label]}`} data-testid="queue-priority">● {info.label} prioridade</span>}
                           <span className="block truncate text-xs font-medium">{label}</span>
                           <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[10px] text-muted-foreground">
-                            <span className="inline-flex items-center gap-1">{post.platform === 'linkedin' ? <Linkedin className="h-3 w-3 text-[#0A66C2]" /> : <Instagram className="h-3 w-3 text-[#E1306C]" />}{post.format === 'reel' ? 'Vídeo' : 'Imagem'}</span>
+                            <span className="inline-flex items-center gap-1">{post.platform === 'linkedin' ? <Linkedin className="h-3 w-3 text-[#0A66C2]" /> : <Instagram className="h-3 w-3 text-[#E1306C]" />}{post.format === 'reel' ? 'Vídeo' : post.format === 'carousel' ? 'Carrossel · publicação manual' : 'Imagem'}</span>
                             {info && <span data-testid="queue-window">Hive sugere: {formatRange(info.windowStart, info.windowEnd)}</span>}
                           </span>
                         </span>

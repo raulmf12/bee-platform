@@ -4,7 +4,7 @@
 // campanhas anteriores) e pede ao modelo uma leitura do momento.
 // Entrada: { type: 'organica'|'vendas', intent?: string, user_note?: string }
 // Saída:   { success, moment: { label, summary, signals[] }, facts }
-import { contextBlock, resolveContext } from '../_shared/context.ts';
+import { brandScope, contextBlock, resolveContext } from '../_shared/context.ts';
 import {
   checkRateLimit, errorResponse, getUserGeminiKey, internalUserId, jsonResponse, logUsage, preflight, userIdFromAuth,
 } from '../_shared/security.ts';
@@ -45,7 +45,7 @@ Deno.serve(async (req: Request) => {
       fetchRest<Array<{ likes: number | null; comments: number | null; reach: number | null; source: string }>>(`/post_metrics?user_id=eq.${userId}&select=likes,comments,reach,source&limit=1000`),
       fetchRest<Array<{ name: string; status: string; type: string; created_at: string }>>(`/campaigns?user_id=eq.${userId}&select=name,status,type,created_at&order=created_at.desc&limit=10`),
       fetchRest<Array<{ platform: string; label: string }>>(`/social_accounts?user_id=eq.${userId}&select=platform,label`),
-      fetchRest<Array<{ produto_real: string; frase_organizadora: string }>>(`/genesis_core?select=produto_real,frase_organizadora&limit=1${rctx ? `&brand_id=eq.${rctx.brand.id}` : ''}`),
+      fetchRest<Array<{ produto_real: string; frase_organizadora: string }>>(`/genesis_core?select=produto_real,frase_organizadora&limit=1${brandScope(rctx)}`),
     ]);
 
     // ---- Fatos (determinísticos) ----

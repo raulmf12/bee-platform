@@ -29,7 +29,8 @@ import {
 import { embedText } from '../_shared/embed.ts';
 import { contractPromptBlock, type AcjContract } from '../_shared/acj.ts';
 import { judgeRepetition, neighborsFor, syncMemory } from '../_shared/content-memory.ts';
-import { contextBlock, emitterHasPhotos, resolveAndSnapshot, speakerLine, type ResolvedContext } from '../_shared/context.ts';
+import { brandScope, contextBlock, emitterHasPhotos, resolveAndSnapshot, speakerLine, userBrandScope, type ResolvedContext } from '../_shared/context.ts';
+import { draftContext } from '../_shared/identity-draft.ts';
 
 // Cadeia: Flash primeiro (sem thinking tokens que cortam saida), Pro como fallback.
 // Mesmo padrao da generate-caption-from-video — comprovadamente mais estavel pra JSON.
@@ -64,6 +65,7 @@ interface GenerateInput {
   check_repeat?: boolean;
   // Perfil de comunicação / snapshot de contexto (quem fala · frente · público · intenção).
   profile_id?: string;
+  calibration?: { session_id: string; profile_ref: string };   // amostra com perfil em rascunho (Minha identidade)
   context_snapshot_id?: string;
   campaign_id?: string;
   target_platform?: 'linkedin' | 'instagram';
@@ -128,10 +130,11 @@ interface TemplateCatalog {
 // entao nao precisa — retorna null e o prompt segue o fluxo classico.
 async function loadTemplateCatalog(userId: string, platform: string | undefined, hasPhotos = true): Promise<TemplateCatalog | null> {
   if (platform !== 'instagram') return null;
+  const S = await userBrandScope(userId);   // sistema visual da marca do usuário (nunca o de outra marca)
   const [manis, vars, photoAssets, recent] = await Promise.all([
-    fetchRest<HiveManifest[]>(`/design_manifestacoes?ativo=eq.true&select=id,nome,operacao,auto_select,quando_usar,quando_nao&order=ordem.asc`),
-    fetchRest<HiveVariant[]>(`/design_variacoes?status=eq.frozen&ativo=eq.true&select=id,manifestacao_id,nome,operacao,quando_usar,quando_nao,selection_rule,limites&order=manifestacao_id.asc,ordem.asc`),
-    fetchRest<Array<{ origin: string; semantic: Record<string, unknown> }>>(`/design_assets?is_active=eq.true&kind=eq.photo&select=origin,semantic`),
+    fetchRest<HiveManifest[]>(`/design_manifestacoes?ativo=eq.true&select=id,nome,operacao,auto_select,quando_usar,quando_nao&order=ordem.asc${S}`),
+    fetchRest<HiveVariant[]>(`/design_variacoes?status=eq.frozen&ativo=eq.true&select=id,manifestacao_id,nome,operacao,quando_usar,quando_nao,selection_rule,limites&order=manifestacao_id.asc,ordem.asc${S}`),
+    fetchRest<Array<{ origin: string; semantic: Record<string, unknown> }>>(`/design_assets?is_active=eq.true&kind=eq.photo&select=origin,semantic${S}`),
     fetchRest<Array<{ visual_decision: { variant?: string } | null }>>(`/user_posts?user_id=eq.${userId}&visual_decision=not.is.null&select=visual_decision&order=created_at.desc&limit=8`),
   ]);
   // So manifestacoes auto-selecionaveis (M04 depende de dados de evento -> fora).
@@ -229,7 +232,7 @@ async function fetchReferencePost(id: string): Promise<ReferencePost | null> {
 
 async function loadBeeContext(input: GenerateInput, userId: string, rctx: ResolvedContext | null = null) {
   // Escopo da marca do perfil (hoje tudo é Bee; prepara outros clientes).
-  const B = rctx ? `&brand_id=eq.${rctx.brand.id}` : '';
+  const B = brandScope(rctx);
   // Mapeia o alvo (identificado/incomodado/ambos) pros slugs do genesis_avatares.
   const avatarSlugs = !input.target_avatar || input.target_avatar === 'ambos'
     ? ['identificado', 'incomodado']
@@ -335,9 +338,11 @@ async function loadBeeContext(input: GenerateInput, userId: string, rctx: Resolv
 // Emite um evento pro barramento da Alma (fire-and-forget, service role).
 async function emitAlmaEvent(evt: {
   tipo: string; descricao: string; source?: string;
-  dimensao_slug?: string | null; delta?: number | null; payload?: object;
+  dimensao_slug?: string | null; delta?: number | null; payload?: object; brand_id?: string | null;
 }): Promise<void> {
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  // A Alma é da marca: sem marca (cliente não configurado) não há psique para alimentar.
+  if (!evt.brand_id) return;
   try {
     await fetch(`${supabaseUrl}/rest/v1/alma_eventos`, {
       method: 'POST',
@@ -349,6 +354,7 @@ async function emitAlmaEvent(evt: {
         dimensao_slug: evt.dimensao_slug ?? null,
         delta: evt.delta ?? null,
         payload: evt.payload ?? {},
+        brand_id: evt.brand_id,
       }),
     });
   } catch { /* noop */ }
@@ -1222,7 +1228,10 @@ Deno.serve(async (req: Request) => {
     if (!apiKey) return errorResponse('Chave Gemini nao configurada', 400);
 
     // Contexto de atuação: snapshot (conteúdo/peça) → campanha → perfil → padrão (visível).
-    const rctx = await resolveAndSnapshot(userId, {
+    // Calibração (Minha identidade): perfil em RASCUNHO da sessão, sem snapshot nem efeito na configuração ativa.
+    const rctx = input.calibration?.session_id
+      ? await draftContext(userId, input.calibration.session_id, input.calibration.profile_ref).catch(() => null)
+      : await resolveAndSnapshot(userId, {
       snapshot_id: input.context_snapshot_id, content_id: input.acj_content_id, campaign_id: input.campaign_id,
       profile_id: input.profile_id, interlocutor_state: input.target_avatar && input.target_avatar !== 'ambos' ? input.target_avatar : null,
     }).catch((e) => { console.warn('[generate-content] contexto indisponível:', (e as Error).message); return null; });
@@ -1336,6 +1345,7 @@ Deno.serve(async (req: Request) => {
         ? `A Alma gerou ${parsed.variations.length} caminhos pra um "${ctx.editorial.name}"`
         : `A Alma gerou um "${ctx.editorial.name}"`,
       source: 'generate-content',
+      brand_id: rctx?.brand.id ?? null,
     });
 
     logUsage({

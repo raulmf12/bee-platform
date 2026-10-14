@@ -15,7 +15,7 @@ export function isAvulso(c?: Pick<Campaign, 'metadata'> | null): boolean {
 
 export interface AvulsoDraft { title: string; summary: string; strategic_function: StrategicFunction; editorial_slug: string; channels: IdeaChannel[] }
 
-export async function startAvulso(d: AvulsoDraft, accounts: SocialAccount[]): Promise<{ campaign: Campaign; cycle: CampaignCycle; idea: Idea }> {
+export async function startAvulso(d: AvulsoDraft, accounts: SocialAccount[], profileId?: string | null): Promise<{ campaign: Campaign; cycle: CampaignCycle; idea: Idea }> {
   const campaign = (await campaignApi.getAvulso()) ?? await campaignApi.create({
     name: AVULSO_NAME, type: 'organica', status: 'active', color: '#94A3B8',
     account_ids: accounts.map((a) => a.id), cadence: {}, metadata: { kind: 'avulso' },
@@ -31,6 +31,8 @@ export async function startAvulso(d: AvulsoDraft, accounts: SocialAccount[]): Pr
     campaign_id: campaign.id, cycle_id: cycle.id, title: d.title, summary: d.summary || null,
     strategic_function: d.strategic_function, editorial_slug: d.editorial_slug, channels: d.channels,
     suggested_pieces: d.channels.length, origin: 'user', status: 'approved', position: 0,
+    // Perfil de comunicação escolhido na criação avulsa (o contêiner avulso é compartilhado).
+    ...(profileId ? { profile_id: profileId } : {}),
   });
   return { campaign, cycle, idea };
 }

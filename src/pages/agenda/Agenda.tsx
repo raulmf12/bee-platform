@@ -600,7 +600,8 @@ export function Agenda() {
   // ---- Chip de um post (arrastável) ----
   function PostChip({ post, compact, big }: { post: UserPost; compact?: boolean; big?: boolean }) {
     const color = colorOf(post);
-    const label = (post.carousel_text?.quote as string | undefined) || post.title || post.caption || 'Post';
+    // Sequência = UMA entrada na agenda; publicação manual nesta etapa (pacote exportado).
+    const label = `${post.format === 'carousel' ? '▤ Carrossel (manual) · ' : ''}${(post.carousel_text?.quote as string | undefined) || post.title || post.caption || 'Post'}`;
     const when = eventDate(post);
     return (
       <button

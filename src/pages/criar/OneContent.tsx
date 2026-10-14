@@ -2,11 +2,13 @@
 // mesma esteira da Produção (a Hive desenvolve, você valida, as peças nascem e vão
 // pra agenda). Vídeo mantém o fluxo próprio (D13).
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { ImageIcon, Loader2, Video } from 'lucide-react';
 import { WizardShell, ChoiceCard } from '@/components/campaign/WizardShell';
 import { IdeaEditor, type IdeaDraft } from '@/components/production/IdeaEditor';
+import { ProfilePicker } from '@/components/identity/ProfilePicker';
+import { identityApi } from '@/lib/identityApi';
 import { accountApi } from '@/lib/campaignApi';
 import { beeApi } from '@/lib/api';
 import { startAvulso } from '@/lib/campaign/avulso';
@@ -18,6 +20,10 @@ export function OneContent() {
   const [accounts, setAccounts] = useState<SocialAccount[] | null>(null);
   const [editorials, setEditorials] = useState<BeeEditorial[]>([]);
   const [saving, setSaving] = useState(false);
+  // Perfil de comunicação (default = padrão da marca, ou o que veio de Minha identidade).
+  const [params] = useSearchParams();
+  const [profileId, setProfileId] = useState<string | null>(params.get('profile'));
+  useEffect(() => { identityApi.profiles().then((ps) => setProfileId((cur) => cur ?? ps.find((p) => p.is_default)?.id ?? ps[0]?.id ?? null)).catch(() => {}); }, []);
 
   useEffect(() => {
     Promise.all([accountApi.list(), beeApi.editorials()])
@@ -28,7 +34,7 @@ export function OneContent() {
   async function start(d: IdeaDraft) {
     setSaving(true);
     try {
-      const r = await startAvulso(d, accounts ?? []);
+      const r = await startAvulso(d, accounts ?? [], profileId);
       navigate(`/producao?campaign=${r.campaign.id}&cycle=${r.cycle.id}`);
     } catch (e) {
       toast.error(`Não consegui criar o conteúdo: ${(e as Error).message.slice(0, 140)}`);
@@ -56,6 +62,8 @@ export function OneContent() {
       {!accounts ? <Loader2 className="h-5 w-5 animate-spin text-accent" /> : accounts.length === 0 ? (
         <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">Conecte uma conta em Configurações › Contas para escolher onde publicar.</p>
       ) : (
+        <div className="space-y-4">
+        <ProfilePicker value={profileId} onChange={setProfileId} label="Por qual perfil este conteúdo fala?" />
         <IdeaEditor
           key={first}
           initial={{ title: '', summary: '', strategic_function: 'posicionamento', editorial_slug: first, channels: (defaults.length ? defaults : accounts).map((a) => ({ account_id: a.id, platform: a.platform })) }}
@@ -63,6 +71,7 @@ export function OneContent() {
           saveLabel={saving ? 'Criando…' : 'Desenvolver com a Hive'} busy={saving}
           onSave={start} onCancel={() => navigate('/criar')}
         />
+        </div>
       )}
     </WizardShell>
   );

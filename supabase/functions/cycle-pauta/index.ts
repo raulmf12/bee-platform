@@ -8,7 +8,7 @@
 // A IA propõe; o servidor GARANTE: quantidade, funções = necessidades do plano,
 // editorial válido e canais respeitando exatamente a cadência de cada conta.
 // Entrada: { cycle_id, mode?, idea_id? }   Saída: { success, ideas[] } (não persiste)
-import { contextBlock, resolveContext } from '../_shared/context.ts';
+import { brandScope, contextBlock, resolveContext } from '../_shared/context.ts';
 import {
   checkRateLimit, errorResponse, getUserGeminiKey, internalUserId, jsonResponse, logUsage, preflight, userIdFromAuth,
 } from '../_shared/security.ts';
@@ -141,7 +141,7 @@ Deno.serve(async (req: Request) => {
 
     // Perfil da campanha: quem fala, frente, público e intenção da pauta.
     const rctx = await resolveContext(userId, { campaign_id: cycle.campaign_id }).catch(() => null);
-    const B = rctx ? `&brand_id=eq.${rctx.brand.id}` : '';
+    const B = brandScope(rctx);
     const since = new Date(Date.now() - 90 * 86_400_000).toISOString();
     const [recent, contents, backlog, editorials, arsenal, core, products] = await Promise.all([
       fetchRest<Array<{ title: string | null; carousel_text: { quote?: string } | null }>>(`/user_posts?user_id=eq.${userId}&created_at=gte.${since}&select=title,carousel_text&order=created_at.desc&limit=60`),

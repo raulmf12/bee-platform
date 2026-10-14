@@ -3,6 +3,9 @@
 import { MarcosPhotoReview } from '@/components/hive/MarcosPhotoReview';
 import { AcjChip } from '@/components/acj/AcjChip';
 import { PieceActionsPanel, type ExternalRequest } from '@/components/pieces/PieceActionsPanel';
+import { PiecePlanPanel } from '@/components/sequence/PiecePlanPanel';
+import { SequenceWorkspace } from '@/components/sequence/SequenceWorkspace';
+import { planApi } from '@/lib/sequence/service';
 import { isoToLocalInput, localInputToIso, nowLocalInput } from '@/lib/schedule';
 import { isAvulso } from '@/lib/campaign/avulso';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -20,7 +23,7 @@ import {
 } from '@/lib/campaign/produce';
 import { loadHiveDesign } from '@/lib/hive/loadDesign';
 import { useAuthStore } from '@/store/authStore';
-import type { BeeEditorial, Campaign, CampaignCycle, Content, Idea, SocialAccount, UserPost } from '@/types';
+import type { BeeEditorial, Campaign, CampaignCycle, Content, Idea, PiecePlan, SocialAccount, UserPost } from '@/types';
 
 // Uma produção por ciclo, com ASSINANTES: se a tela remontar no meio (StrictMode,
 // troca de etapa, navegação), a nova montagem se inscreve na produção em curso —
@@ -55,6 +58,8 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
   const { currentUser } = useAuthStore();
   const [contents, setContents] = useState<Content[] | null>(null);
   const [pieces, setPieces] = useState<UserPost[]>([]);
+  const [plans, setPlans] = useState<PiecePlan[]>([]);
+  const [runNonce, setRunNonce] = useState(0);
   const [view, setView] = useState<View>({ kind: 'overview' });
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   // Só mostra o resumo depois de decidir se há algo a produzir (sem "piscar" um
@@ -72,9 +77,9 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
   // pode depender da lista da página ainda carregando (sem ideia → sem canais →
   // nenhum desdobramento produzido; era uma corrida intermitente).
   const load = useCallback(async () => {
-    const [c, p, i] = await Promise.all([contentApi.listByCycle(cycle.id), pieceApi.listByCycle(cycle.id), ideaApi.listByCycle(cycle.id)]);
-    setContents(c); setPieces(p);
-    return { c, p, i };
+    const [c, p, i, pl] = await Promise.all([contentApi.listByCycle(cycle.id), pieceApi.listByCycle(cycle.id), ideaApi.listByCycle(cycle.id), planApi.byCycle(cycle.id).catch(() => [] as PiecePlan[])]);
+    setContents(c); setPieces(p); setPlans(pl);
+    return { c, p, i, pl };
   }, [cycle.id]);
 
   useEffect(() => {
@@ -88,19 +93,20 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
     void (async () => {
       const running = RUNS.get(cycle.id);
       if (running) { running.listeners.add(listener); setProgress(running.progress); await load(); setChecked(true); return; }
-      const { c, p, i } = await load();
+      const { c, p, i, pl } = await load();
       if (!alive || !currentUser) return;
       const again = RUNS.get(cycle.id);
       if (again) { again.listeners.add(listener); setProgress(again.progress); setChecked(true); return; }
-      const todo = productionTodo(c, i, p);
-      if (todo.validation.length === 0 && todo.unfold.length === 0) { setChecked(true); return; }
-      const run = { progress: { done: 0, total: todo.validation.length + todo.unfold.length } as Prog, listeners: new Set([listener]) };
+      const todo = productionTodo(c, i, p, pl);
+      const n = todo.validation.length + todo.unfold.length + todo.sequences.length;
+      if (n === 0) { setChecked(true); return; }
+      const run = { progress: { done: 0, total: n } as Prog, listeners: new Set([listener]) };
       RUNS.set(cycle.id, run);
       const emit = (pr: Prog) => { run.progress = pr; run.listeners.forEach((l) => l(pr)); };
       emit(run.progress);
       setChecked(true);
       try {
-        await produceCycle(currentUser.id, cycle, { contents: c, ideas: i, pieces: p }, edName, (done, total) => emit({ done, total }));
+        await produceCycle(currentUser.id, cycle, { contents: c, ideas: i, pieces: p, plans: pl }, edName, (done, total) => emit({ done, total }));
       } catch (e) {
         toast.error((e as Error).message.slice(0, 200));
       } finally {
@@ -110,7 +116,7 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
     })();
     return () => { alive = false; RUNS.get(cycle.id)?.listeners.delete(listener); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cycle.id]);
+  }, [cycle.id, runNonce]);
 
   const units: Unit[] = useMemo(() => {
     const out: Unit[] = [];
@@ -243,7 +249,8 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
                   <div key={u.key} className="space-y-2" data-testid="gallery-unit">
                     <button type="button" onClick={() => openUnit(u)} className="block w-full text-left"><Preview piece={u.main} className="aspect-[4/5]" /></button>
                     <div className="flex items-center justify-between gap-2 text-xs">
-                      <span className="flex items-center gap-1.5"><PlatformIcon p={u.main.platform} className="h-3.5 w-3.5" />{u.main.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} · {accountLabel(u.main.account_id)}</span>
+                      <span className="flex items-center gap-1.5"><PlatformIcon p={u.main.platform} className="h-3.5 w-3.5" />{u.main.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} · {accountLabel(u.main.account_id)}
+                        {u.main.format === 'carousel' && <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px]" data-testid="unit-format">Carrossel{u.main.script_status === 'draft' ? ' · roteiro' : ''}</span>}</span>
                       {u.approved ? <span className="flex items-center gap-1 font-semibold text-emerald-600" data-testid="unit-status"><Check className="h-3.5 w-3.5" /> Aprovado</span>
                         : <span className="font-semibold text-accent" data-testid="unit-status">Para revisar{u.pieces.length > 1 ? ` · ${u.pieces.length} propostas` : ''}</span>}
                     </div>
@@ -251,6 +258,9 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
                   </div>
                 ))}
               </div>
+              <PiecePlanPanel content={c} plans={plans.filter((pl) => pl.content_id === c.id)} pieces={pieces.filter((x) => x.content_id === c.id)}
+                accounts={accounts.filter((a) => (campaign.account_ids ?? []).includes(a.id) || !(campaign.account_ids ?? []).length)}
+                onChanged={async (produce) => { await load(); if (produce) { setChecked(false); setRunNonce((x) => x + 1); setView({ kind: 'overview' }); } }} />
             </section>
           );
         })}
@@ -331,6 +341,20 @@ export function ReviewStep({ campaign, cycle, ideas, editorials, accounts, onCyc
           {remaining.length > 0 && <Button variant="accent" onClick={() => nextPending(unit?.key)}>Próxima peça para revisar <ArrowRight className="h-4 w-4" /></Button>}
           <Button variant="outline" onClick={() => setView({ kind: 'gallery' })}>{isAvulso(campaign) ? 'Ver produção' : 'Ver produção do ciclo'}</Button>
         </div>
+      </div>
+    );
+  }
+
+  // Sequência (carrossel): roteiro → direção visual → páginas → aprovação e exportação.
+  if (piece.format === 'carousel') {
+    return (
+      <div className="space-y-5" data-testid="edit-view">
+        <button type="button" onClick={() => setView({ kind: 'gallery' })} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> Voltar</button>
+        <div>
+          <h1 className="font-display text-2xl font-bold">{unit?.content.title}</h1>
+          <p className="text-sm text-muted-foreground">{piece.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} · {accountLabel(piece.account_id)} · Carrossel{plans.find((pl) => pl.post_id === piece.id)?.approach ? ` · ${plans.find((pl) => pl.post_id === piece.id)?.approach}` : ''}</p>
+        </div>
+        <SequenceWorkspace piece={piece} onChange={replacePiece} onApproved={(a) => { replacePiece(a); setView({ kind: 'approved', pieceId: a.id }); }} />
       </div>
     );
   }

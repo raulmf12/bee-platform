@@ -128,7 +128,7 @@ Deno.serve(async (req: Request) => {
     const dirs = await fetchRest<BeeDirective[]>(
       `/bee_directives?ativo=eq.true&tipo=in.(criterio,evitar)&select=scope,scope_ref,tipo,titulo,instrucao` +
       `&or=(scope.eq.universal,and(scope.eq.platform,scope_ref.eq.${platform}),and(scope.eq.editorial,scope_ref.eq.${input.editorial_slug ?? ''}))` +
-      (rctx ? `&brand_id=eq.${rctx.brand.id}&and=(or(front_id.is.null,front_id.eq.${rctx.front.id}),or(emitter_id.is.null,emitter_id.eq.${rctx.emitter.id}),or(profile_id.is.null,profile_id.eq.${rctx.profile.id}))` : '') +
+      (rctx ? `&brand_id=eq.${rctx.brand.id}&and=(or(front_id.is.null,front_id.eq.${rctx.front.id}),or(emitter_id.is.null,emitter_id.eq.${rctx.emitter.id}),or(profile_id.is.null,profile_id.eq.${rctx.profile.id}))` : '&brand_id=is.null') +
       `&order=scope.asc,ordem.asc`,
     );
 

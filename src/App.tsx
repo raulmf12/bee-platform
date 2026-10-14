@@ -21,6 +21,9 @@ import { Templates } from '@/pages/templates/Templates';
 import { TemplateEditor } from '@/pages/templates/TemplateEditor';
 import { Genesis } from '@/pages/genesis/Genesis';
 import { Directives } from '@/pages/directives/Directives';
+import { IdentityConfigure, IdentityHome } from '@/pages/identidade/IdentityHome';
+import { ProfileDetail } from '@/pages/identidade/ProfileDetail';
+import { SetupSessionPage } from '@/pages/identidade/SetupSessionPage';
 import { Aprendizado } from '@/pages/aprendizado/Aprendizado';
 import { RegistroVivo } from '@/pages/aprendizado/RegistroVivo';
 import { Coach } from '@/pages/coach/Coach';
@@ -110,6 +113,10 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="genesis" element={<Genesis />} />
           <Route path="diretrizes" element={<Directives />} />
+          <Route path="identidade" element={<IdentityHome />} />
+          <Route path="identidade/configurar" element={<IdentityConfigure />} />
+          <Route path="identidade/sessoes/:id" element={<SetupSessionPage />} />
+          <Route path="identidade/perfis/:id" element={<ProfileDetail />} />
           <Route path="alma" element={<Navigate to="/genesis" replace />} />
           <Route path="templates" element={<Templates />} />
           <Route path="aprendizado" element={<Aprendizado />} />

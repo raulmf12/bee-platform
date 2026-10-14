@@ -6,7 +6,7 @@
 import { errorResponse, jsonResponse, preflight, userIdFromAuth } from '../_shared/security.ts';
 import { publishOne } from '../_shared/publish.ts';
 
-interface Input { post_id: string }
+interface Input { post_id: string; dry_run?: boolean }
 
 Deno.serve(async (req: Request) => {
   const cors = preflight(req);
@@ -20,6 +20,11 @@ Deno.serve(async (req: Request) => {
     const input = (await req.json()) as Input;
     if (!input.post_id) return errorResponse('post_id obrigatorio', 400);
 
+    // Verificação prévia (sequências): confere pacote, capacidade, arquivos e credenciais sem publicar.
+    if (input.dry_run) {
+      try { return jsonResponse({ success: true, check: await publishOne(input.post_id, userId, { dryRun: true }) }); }
+      catch (e) { return jsonResponse({ success: true, check: { ok: false, issues: [(e as Error).message], plan: [] } }); }
+    }
     try {
       const result = await publishOne(input.post_id, userId);
       return jsonResponse({

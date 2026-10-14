@@ -13,7 +13,7 @@ import {
   checkRateLimit, errorResponse, getUserGeminiKey, internalUserId, jsonResponse, logUsage, preflight, userIdFromAuth,
 } from '../_shared/security.ts';
 import { fetchRest } from '../_shared/gemini.ts';
-import { resolveAndSnapshot } from '../_shared/context.ts';
+import { resolveAndSnapshot, userBrandScope } from '../_shared/context.ts';
 import { judgeRepetition, memoryPromptBlock, neighborsFor, recentSaid, repeatedStructures, syncMemory, type MemoryHit } from '../_shared/content-memory.ts';
 import { buildContract, contractPromptBlock, validateMovement, type AcjContract, type AcjValidation } from '../_shared/acj.ts';
 
@@ -73,7 +73,7 @@ Deno.serve(async (req: Request) => {
       : [];
     const campaign = campaignRow?.metadata?.kind === 'avulso' ? undefined : campaignRow;
     const [editorial] = idea.editorial_slug
-      ? await fetchRest<Array<{ name: string }>>(`/bee_editorials?slug=eq.${idea.editorial_slug}&select=name&limit=1`)
+      ? await fetchRest<Array<{ name: string }>>(`/bee_editorials?slug=eq.${idea.editorial_slug}&select=name&limit=1${await userBrandScope(userId)}`)
       : [];
 
     const context = [

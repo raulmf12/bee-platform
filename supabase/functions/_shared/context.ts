@@ -34,23 +34,31 @@ export interface ResolvedContext {
 export interface ResolveOpts {
   snapshot_id?: string | null; content_id?: string | null; post_id?: string | null; campaign_id?: string | null;
   profile_id?: string | null; interlocutor_state?: string | null; intent?: string | null;
+  pinned_version?: number | null;   // interno: versão a que a campanha está presa
 }
 
 const one = async <T>(path: string): Promise<T | null> => ((await rest<T[]>(path).catch(() => [])) ?? [])[0] ?? null;
 
-async function brandOfUser(userId: string): Promise<Row | null> {
+// Marcas a que o usuário tem acesso (pelo workspace); a primeira é a padrão.
+async function brandsOfUser(userId: string): Promise<Row[]> {
   const mem = await rest<Row[]>(`/workspace_members?user_id=eq.${userId}&select=workspace_id`).catch(() => []);
-  if (!mem.length) return null;
+  if (!mem.length) return [];
   const ws = mem.map((m) => m.workspace_id).join(',');
-  return one<Row>(`/brands?workspace_id=in.(${ws})&status=eq.active&select=id,workspace_id,name,essence,is_default&order=is_default.desc,created_at.asc&limit=1`);
+  return rest<Row[]>(`/brands?workspace_id=in.(${ws})&status=eq.active&select=id,workspace_id,name,essence,is_default&order=is_default.desc,created_at.asc`).catch(() => []);
+}
+export async function brandOfUser(userId: string, brandId?: string | null): Promise<Row | null> {
+  const bs = await brandsOfUser(userId);
+  return (brandId ? bs.find((b) => b.id === brandId) : bs[0]) ?? null;
 }
 
 async function build(userId: string, profileId: string | null, opts: ResolveOpts, fallback: boolean): Promise<ResolvedContext | null> {
-  const brand0 = await brandOfUser(userId);
-  if (!brand0) return null;
+  const brands = await brandsOfUser(userId);
+  if (!brands.length) return null;
+  // Perfil escolhido: vale em qualquer marca do usuário (nunca de outro workspace).
   let profile = profileId
-    ? await one<Row>(`/communication_profiles?id=eq.${profileId}&brand_id=eq.${brand0.id}&select=*`)
+    ? await one<Row>(`/communication_profiles?id=eq.${profileId}&brand_id=in.(${brands.map((b) => b.id).join(',')})&select=*`)
     : null;
+  const brand0 = (profile ? brands.find((b) => b.id === profile!.brand_id) : null) ?? brands[0];
   if (!profile) {
     profile = await one<Row>(`/communication_profiles?brand_id=eq.${brand0.id}&status=eq.active&select=*&order=is_default.desc,created_at.asc&limit=1`);
     fallback = true;
@@ -64,13 +72,26 @@ async function build(userId: string, profileId: string | null, opts: ResolveOpts
     (profile.offer_ids ?? []).length ? rest<Row[]>(`/bee_products?id=in.(${profile.offer_ids.join(',')})&select=id,name,promessa`) : Promise.resolve([] as Row[]),
   ]);
   if (!emitter || !front) return null;
-  const audience = auds.find((a) => a.id === profile!.primary_audience_id) ?? null;
+  // Campanha presa a uma versão anterior do perfil ("só novas criações adotam"): usa a composição congelada.
+  if (opts.pinned_version && opts.pinned_version !== profile.version) {
+    const pv = await one<Row>(`/communication_profile_versions?profile_id=eq.${profile.id}&version=eq.${opts.pinned_version}&select=data`);
+    const d = pv?.data;
+    if (d?.profile && d?.emitter && d?.front) {
+      return compose(brand0, d.profile, d.emitter, d.front, d.audiences ?? [], d.offers ?? [], opts, fallback);
+    }
+  }
+  return compose(brand0, profile, emitter, front, auds, offers, opts, fallback);
+}
+
+// Monta o contexto a partir das partes (vivas, de uma versão congelada ou de um rascunho de sessão).
+export function compose(brand0: Row, profile: Row, emitter: Row, front: Row, auds: Row[], offers: Row[], opts: ResolveOpts, fallback: boolean): ResolvedContext {
+  const audience = (auds.find((a) => a.id === profile.primary_audience_id) ?? null) as CtxAudience | null;
   const ctx: ResolvedContext = {
     workspace_id: brand0.workspace_id, brand: { id: brand0.id, name: brand0.name, essence: brand0.essence },
-    profile: { id: profile.id, name: profile.name, version: profile.version, status: profile.status, positioning: profile.positioning, expression: profile.expression, cta_policy: profile.cta_policy, needs_recalibration: profile.needs_recalibration },
-    emitter, front: { id: front.id, name: front.name, slug: front.slug, description: front.description, territories: front.territories ?? [] },
-    audience, secondary: auds.filter((a) => a.id !== profile!.primary_audience_id),
-    offers: offers.map((o) => ({ id: o.id, name: o.name, promessa: o.promessa })),
+    profile: { id: profile.id, name: profile.name, version: profile.version, status: profile.status, positioning: profile.positioning, expression: profile.expression, cta_policy: profile.cta_policy ?? 'by_intent', needs_recalibration: profile.needs_recalibration ?? null },
+    emitter: emitter as CtxEmitter, front: { id: front.id, name: front.name, slug: front.slug, description: front.description, territories: front.territories ?? [] },
+    audience, secondary: auds.filter((a) => a.id !== profile.primary_audience_id) as CtxAudience[],
+    offers: offers.map((o) => ({ id: o.id, name: o.name, promessa: o.promessa ?? null })),
     interlocutor_state: opts.interlocutor_state ?? null, campaign_id: opts.campaign_id ?? null, intent: opts.intent ?? null,
     fallback, summary: '', snapshot_id: null,
   };
@@ -94,8 +115,9 @@ export async function resolveContext(userId: string, opts: ResolveOpts = {}): Pr
   // 2) perfil da campanha → 3) perfil escolhido → 4) padrão da marca (fallback visível)
   let profileId = opts.profile_id ?? null;
   if (!profileId && opts.campaign_id) {
-    const camp = await one<Row>(`/campaigns?id=eq.${opts.campaign_id}&user_id=eq.${userId}&select=profile_id,intent`);
+    const camp = await one<Row>(`/campaigns?id=eq.${opts.campaign_id}&user_id=eq.${userId}&select=profile_id,profile_version,intent`);
     profileId = camp?.profile_id ?? null;
+    if (camp?.profile_version) opts = { ...opts, pinned_version: camp.profile_version };
     if (!opts.intent && camp?.intent) opts = { ...opts, intent: String(camp.intent).slice(0, 80) };
   }
   return build(userId, profileId, opts, false);
@@ -125,6 +147,17 @@ export async function resolveAndSnapshot(userId: string, opts: ResolveOpts = {})
   if (!ctx) return null;
   if (!ctx.snapshot_id) ctx.snapshot_id = await saveSnapshot(userId, ctx);
   return ctx;
+}
+
+// Escopo de marca nas leituras com credencial de serviço (Fase 6 · isolamento): a marca do
+// contexto/usuário, ou só os padrões NEUTROS do produto (brand_id nulo) — nunca a base de outra marca.
+export const brandScope = (rctx: ResolvedContext | null | undefined): string => (rctx ? `&brand_id=eq.${rctx.brand.id}` : '&brand_id=is.null');
+export async function userBrandScope(userId: string): Promise<string> {
+  const b = await brandOfUser(userId).catch(() => null);
+  return b ? `&brand_id=eq.${b.id}` : '&brand_id=is.null';
+}
+export async function userBrandId(userId: string): Promise<string | null> {
+  return (await brandOfUser(userId).catch(() => null))?.id ?? null;
 }
 
 // Linha de identidade (substitui "Você é Marcos Piccini, escrevendo para a Bee Academy").

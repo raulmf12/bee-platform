@@ -26,6 +26,12 @@ interface DuePost { id: string; user_id: string; scheduled_date: string }
 // post fica como está — o usuário decide (reagendar / publicar / arquivar).
 const GRACE_MS = 2 * 60 * 60 * 1000; // 2 horas
 
+async function autoFormats(): Promise<string> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/format_capabilities?auto_publish=eq.true&select=format`, { headers: svcHeaders() });
+  const rows = res.ok ? (await res.json()) as Array<{ format: string }> : [];
+  return [...new Set(['image', 'video', 'reel', ...rows.map((r) => r.format)])].join(',');
+}
+
 async function fetchDuePosts(): Promise<DuePost[]> {
   const now = Date.now();
   const upper = new Date(now).toISOString();          // já venceu (<= agora)
@@ -33,6 +39,8 @@ async function fetchDuePosts(): Promise<DuePost[]> {
   const url = `${SUPABASE_URL}/rest/v1/user_posts` +
     `?select=id,user_id,scheduled_date` +
     `&status=eq.scheduled&scheduled_date=lte.${upper}&scheduled_date=gte.${lower}` +
+    // Sequências entram na fila só quando o formato tem publicação automática habilitada (format_capabilities).
+    `&format=in.(${await autoFormats()})` +
     `&order=scheduled_date.asc&limit=10`;
   const res = await fetch(url, { headers: svcHeaders() });
   if (!res.ok) throw new Error(`fetch due posts HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);

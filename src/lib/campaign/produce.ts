@@ -12,7 +12,7 @@ import { aiApi } from '@/lib/api';
 import { db } from '@/lib/db';
 import { cycleApi } from '@/lib/campaignApi';
 import { getPhotoGeneration, reviewMarcosPhoto } from '@/lib/hive/marcosPhoto';
-import type { AiVariation, CampaignCycle, Content, Idea, IdeaChannel, SocialAccount, UserPost } from '@/types';
+import type { AiVariation, CampaignCycle, Content, Idea, IdeaChannel, PiecePlan, SocialAccount, UserPost } from '@/types';
 
 export const AI_IMAGE_VARIANT = (v?: string) => v === 'M01-D' || v === 'M01-E' || (v?.startsWith('M02-') ?? false);
 
@@ -52,23 +52,35 @@ export async function renderPiece(userId: string, piece: UserPost, opts: { seed?
   });
 }
 
-export interface UnfoldTask { content: Content; idea?: Idea; channel: IdeaChannel; validation?: UserPost }
+export interface UnfoldTask { content: Content; idea?: Idea; channel: IdeaChannel; validation?: UserPost; plan?: PiecePlan }
 
-// O que ainda falta produzir no ciclo (idempotente: retoma de onde parou).
-export function productionTodo(contents: Content[], ideas: Idea[], pieces: UserPost[]): { validation: UserPost[]; unfold: UnfoldTask[] } {
+// O que ainda falta produzir no ciclo (idempotente: retoma de onde parou). Fase 4: cada
+// desdobramento é um ITEM DE PLANO com ID próprio (conta + canal + formato + abordagem) — dois
+// carrosséis na mesma conta são legítimos; aprovar a imagem única não encerra os demais.
+//  - canal da ideia sem plano e sem peça de imagem → desdobramento padrão (imagem única);
+//  - plano "planejado" sem peça → produz (imagem: adaptação + visual; carrossel: roteiro).
+export function productionTodo(contents: Content[], ideas: Idea[], pieces: UserPost[], plans: PiecePlan[] = []): { validation: UserPost[]; unfold: UnfoldTask[]; sequences: UnfoldTask[] } {
   const validated = contents.filter((c) => c.status === 'validated');
   const validation = pieces.filter((p) => p.piece_role === 'validation' && p.status !== 'archived' && !p.rendered_slides?.slide1);
   const unfold: UnfoldTask[] = [];
+  const sequences: UnfoldTask[] = [];
   for (const c of validated) {
     const idea = ideas.find((i) => i.id === c.idea_id);
     const vPiece = pieces.find((p) => p.content_id === c.id && p.piece_role === 'validation');
+    const mine = plans.filter((pl) => pl.content_id === c.id);
     for (const ch of idea?.channels ?? []) {
       if (vPiece && ch.platform === vPiece.platform && (ch.account_id ?? null) === (vPiece.account_id ?? null)) continue;
-      const done = pieces.some((p) => p.content_id === c.id && p.piece_role === 'unfold' && (p.account_id ?? null) === (ch.account_id ?? null) && p.platform === ch.platform);
+      // Já há plano de imagem para este canal (inclusive removido = decisão do autor): o plano manda.
+      if (mine.some((pl) => pl.format === 'image' && pl.platform === ch.platform && (pl.account_id ?? null) === (ch.account_id ?? null))) continue;
+      const done = pieces.some((p) => p.content_id === c.id && p.piece_role === 'unfold' && (p.format ?? 'image') === 'image' && (p.account_id ?? null) === (ch.account_id ?? null) && p.platform === ch.platform);
       if (!done) unfold.push({ content: c, idea, channel: ch, validation: vPiece });
     }
+    for (const pl of mine.filter((x) => x.status === 'planned' && !x.post_id)) {
+      const t: UnfoldTask = { content: c, idea, channel: { platform: pl.platform, account_id: pl.account_id ?? undefined } as IdeaChannel, validation: vPiece, plan: pl };
+      (pl.format === 'image' ? unfold : sequences).push(t);
+    }
   }
-  return { validation, unfold };
+  return { validation, unfold, sequences };
 }
 
 // Alternativas "só com ganho real": uma por variante visual distinta (máx. 3).
@@ -112,6 +124,12 @@ export async function createUnfold(userId: string, cycle: CampaignCycle, t: Unfo
   })));
   const group = crypto.randomUUID();
   const created: UserPost[] = [];
+  // Item de plano (ID próprio): o padrão nasce aqui; o planejado pelo autor/Hive já existe.
+  const plan = t.plan ?? (await db.insert<PiecePlan>('content_piece_plans', {
+    user_id: cycle.user_id, content_id: content.id, campaign_id: content.campaign_id ?? null, cycle_id: content.cycle_id ?? null,
+    account_id: channel.account_id ?? null, platform: channel.platform, format: 'image', origin: 'default', status: 'planned',
+    purpose: 'Imagem única: a frase do conteúdo validado adaptada ao canal.',
+  }))[0];
   for (const [idx, v] of alts.entries()) {
     const rows = await db.insert<UserPost>('user_posts', {
       user_id: cycle.user_id, platform: channel.platform, format: 'image', status: 'pending_approval',
@@ -119,7 +137,7 @@ export async function createUnfold(userId: string, cycle: CampaignCycle, t: Unfo
       carousel_text: { quote: v.quote, headline_type: v.headline_type_used ?? null, analogy: v.analogy_used ?? null, virality_score: v.virality_score ?? null, virality_reason: v.virality_reason ?? null },
       virality_score: v.virality_score ?? null, virality_reason: v.virality_reason ?? null,
       text_approved: true, content_id: content.id, campaign_id: content.campaign_id, cycle_id: content.cycle_id,
-      account_id: channel.account_id ?? null, piece_role: 'unfold',
+      account_id: channel.account_id ?? null, piece_role: 'unfold', plan_id: plan?.id ?? null, source_content_at: content.updated_at,
       alternative_group: group, alternative_rank: idx, is_recommended: idx === 0,
       metadata: {
         editorial_slug: content.editorial_slug, target_avatar: 'ambos', review_stage: 'design', batch_id: generation.id,
@@ -129,6 +147,7 @@ export async function createUnfold(userId: string, cycle: CampaignCycle, t: Unfo
     const piece = rows[0];
     if (!piece) continue;
     if (variations[idx]) await aiApi.linkVariationToPost(variations[idx].id, piece.id);
+    if (plan && idx === 0) await db.update('content_piece_plans', { id: `eq.${plan.id}` }, { status: 'produced', post_id: piece.id });
     created.push(await renderPiece(userId, piece, { seed: v.hive_seed }));
   }
   return created;
@@ -136,11 +155,11 @@ export async function createUnfold(userId: string, cycle: CampaignCycle, t: Unfo
 
 // Produz tudo o que falta no ciclo (2 por vez), reportando progresso.
 export async function produceCycle(
-  userId: string, cycle: CampaignCycle, data: { contents: Content[]; ideas: Idea[]; pieces: UserPost[] },
+  userId: string, cycle: CampaignCycle, data: { contents: Content[]; ideas: Idea[]; pieces: UserPost[]; plans?: PiecePlan[] },
   editorialName: (slug?: string | null) => string | undefined,
   onProgress?: (done: number, total: number, piece?: UserPost) => void,
 ): Promise<UserPost[]> {
-  const todo = productionTodo(data.contents, data.ideas, data.pieces);
+  const todo = productionTodo(data.contents, data.ideas, data.pieces, data.plans ?? []);
   // Canal apontando pra conta que não existe mais (ex.: reconexão apagou a antiga):
   // usa a conta padrão da mesma rede em vez de falhar com 23503 na gravação da peça.
   const accounts = await db.select<SocialAccount>('social_accounts', { select: 'id,platform,is_default,status' });
@@ -152,6 +171,11 @@ export async function produceCycle(
   const tasks: Array<() => Promise<UserPost[]>> = [
     ...todo.validation.map((p) => async () => [await renderPiece(userId, p, { approve: true })]),
     ...todo.unfold.map((t) => () => createUnfold(userId, cycle, { ...t, channel: fixChannel(t.channel) }, editorialName(t.content.editorial_slug))),
+    // Sequências: só o ROTEIRO (o visual vem depois do roteiro aprovado pelo autor).
+    ...todo.sequences.map((t) => async () => {
+      const { createSequencePiece } = await import('@/lib/sequence/service');
+      return [await createSequencePiece(cycle, { ...t.plan!, account_id: fixChannel(t.channel).account_id ?? t.plan!.account_id }, t.content)];
+    }),
   ];
   const total = tasks.length;
   let done = 0;
@@ -215,6 +239,11 @@ export async function swapPieceImage(userId: string, piece: UserPost, photoAdjus
 // 12C — aprovar a peça: aprova também a imagem de IA (a pessoa acabou de revisá-la)
 // e mede a edição humana (ai_reviews) contra a variação pristina.
 export async function approvePiece(piece: UserPost): Promise<UserPost> {
+  // Sequência: aprovação final só com todas as páginas prontas/aprovadas (regra no banco).
+  if (piece.format === 'carousel') {
+    const r = await db.rpc<UserPost | UserPost[]>('approve_sequence', { pid: piece.id });
+    return (Array.isArray(r) ? r[0] : r) as UserPost;
+  }
   const variant = (piece.visual_decision as { variant?: string } | null)?.variant;
   // Foto do Marcos (motor fotográfico): aprovar a peça é a aprovação humana da foto.
   const photoId = (piece.visual_decision as { asset?: { photo_generation_id?: string } } | null)?.asset?.photo_generation_id;

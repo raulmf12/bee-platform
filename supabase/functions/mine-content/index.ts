@@ -8,7 +8,7 @@
 // bee_suggestions como 'pending'. NADA entra no arsenal real aqui — a
 // curadoria humana aprova depois. Portao de qualidade pra voz nao derivar.
 
-import { contextBlock, emitterHasPhotos, resolveContext } from '../_shared/context.ts';
+import { brandScope, contextBlock, emitterHasPhotos, resolveContext, userBrandId } from '../_shared/context.ts';
 import {
   errorResponse,
   getUserGeminiKey,
@@ -43,9 +43,9 @@ interface Editorial {
   structure_template: string | null;
 }
 
-async function fetchEditorials(): Promise<Editorial[]> {
+async function fetchEditorials(scope: string): Promise<Editorial[]> {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/bee_editorials?select=slug,name,description,structure_template&is_active=eq.true&order=position.asc`,
+    `${SUPABASE_URL}/rest/v1/bee_editorials?select=slug,name,description,structure_template&is_active=eq.true&order=position.asc${scope}`,
     { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
   );
   if (!res.ok) return [];
@@ -147,6 +147,7 @@ async function insertSuggestion(s: Candidate, input: Input, userId: string): Pro
       source_excerpt: s.source_excerpt ?? null,
       confidence: s.confidence ?? 0,
       created_by: userId,
+      brand_id: await userBrandId(userId),   // sugestão nasce na marca do usuário (curadoria da própria marca)
     }),
   });
   if (res.status === 409) return 'skipped';
@@ -182,8 +183,8 @@ Deno.serve(async (req: Request) => {
   if (!apiKey) return errorResponse('Gemini API key nao configurada', 400);
 
   try {
-    const editorials = await fetchEditorials();
     const rctx = await resolveContext(userId).catch(() => null);
+    const editorials = await fetchEditorials(brandScope(rctx));
     const sys = buildSystemPrompt(editorials, rctx?.brand.name);
     const validSlugs = new Set(editorials.map((e) => e.slug));
 

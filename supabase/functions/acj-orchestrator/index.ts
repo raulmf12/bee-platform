@@ -5,7 +5,7 @@
 //   assign        { title, summary?, strategic_function?, editorial_slug?, cycle_id? } → { assignment }
 //   validate      { contract, body:{frase,texto} } → { validation }
 //   read_signals  { post_id } → { reading }  (comentários da audiência à luz da ACJ)
-import { contextBlock, emitterHasPhotos, resolveContext } from '../_shared/context.ts';
+import { brandScope, contextBlock, emitterHasPhotos, resolveContext } from '../_shared/context.ts';
 import {
   checkRateLimit, errorResponse, getUserGeminiKey, internalUserId, jsonResponse, logUsage, preflight, userIdFromAuth,
 } from '../_shared/security.ts';
@@ -47,8 +47,8 @@ async function campaignPlan(apiKey: string, userId: string, input: Row) {
     }
   }
   const [core, avatars, products] = await Promise.all([
-    fetchRest<Row[]>(`/genesis_core?select=produto_real,frase_organizadora,persona_nome&limit=1`).catch(() => []),
-    fetchRest<Row[]>(`/genesis_avatares?select=nome,pergunta_central,o_que_busca&order=ordem.asc&limit=5`).catch(() => []),
+    fetchRest<Row[]>(`/genesis_core?select=produto_real,frase_organizadora,persona_nome&limit=1${brandScope(rctx)}`).catch(() => []),
+    fetchRest<Row[]>(`/genesis_avatares?select=nome,pergunta_central,o_que_busca&order=ordem.asc&limit=5${brandScope(rctx)}`).catch(() => []),
     c.product_id ? fetchRest<Row[]>(`/bee_products?id=eq.${c.product_id}&select=name,promessa&limit=1`).catch(() => []) : Promise.resolve([]),
   ]);
   const mix = (c.strategy?.mix ?? {}) as Record<string, number>;

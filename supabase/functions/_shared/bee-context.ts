@@ -12,7 +12,7 @@
 // intenção é, num segundo passo, fundir a geração aqui também. Se mudar a regra
 // de contexto, atualize os DOIS lugares até a unificação.
 
-import { contextBlock, resolveContext, speakerLine, type ResolvedContext } from './context.ts';
+import { contextBlock, resolveContext, speakerLine, type ResolvedContext, brandScope } from './context.ts';
 import { embedText } from './embed.ts';
 
 // Cadeia de modelos — a mesma capacidade da geração (flash forte → pro).
@@ -80,7 +80,7 @@ export async function loadBeeContext(input: BeeContextInput, userId: string) {
     snapshot_id: input.context_snapshot_id, post_id: input.post_id, profile_id: input.profile_id,
     interlocutor_state: input.target_avatar && input.target_avatar !== 'ambos' ? input.target_avatar : null,
   }).catch(() => null);
-  const B = rctx ? `&brand_id=eq.${rctx.brand.id}` : '';
+  const B = brandScope(rctx);
   const avatarSlugs = !input.target_avatar || input.target_avatar === 'ambos'
     ? ['identificado', 'incomodado']
     : [input.target_avatar];

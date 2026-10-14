@@ -3,6 +3,8 @@
 //   - publish-scheduler (cron, publica os posts agendados vencidos)
 // Assim a mesma rotina de LinkedIn/Instagram serve os dois sem duplicar.
 
+import { capabilityOf, checkPackage, closePublication, isSequence, loadPackage, openPublication, publishInstagramCarousel, publishLinkedInDocument, publishStories } from './publish-sequence.ts';
+
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 
 function svcHeaders(): HeadersInit {
@@ -31,6 +33,9 @@ export interface PublishablePost {
   status?: string;
   version?: number;
   scheduled_version?: number | null;
+  approved_version?: number | null;
+  export_package?: Record<string, unknown> | null;
+  title?: string | null;
   // Campanhas: a conta social da peça. Nula nos posts antigos → credenciais de
   // user_settings (comportamento de sempre).
   account_id: string | null;
@@ -47,7 +52,7 @@ export interface PublishResult { url: string; id: string; platform: string }
 
 async function loadPost(id: string): Promise<PublishablePost | null> {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/user_posts?id=eq.${id}&select=id,user_id,platform,format,caption,rendered_slides,metadata,publish_attempts,visual_decision,image_approved,account_id,status,version,scheduled_version&limit=1`,
+    `${SUPABASE_URL}/rest/v1/user_posts?id=eq.${id}&select=id,user_id,platform,format,caption,rendered_slides,metadata,publish_attempts,visual_decision,image_approved,account_id,status,version,scheduled_version,approved_version,export_package,title&limit=1`,
     { headers: svcHeaders() },
   );
   if (!res.ok) return null;
@@ -87,7 +92,7 @@ interface SocialAccountRow extends UserSettings {
 
 async function loadAccount(id: string): Promise<SocialAccountRow | null> {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/social_accounts?id=eq.${id}&select=id,platform,label,status,metadata,linkedin_token,linkedin_author_urn,instagram_access_token,instagram_business_account_id&limit=1`,
+    `${SUPABASE_URL}/rest/v1/social_accounts?id=eq.${id}&select=id,user_id,platform,label,status,metadata,linkedin_token,linkedin_author_urn,instagram_access_token,instagram_business_account_id&limit=1`,
     { headers: svcHeaders() },
   );
   if (!res.ok) return null;
@@ -102,7 +107,8 @@ interface Credentials extends UserSettings { accountLabel: string | null; viaInt
 async function resolveCredentials(post: PublishablePost, settings: UserSettings): Promise<Credentials> {
   if (!post.account_id) return { ...settings, accountLabel: null };
   const acc = await loadAccount(post.account_id);
-  if (!acc) throw new Error('A conta desta peça não existe mais. Escolha outra conta antes de publicar.');
+  // A conta precisa ser do dono da peça: nunca publicar com credenciais de outro usuário/cliente.
+  if (!acc || (acc as { user_id?: string }).user_id !== post.user_id) throw new Error('A conta desta peça não existe mais. Escolha outra conta antes de publicar.');
   if (acc.platform !== post.platform) {
     throw new Error(`A conta "${acc.label}" é de ${acc.platform}, mas a peça é de ${post.platform}.`);
   }
@@ -243,9 +249,13 @@ async function publishInstagramVideo(token: string, igBusinessId: string, videoU
 // Lança em caso de erro (já tendo gravado publish_error no post).
 // ============================================================================
 
-export async function publishOne(postId: string, userId: string): Promise<PublishResult> {
+export interface DryRun { ok: boolean; format: string; platform: string; version: number | null; units: number; issues: string[]; plan: string[] }
+
+export async function publishOne(postId: string, userId: string, opts: { dryRun?: boolean } = {}): Promise<PublishResult> {
   const post = await loadPost(postId);
-  if (!post) throw new Error('Post nao encontrado');
+  // Só o dono publica a própria peça (a função usa credencial de serviço: o escopo é conferido aqui).
+  if (!post || post.user_id !== userId) throw new Error('Post nao encontrado');
+  if (isSequence(post.format)) return publishSequence(post, userId, opts) as Promise<PublishResult>;
 
   const settings = await loadSettings(userId);
   if (!settings) throw new Error('user_settings nao configurado');
@@ -317,6 +327,67 @@ export async function publishOne(postId: string, userId: string): Promise<Publis
     const errMsg = (e as Error).message;
     await updatePost(post.id, { publish_error: errMsg.slice(0, 1000) });
     console.error('[publishOne]', postId, errMsg);
+    throw e;
+  }
+}
+
+// ============================================================================
+// SEQUÊNCIAS (carrossel IG, documento LinkedIn, Stories IG) — pacote inteiro, por versão e destino.
+// dryRun: confere tudo (pacote, capacidade, arquivos, credenciais) e devolve o plano, sem publicar.
+// ============================================================================
+async function publishSequence(post: PublishablePost, userId: string, opts: { dryRun?: boolean }): Promise<PublishResult | DryRun> {
+  const p = post as unknown as Record<string, unknown> & PublishablePost;
+  const cap = await capabilityOf(post.platform, post.format);
+  let pkg;
+  try { pkg = await loadPackage(p); } catch (e) {
+    if (opts.dryRun) return { ok: false, format: post.format, platform: post.platform, version: null, units: 0, issues: [(e as Error).message], plan: [] };
+    await updatePost(post.id, { publish_error: (e as Error).message.slice(0, 1000) });
+    throw e;
+  }
+  const issues = await checkPackage(p, pkg, cap);
+  const settings = await loadSettings(userId);
+  let creds: Credentials | null = null;
+  try { creds = settings ? await resolveCredentials(post, settings) : null; } catch (e) { issues.push((e as Error).message); }
+  const hasCreds = post.platform === 'linkedin' ? !!(creds?.linkedin_token && creds?.linkedin_author_urn) : !!(creds?.instagram_access_token && creds?.instagram_business_account_id);
+  if (!hasCreds && creds) issues.push(missingCreds(post.platform, creds));
+  if (!creds && !issues.length) issues.push('Credenciais de publicação não configuradas.');
+  const plan = post.format === 'story'
+    ? pkg.units.map((u) => `Story ${u.position} (na ordem; retomada sem repetir as publicadas)`)
+    : post.platform === 'instagram' ? [`${pkg.units.length} contêineres de página`, 'contêiner do carrossel com a legenda', 'publicar']
+      : [`documento PDF com ${pkg.units.length} páginas (v${pkg.version})`, 'post com o documento e a legenda'];
+  if (opts.dryRun) return { ok: issues.length === 0, format: post.format, platform: post.platform, version: pkg.version, units: pkg.units.length, issues, plan };
+
+  await updatePost(post.id, { publish_attempts: (post.publish_attempts ?? 0) + 1, publish_error: null });
+  if (issues.length) {
+    await updatePost(post.id, { publish_error: issues.join(' ').slice(0, 1000) });
+    throw new Error(issues.join(' '));
+  }
+  const pub = await openPublication(p, pkg);
+  try {
+    let result: { id: string; url: string };
+    if (post.format === 'story') {
+      const r = await publishStories(creds!.instagram_access_token!, creds!.instagram_business_account_id!, pub, pkg);
+      if (r.failed) {
+        await closePublication(pub.id, { status: r.published ? 'partial' : 'failed', error: r.failed.slice(0, 500), units_published: r.published });
+        throw new Error(`${r.failed} (${r.published} de ${pkg.units.length} publicados — retome para continuar na ordem).`);
+      }
+      result = r.first ?? { id: pub.id, url: 'https://www.instagram.com/' };
+    } else if (post.platform === 'instagram') {
+      result = await publishInstagramCarousel(creds!.instagram_access_token!, creds!.instagram_business_account_id!, pkg);
+    } else {
+      const r = await publishLinkedInDocument(creds!.linkedin_token!, creds!.linkedin_author_urn!, p, pkg, cap!);
+      result = r;
+      if (!pkg.pdf_url) await updatePost(post.id, { export_package: { version: pkg.version, kind: 'pdf', files: pkg.units.map((u) => u.rendered_url), pdf_url: r.pdf_url, exported_at: new Date().toISOString() } });
+    }
+    await closePublication(pub.id, { status: 'published', external_id: result.id, url: result.url, error: null, units_published: pkg.units.length });
+    const nowIso = new Date().toISOString();
+    await updatePost(post.id, { status: 'published', published_url: result.url, published_at: nowIso, published_date: nowIso, publish_error: null,
+      metadata: { ...(post.metadata ?? {}), published_version: pkg.version } });
+    return { url: result.url, id: result.id, platform: post.platform };
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (post.format !== 'story') await closePublication(pub.id, { status: 'failed', error: msg.slice(0, 500) });
+    await updatePost(post.id, { publish_error: msg.slice(0, 1000) });
     throw e;
   }
 }

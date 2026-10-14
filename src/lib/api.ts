@@ -346,12 +346,20 @@ export const kanbanApi = {
 // ----------------------------------------------------------------------------
 // BEE EDITORIAL ARCHITECTURE
 // ----------------------------------------------------------------------------
+// Editorias da marca padrão do usuário (as de outra marca do workspace não aparecem aqui).
+async function brandFilter(): Promise<Record<string, string>> {
+  const { identityApi } = await import('@/lib/identityApi');
+  const b = await identityApi.defaultBrandId().catch(() => null);
+  return b ? { or: `(brand_id.is.null,brand_id.eq.${b})` } : {};
+}
+
 export const beeApi = {
   // So os ativos, ordenados — usado na geracao e na selecao de editorial.
   async editorials(): Promise<BeeEditorial[]> {
     return db.select<BeeEditorial>('bee_editorials', {
       is_active: 'eq.true',
       order: 'position.asc',
+      ...(await brandFilter()),
     });
   },
 
@@ -359,6 +367,7 @@ export const beeApi = {
   async listEditorials(): Promise<BeeEditorial[]> {
     return db.select<BeeEditorial>('bee_editorials', {
       order: 'position.asc',
+      ...(await brandFilter()),
     });
   },
 

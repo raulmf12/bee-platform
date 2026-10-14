@@ -89,3 +89,28 @@ export async function seedAcjPlan(campaignId: string, opts: { status?: 'approved
       ${j(p.sequence_hypotheses)}, ${j(p.success_signals)}, ${j(p.recalibration_rules)}, ${j(p.exclusions)}, ${j(p.summary)}, 'medium', ${j(p.human_decisions_required)}, 'v' ${status === 'approved' ? `, '${userId}', now()` : ''}) returning id`);
   return r.id;
 }
+
+// Marca de TESTE isolada (workspace 'e2e-*') para o percurso Minha identidade — nunca toca na Bee.
+// Emissor "Autora Teste"; frentes A e B; públicos A1 (frente A) e B1 (frente B); perfis PA (A·A1) e PB (B·B1).
+// sharedAudience: PB também usa A1 como secundário (recalibrar PA deve COPIAR A1, não alterar).
+export async function seedIdentityBrand(opts: { sharedAudience?: boolean; empty?: boolean } = {}) {
+  const { id: userId } = e2eUser();
+  const tag = Math.random().toString(36).slice(2, 8);
+  const [ws] = await sql<{ id: string }>(`insert into workspaces (name, slug) values ('E2E ${tag}', 'e2e-${tag}') returning id`);
+  await sql(`insert into workspace_members (workspace_id, user_id, role) values ('${ws.id}', '${userId}', 'owner')`);
+  const [brand] = await sql<{ id: string }>(`insert into brands (workspace_id, name, slug, essence, is_default) values ('${ws.id}', 'Marca Teste ${tag}', 'marca-${tag}', 'Ajudar pessoas a decidir com clareza.', false) returning id`);
+  if (opts.empty) return { tag, workspaceId: ws.id, brandId: brand.id } as const;
+  const [em] = await sql<{ id: string }>(`insert into emitters (brand_id, kind, name, voice, first_person, facts_status) values ('${brand.id}', 'person', 'Autora Teste', 'Direta e curiosa.', true, 'to_confirm') returning id`);
+  const [fa] = await sql<{ id: string }>(`insert into business_fronts (brand_id, name, slug, description) values ('${brand.id}', 'Frente A', 'frente-a', 'Formação') returning id`);
+  const [fb] = await sql<{ id: string }>(`insert into business_fronts (brand_id, name, slug, description) values ('${brand.id}', 'Frente B', 'frente-b', 'Consultoria') returning id`);
+  const [a1] = await sql<{ id: string }>(`insert into audiences (brand_id, front_id, name, definition, status) values ('${brand.id}', '${fa.id}', 'Público A1', 'Quem aprende', 'hypothesis') returning id`);
+  const [b1] = await sql<{ id: string }>(`insert into audiences (brand_id, front_id, name, definition, status) values ('${brand.id}', '${fb.id}', 'Público B1', 'Quem decide', 'active') returning id`);
+  const [pa] = await sql<{ id: string }>(`insert into communication_profiles (brand_id, emitter_id, front_id, primary_audience_id, name, positioning, expression, status, is_default, needs_recalibration)
+    values ('${brand.id}', '${em.id}', '${fa.id}', '${a1.id}', 'Frente A · Autora · A1', 'Posicionamento A', 'Expressão A', 'active', true, 'Definir o núcleo do público A1') returning id`);
+  const [pb] = await sql<{ id: string }>(`insert into communication_profiles (brand_id, emitter_id, front_id, primary_audience_id, secondary_audience_ids, name, positioning, expression, status)
+    values ('${brand.id}', '${em.id}', '${fb.id}', '${b1.id}', ${opts.sharedAudience ? `array['${a1.id}']::uuid[]` : `'{}'`}, 'Frente B · Autora · B1', 'Posicionamento B', 'Expressão B', 'active') returning id`);
+  await sql(`insert into communication_profile_versions (profile_id, version, status, data, activated_at)
+    select id, 1, 'active', public.profile_composition(id), now() from communication_profiles where id in ('${pa.id}', '${pb.id}')`);
+  const [ed] = await sql<{ slug: string }>(`insert into bee_editorials (slug, name, description, brand_id, is_active, is_system, position) values ('e2e-ed-${tag}', 'Editoria E2E ${tag}', 'teste', '${brand.id}', true, false, 999) returning slug`);
+  return { tag, workspaceId: ws.id, brandId: brand.id, emitterId: em.id, frontA: fa.id, frontB: fb.id, audA1: a1.id, audB1: b1.id, profileA: pa.id, profileB: pb.id, editorialSlug: ed.slug } as const;
+}

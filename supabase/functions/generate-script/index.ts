@@ -4,7 +4,7 @@
 // Mesmo prompt-engine da generate-caption-from-video, mas parte de um editorial
 // (nao de um transcript) e produz um script, nao uma caption.
 
-import { contextBlock, resolveContext, speakerLine, type ResolvedContext } from '../_shared/context.ts';
+import { brandScope, contextBlock, resolveContext, speakerLine, type ResolvedContext } from '../_shared/context.ts';
 import {
   errorResponse,
   getUserGeminiKey,
@@ -73,12 +73,13 @@ interface StyleRule { rule: string }
 async function loadBeeCtx(editorialSlug?: string, targetAvatar?: string, rctx: ResolvedContext | null = null) {
   const avatarFilter = targetAvatar && targetAvatar !== 'ambos' ? `&slug=eq.${targetAvatar}` : '';
   const editorialFilter = editorialSlug ? `slug=eq.${editorialSlug}&` : '';
+  const B = brandScope(rctx);   // base da marca do contexto (nunca de outra marca)
   const [editorial, avatars, doRules, dontRules, generalRules] = await Promise.all([
-    editorialSlug ? fetchRest<Editorial[]>(`/bee_editorials?${editorialFilter}limit=1`) : Promise.resolve([]),
-    fetchRest<Avatar[]>(`/bee_avatars?order=position.asc${avatarFilter}`),
-    fetchRest<StyleRule[]>(`/bee_style_rules?category=eq.do&order=position.asc`),
-    fetchRest<StyleRule[]>(`/bee_style_rules?category=eq.dont&order=position.asc`),
-    fetchRest<StyleRule[]>(`/bee_style_rules?category=eq.general&order=position.asc`),
+    editorialSlug ? fetchRest<Editorial[]>(`/bee_editorials?${editorialFilter}limit=1${B}`) : Promise.resolve([]),
+    fetchRest<Avatar[]>(`/bee_avatars?order=position.asc${avatarFilter}${B}`),
+    fetchRest<StyleRule[]>(`/bee_style_rules?category=eq.do&order=position.asc${B}`),
+    fetchRest<StyleRule[]>(`/bee_style_rules?category=eq.dont&order=position.asc${B}`),
+    fetchRest<StyleRule[]>(`/bee_style_rules?category=eq.general&order=position.asc${B}`),
   ]);
   return { editorial: editorial[0], avatars, doRules, dontRules, generalRules, rctx };
 }

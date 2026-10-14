@@ -29,7 +29,7 @@ export async function sql<T = Record<string, unknown>>(query: string): Promise<T
 // Tabelas com user_id que os testes podem sujar. Ordem = filhos antes dos pais.
 // (Cresce conforme as fases adicionam tabelas.)
 export const E2E_OWNED_TABLES = [
-  'piece_candidates', 'piece_versions',
+  'piece_candidates', 'piece_versions', 'post_units', 'content_piece_plans',
   'ai_learnings', 'setup_sessions', 'context_snapshots',
   'acj_learning_decisions', 'acj_learning_evidence', 'acj_learning_entries', 'acj_signal_readings', 'post_comments',
   'acj_content_contracts', 'acj_cycle_plans', 'acj_campaign_plans', 'content_memory',
@@ -62,6 +62,9 @@ export async function cleanupE2EData(): Promise<void> {
   }
   const stmts = E2E_OWNED_TABLES.filter((t) => _existing!.has(t)).map((t) => `delete from public.${t} where user_id='${id}';`);
   if (stmts.length) await sql(stmts.join(' '));
+  // Marcas de teste (Minha identidade): workspace próprio 'e2e-*', nunca a Bee.
+  await sql(`delete from public.bee_editorials where brand_id in (select b.id from public.brands b join public.workspaces w on w.id = b.workspace_id where w.slug like 'e2e-%');
+    delete from public.workspaces where slug like 'e2e-%';`);
 }
 
 // Escapa um literal SQL simples (só pra dados de teste controlados).

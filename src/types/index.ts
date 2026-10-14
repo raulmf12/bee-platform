@@ -262,6 +262,14 @@ export interface UserPost {
   // Versão da peça (ajustes viram candidatos aplicados) e versão presa ao agendamento.
   version?: number;
   scheduled_version?: number | null;
+  // Sequências (Fase 4): plano de origem, roteiro, direção visual do conjunto, aprovação por versão, exportação.
+  plan_id?: string | null;
+  narrative_architecture?: string | null;
+  script_status?: 'draft' | 'approved' | null;
+  visual_direction?: Record<string, unknown> | null;
+  approved_version?: number | null;
+  export_package?: Record<string, unknown> | null;
+  source_content_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1086,4 +1094,5 @@ export interface AiGate {
 export * from './campaign';
 export * from './acj';
 export * from './identity';
+export * from './sequence';
 import type { AcjId, AcjSnapshot } from './acj';

@@ -30,6 +30,7 @@ import {
   BarChart3,
   Camera,
   Route as RouteIcon,
+  Fingerprint,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BeeLogo } from '@/components/shared/BeeLogo';
@@ -65,6 +66,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Base Hive',
     icon: Library,
     items: [
+      { to: '/identidade', label: 'Minha identidade', icon: Fingerprint },
       { to: '/genesis', label: 'Genesis', icon: BrainCircuit },
       { to: '/diretrizes', label: 'Diretrizes de Criação', icon: ScrollText },
       { to: '/editoriais', label: 'Editoriais', icon: BookOpen },

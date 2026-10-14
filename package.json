@@ -30,6 +30,8 @@
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "fabric": "^6.4.3",
+    "jspdf": "^2.5.2",
+    "jszip": "^3.10.1",
     "lucide-react": "^0.460.0",
     "mammoth": "^1.12.0",
     "pdfjs-dist": "^5.7.284",

@@ -21,7 +21,7 @@
 // Entrada: { text, platform?, editorial_slug?, target_avatar?, post_id?, history_variants? }
 // Saida:   { success, decision, model_used }
 
-import { contextBlock, emitterHasPhotos, resolveContext } from '../_shared/context.ts';
+import { contextBlock, emitterHasPhotos, resolveContext, userBrandScope } from '../_shared/context.ts';
 import {
   errorResponse,
   getUserGeminiKey,
@@ -156,7 +156,7 @@ function assetMatches(asset: Asset, must: Record<string, unknown>): boolean {
 // nao chama o modelo — a forma e fixa. Persiste no post se veio post_id.
 async function lockedLinkedinDecision(input: DecideInput, text: string, userId: string) {
   const rows = await fetchRest<Array<{ limites?: Record<string, unknown> }>>(
-    `/design_variacoes?id=eq.M01-A&select=limites&limit=1`,
+    `/design_variacoes?id=eq.M01-A&select=limites&limit=1${await userBrandScope(userId)}`,
   );
   const lim = rows[0]?.limites ?? {};
   const charsLimit = Number(lim.chars_limit ?? 150);
@@ -241,11 +241,12 @@ Deno.serve(async (req: Request) => {
 
     // --- Carrega as REGRAS DA BASE: manifestacoes + variacoes congeladas ---
     // eslint-disable-next-line prefer-const
+    const S = await userBrandScope(userId);   // sistema visual e fotos da marca do usuário
     let [manis, vars, cfgs, photoAssets] = await Promise.all([
-      fetchRest<Manifestacao[]>(`/design_manifestacoes?ativo=eq.true&select=id,nome,operacao,auto_select,quando_usar,quando_nao,score_criteria&order=ordem.asc`),
-      fetchRest<Variacao[]>(`/design_variacoes?status=eq.frozen&ativo=eq.true&select=id,manifestacao_id,nome,operacao,quando_usar,quando_nao,selection_rule,limites,asset_requirements,ordem&order=manifestacao_id.asc,ordem.asc`),
-      fetchRest<SelConfig[]>(`/design_selection_config?ativo=eq.true&select=weights,thresholds,diversity&limit=1`),
-      fetchRest<Asset[]>(`/design_assets?is_active=eq.true&kind=eq.photo&select=id,kind,url,width,height,origin,semantic,source_image_id,person_slug,usage_count`),
+      fetchRest<Manifestacao[]>(`/design_manifestacoes?ativo=eq.true&select=id,nome,operacao,auto_select,quando_usar,quando_nao,score_criteria&order=ordem.asc${S}`),
+      fetchRest<Variacao[]>(`/design_variacoes?status=eq.frozen&ativo=eq.true&select=id,manifestacao_id,nome,operacao,quando_usar,quando_nao,selection_rule,limites,asset_requirements,ordem&order=manifestacao_id.asc,ordem.asc${S}`),
+      fetchRest<SelConfig[]>(`/design_selection_config?ativo=eq.true&select=weights,thresholds,diversity&limit=1${S}`),
+      fetchRest<Asset[]>(`/design_assets?is_active=eq.true&kind=eq.photo&select=id,kind,url,width,height,origin,semantic,source_image_id,person_slug,usage_count${S}`),
     ]);
     if (vars.length === 0) return errorResponse('Nenhuma variacao congelada na base', 409);
     // So manifestacoes de AUTO-SELECAO entram no motor (M04 depende de dados de

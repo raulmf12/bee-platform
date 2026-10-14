@@ -417,6 +417,10 @@ export const edge = {
 
   // Valida um token do LinkedIn no servidor (o browser bloqueia por CORS).
   // --- Campanhas (F2) ---
+  // Conteúdos sequenciais (Fase 4): plano recomendado, roteiro, ajuste de páginas e coerência.
+  async sequenceScript<T = Record<string, unknown>>(input: { action: 'recommend_plan' | 'script' | 'adjust_units' | 'coherence'; content_id?: string; post_id?: string; unit_ids?: string[]; instruction?: string; scope?: 'units' | 'sequence' | 'caption'; replace?: boolean }): Promise<T & { success: boolean }> {
+    return postEdge('sequence-script', input);
+  },
   // Minha identidade (Fase 3): próxima pergunta da conversa guiada / proposta de um bloco.
   async identitySetup<T = Record<string, unknown>>(input: { action: 'next_question' | 'propose'; session_id: string; block?: string }): Promise<T & { success: boolean }> {
     return postEdge('identity-setup', input);
