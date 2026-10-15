@@ -347,6 +347,7 @@ export const edge = {
   async postChat(input: {
     messages: Array<{ role: 'user' | 'assistant'; content: string }>;
     post: { id?: string; quote?: string; caption?: string; editorial_slug?: string; platform?: 'linkedin' | 'instagram'; target_avatar?: string };
+    mode?: 'rewrite';   // Coach do editor: feedback sempre volta com o texto reescrito
   }): Promise<{ success: boolean; reply: string; suggestions: Array<{ field: 'titulo' | 'legenda'; text: string; label?: string }>; error?: string }> {
     const headers = await authHeader();
     const res = await fetch(`${SUPABASE_URL}/functions/v1/post-chat`, {

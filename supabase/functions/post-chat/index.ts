@@ -4,7 +4,9 @@
 // estruturada (`suggestions`) pra UI oferecer um botão "Aplicar" no campo.
 //
 // Entrada: { messages: [{role, content}], post: { quote, caption,
-//            editorial_slug?, platform?, target_avatar? } }
+//            editorial_slug?, platform?, target_avatar? }, mode?: 'rewrite' }
+// mode 'rewrite' (Coach do editor): todo feedback sobre o texto volta com o
+// texto reescrito em `suggestions` — o usuário não precisa pedir "me dá opções".
 // Saída:   { success, reply, suggestions: [{ field, text, label }] }
 //
 // Mantém a voz da Bee via guardrails das Diretrizes (evitar/fortalecer/regra).
@@ -97,7 +99,7 @@ async function callGemini(apiKey: string, sys: string, messages: ChatMsg[]) {
             body: JSON.stringify({
               systemInstruction: { parts: [{ text: sys }] },
               contents,
-              generationConfig: { temperature: 0.8, maxOutputTokens: 4096, responseMimeType: 'application/json' },
+              generationConfig: { temperature: 0.8, maxOutputTokens: 8192, responseMimeType: 'application/json' },
             }),
           },
         );
@@ -131,7 +133,7 @@ Deno.serve(async (req: Request) => {
     const rl = checkRateLimit(userId, 60_000, 40);
     if (!rl.ok) return errorResponse(`Rate limit. Tente em ${Math.ceil(rl.resetIn / 1000)}s`, 429);
 
-    const { messages, post } = (await req.json()) as { messages?: ChatMsg[]; post?: PostCtx };
+    const { messages, post, mode } = (await req.json()) as { messages?: ChatMsg[]; post?: PostCtx; mode?: 'rewrite' };
     if (!Array.isArray(messages) || messages.length === 0) return errorResponse('messages obrigatorio', 400);
 
     const apiKey = await getUserGeminiKey(userId);
@@ -177,6 +179,14 @@ Deno.serve(async (req: Request) => {
       'REGRA CRÍTICA — quando o usuário pedir OPÇÕES / SUGESTÕES / VARIAÇÕES (ex: "me dá 3 opções", "sugira outra abertura", "muda só a primeira frase"): devolva CADA opção como um item de "suggestions". NUNCA descreva as opções apenas no texto do reply. Nesse caso o "reply" é só uma frase apresentando (ex: "Trouxe 3 versões, escolha:").',
       'Cada item de "suggestions" é o texto COMPLETO do campo (titulo OU legenda) já com a mudança aplicada e TODO O RESTO idêntico ao original. Ex: se pediram pra mudar só a 1ª frase da legenda, cada sugestão é a legenda inteira, mudando apenas a 1ª frase e mantendo o resto igual (inclusive as hashtags).',
       'Use "suggestions": [] apenas quando for conversa/ideia sem proposta concreta de texto. Nunca invente nomes reais de pessoas/empresas.',
+      ...(mode === 'rewrite' ? [
+        '',
+        'MODO REESCRITA (o usuário está no editor da peça e quer o texto corrigido, não só conversa):',
+        '- Toda mensagem que critica, comenta ou pede mudança no texto DEVE voltar com 1 ou 2 "suggestions" já reescritas aplicando o feedback. Não pergunte antes — reescreva com a melhor leitura do pedido; se houver ambiguidade real, entregue 2 leituras diferentes como 2 sugestões.',
+        '- Se o feedback é sobre a legenda (ou não diz qual campo), reescreva a "legenda"; só use "titulo" quando falarem da frase da imagem/título.',
+        '- Preserve o que o usuário disse que está bom (ex: "a linha narrativa está ok" = mantenha a sequência de ideias e o argumento; mude tom e formulação).',
+        '- O "reply" diz em 1-2 frases o que mudou e por quê. Só devolva "suggestions": [] se a mensagem for uma pergunta sem pedido de mudança.',
+      ] : []),
     ].filter((l) => l !== undefined).join('\n');
 
     const recent = messages.slice(-12);
@@ -200,7 +210,7 @@ Deno.serve(async (req: Request) => {
     logUsage({
       userId, provider: 'gemini', product: 'text', model: model_used,
       tokens_input: usage?.input, tokens_output: usage?.output,
-      metadata: { fn: 'post-chat', platform, editorial: p.editorial_slug, suggestions: suggestions.length },
+      metadata: { fn: 'post-chat', mode: mode ?? 'chat', platform, editorial: p.editorial_slug, suggestions: suggestions.length },
     });
 
     return jsonResponse({ success: true, reply: String(parsed.reply ?? '').trim() || '…', suggestions });

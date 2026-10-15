@@ -440,9 +440,9 @@ export function PostEditor() {
   // Gera a imagem do post pela HIVE: decide a manifestação (M01 frase / M02 rosto
   // + pensamento) e a variante -> compõe as camadas (M02 usa foto real do Marcos,
   // gera só no fallback) -> renderiza -> sobe -> grava no post e carrega no editor.
-  async function runHive() {
+  async function runHive(fraseOverride?: string) {
     if (!post || !currentUser) return;
-    const frase = (post.carousel_text?.quote as string | undefined)?.trim() || title.trim();
+    const frase = fraseOverride?.trim() || (post.carousel_text?.quote as string | undefined)?.trim() || title.trim();
     if (!frase) { toast.error('Sem frase pra compor a imagem.'); return; }
     setHiveBusy(true);
     try {
@@ -492,6 +492,26 @@ export function PostEditor() {
     } finally {
       setHiveBusy(false);
     }
+  }
+
+  // Texto reescrito pela Hive no Coach → aplica no post. Conta como correção da
+  // IA (não edição manual). Legenda: grava direto, com Desfazer. Frase: troca o
+  // texto da imagem e re-renderiza no MESMO template (imagem volta à aprovação).
+  async function applyHiveText(field: 'titulo' | 'legenda', text: string) {
+    if (!post) return;
+    const rounds = (post.ai_edit_rounds ?? 0) + 1;
+    if (field === 'legenda') {
+      const prev = caption;
+      setCaption(text);
+      await update(post.id, { caption: text, ai_edit_rounds: rounds });
+      setTextDirty(false);
+      toast.success('Legenda aplicada', {
+        action: { label: 'Desfazer', onClick: () => { setCaption(prev); void update(post.id, { caption: prev }); } },
+      });
+      return;
+    }
+    await update(post.id, { carousel_text: { ...(post.carousel_text ?? {}), quote: text }, ai_edit_rounds: rounds });
+    await runHive(text);
   }
 
   async function handlePublishLive() {
@@ -749,17 +769,19 @@ export function PostEditor() {
         </div>
 
         <aside className="flex flex-col gap-3 overflow-y-auto">
-          {/* Coach focado neste post: só aparece quando o post veio da IA
-              (tem variação pristina pra ancorar o feedback). */}
-          {variation && (
+          {/* Coach focado neste post: ancora as lições no que a IA gerou (variação
+              pristina; sem ela, no texto atual) e reescreve o texto da peça. */}
+          {post.format !== ('video' as typeof post.format) && (!!variation || !!post.caption || !!post.carousel_text?.quote) && (
             <PostCoach
               focus={{
-                quote: variation.quote,
-                caption: variation.caption,
+                quote: variation?.quote ?? (post.carousel_text?.quote as string | undefined) ?? title,
+                caption: variation?.caption ?? post.caption ?? '',
                 editorial_slug: (post.metadata as { editorial_slug?: string })?.editorial_slug ?? null,
                 platform: post.platform,
                 target_avatar: (post.metadata as { target_avatar?: string })?.target_avatar ?? null,
               }}
+              current={{ id: post.id, quote: (post.carousel_text?.quote as string | undefined) ?? title, caption }}
+              onApply={applyHiveText}
             />
           )}
           <Card>
