@@ -25,3 +25,17 @@ confirmação de um clique · publicado pode ser arquivado · resultado incerto 
 3. **Stand-by não aprova peça sem imagem pronta.** *Antes:* se a imagem final não ficasse pronta (fundo de IA não aprovado, tela em branco), o Stand-by aprovava assim mesmo. *Agora:* aparece "Stand-by não concluído: a imagem final não ficou pronta" e a peça continua como estava.
 4. **"IA distribuir" diz a verdade.** *Antes:* mostrava "N posts agendados" mesmo quando algum horário já tinha passado e nada era gravado. *Agora:* conta só o que foi gravado ("1 agendamento confirmado · 1 precisa de nova data"), marca cada linha com o resultado, deixa ajustar a data da pendente e "Aplicar pendentes" grava só ela.
 5. **Pendente (sem mudança automática):** a peça "Sua pesquisa de clima mede conformidade…" está agendada para 09/09 e ficou parada; e "A resposta rápida não prova eficiência…" está aprovada com data — decidir na agenda (reagendar ou remover a data).
+
+---
+
+## E2 — Fundação comum · implantada em 18/10/2026 (sem mudança visível)
+
+| Campo | Informação |
+|---|---|
+| Contratos | C1 `publication_packages` + bucket `packages` (só o servidor escreve) · C2 `piece_readiness` · C4 `schedule_commands`/`commit_schedule` + função `schedule-piece` · C5 `post_publications` com estágios, `acquire_publication`, `mark_publication_sending`, `confirm_publication`, `fail_publication`, `reconcile_publication`, `register_manual_publication`, `expire_publication_leases` · `user_settings.timezone` |
+| Banco | `20261022000001_fundacao_estabilizacao.sql` (+ rollback; não remove pacotes/resultados) · `approve_sequence` não reescreve histórico nem tira peça agendada da agenda · `piece_versions` só acrescenta |
+| Funções | `schedule-piece` (nova), `_shared/package.ts` (fechar/conferir pacote) |
+| Critérios | 01/T05 (concorrência no banco), T08, T09, T10 · 02/T16, T21, T22, T32 · 03/T01–T03 (no servidor), T36 (RLS) · base de 02/T12–T13 |
+| Evidência | `e2e/f23-fundacao-e2.spec.ts` (6/6) — produção, usuário E2E, conta com token falso, nenhuma chamada à rede social |
+| Ativação | Nenhum escritor/leitor antigo usa ainda: agenda/editor passam a usar no E3, publicador no E4 |
+| Retorno | rollback remove só as funções; tabelas, pacotes e resultados ficam |

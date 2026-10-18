@@ -39,6 +39,7 @@ export const E2E_OWNED_TABLES = [
   'ai_variations',
   'ai_generations',
   'post_metrics',
+  'post_unit_publications', 'post_publications', 'schedule_commands',   // antes da peça (pacotes saem em cascata com ela)
   'user_posts',
   'contents',
   'ideas',
@@ -102,7 +103,31 @@ export async function cleanupE2EStorage(): Promise<number> {
       body: JSON.stringify({ prefixes: names.slice(i, i + 100) }),
     });
   }
-  return names.length;
+  // arquivos de pacotes de publicação do usuário de teste (bucket próprio, escrito só pelo servidor)
+  const pk = await sql<{ name: string }>(`select name from storage.objects where bucket_id='packages' and name like '${id}/%'`);
+  const pnames = pk.map((r) => r.name).filter((n) => n.startsWith(`${id}/`));
+  for (let i = 0; i < pnames.length; i += 100) {
+    await fetch(`https://${REF}.supabase.co/storage/v1/object/packages`, {
+      method: 'DELETE', headers: { apikey: svc, Authorization: `Bearer ${svc}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prefixes: pnames.slice(i, i + 100) }),
+    });
+  }
+  return names.length + pnames.length;
+}
+
+// Sobe uma imagem de teste em media/<uid>/e2e/ e devolve a URL pública.
+export async function uploadE2EImage(name: string, bytes: Buffer, mime = 'image/jpeg'): Promise<string> {
+  const { id } = e2eUser();
+  if (!id || id === MARCOS) throw new Error('upload recusado: id inválido');
+  const keys = await fetch(`https://api.supabase.com/v1/projects/${REF}/api-keys`, { headers: { Authorization: `Bearer ${mgmtToken()}` } }).then((r) => r.json()) as Array<{ name: string; api_key: string }>;
+  const svc = keys.find((k) => k.name === 'service_role')?.api_key;
+  if (!svc) throw new Error('service_role indisponível');
+  const path = `${id}/e2e/${name}`;
+  const r = await fetch(`https://${REF}.supabase.co/storage/v1/object/media/${path}`, {
+    method: 'POST', headers: { apikey: svc, Authorization: `Bearer ${svc}`, 'Content-Type': mime, 'x-upsert': 'true' }, body: bytes,
+  });
+  if (!r.ok) throw new Error(`upload: ${r.status} ${await r.text()}`);
+  return `https://${REF}.supabase.co/storage/v1/object/public/media/${path}`;
 }
 
 // Chama uma edge function COMO SERVIÇO (service_role + x-bee-user-id do usuário
