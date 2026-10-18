@@ -695,6 +695,7 @@ export const edge = {
     platform: 'linkedin' | 'instagram';
     published_url: string;
     published_id: string;
+    reused?: boolean;   // já estava publicada: resultado conhecido, nada foi enviado de novo
   }> {
     const headers = await authHeader();
     const res = await fetch(`${SUPABASE_URL}/functions/v1/publish-post`, {

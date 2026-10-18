@@ -52,6 +52,7 @@ import {
   type DistributionPrefs, type Platform, type PostMetrics, type UserPost,
 } from '@/types';
 import { cn } from '@/lib/utils';
+import { isPublishedHistory, PUBLISHED_HISTORY_MSG, userMessage } from '@/lib/errors';
 import { toast } from 'sonner';
 
 const NEUTRAL = '#94A3B8';
@@ -83,6 +84,9 @@ const dayKey = (d: Date) => format(d, 'yyyy-MM-dd');
 // Um arrasto de peça (chip, bloco ou item da fila) carrega o id em text/plain. Checar
 // o dataTransfer (e não o estado React) deixa o 1º dragover aceitar o drop.
 const isPostDrag = (e: React.DragEvent) => e.dataTransfer.types.includes('text/plain');
+
+// Linha do plano em lote + resultado REAL da gravação (doc 02 §10): só "ok" conta como agendada.
+type PlanRow = { post: UserPost; date: string; time: string; reason: string; result?: { state: 'ok' | 'skipped' | 'error'; msg: string } };
 
 // Data em que o post "acontece" no calendário.
 function eventDate(p: UserPost): Date | null {
@@ -132,7 +136,7 @@ export function Agenda() {
 
   // Plano proposto (revisão antes de aplicar). Cai aqui tanto o modo IA quanto o
   // semi-automático. Cada linha traz o porquê.
-  const [plan, setPlan] = useState<{ summary?: string; rows: Array<{ post: UserPost; date: string; time: string; reason: string }> } | null>(null);
+  const [plan, setPlan] = useState<{ summary?: string; rows: PlanRow[] } | null>(null);
   const [applying, setApplying] = useState(false);
 
   // Assistente semi-automático (guiado): pergunta frequência/dias/horários por
@@ -278,9 +282,16 @@ export function Agenda() {
   }, [posts, hiddenPlatforms, hiddenEditorials, lens]);
 
   // ---- Ações ----
+  // Publicado é histórico (doc 01 §4.1): não volta à fila nem ganha nova data. O banco também recusa.
+  function blockedByHistory(post: UserPost): boolean {
+    if (!isPublishedHistory(post)) return false;
+    toast.info(PUBLISHED_HISTORY_MSG);
+    return true;
+  }
+
   async function moveToDay(postId: string, day: Date) {
     const post = posts.find((p) => p.id === postId);
-    if (!post) return;
+    if (!post || blockedByHistory(post)) return;
     const existing = eventDate(post);
     // Mantém o horário se já tinha; senão usa o 1º horário da cadência da plataforma.
     const time = existing ? format(existing, 'HH:mm') : cadenceFor(prefs, post.platform).times[0];
@@ -306,7 +317,7 @@ export function Agenda() {
       toast.success(`Agendado pra ${format(when, "d 'de' MMM 'às' HH:mm", { locale: ptBR })}`);
     } catch (e) {
       console.error(e);
-      toast.error('Erro ao agendar.');
+      toast.error(userMessage(e, 'Erro ao agendar.'));
     }
   }
 
@@ -314,7 +325,7 @@ export function Agenda() {
   // de passado do moveToDay. Reaproveita atTime (fuso-safe).
   async function moveToDayTime(postId: string, day: Date, hour: number, minute: number) {
     const post = posts.find((p) => p.id === postId);
-    if (!post) return;
+    if (!post || blockedByHistory(post)) return;
     const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
     const when = atTime(day, time);
     if (when.getTime() < Date.now()) {
@@ -326,18 +337,19 @@ export function Agenda() {
       toast.success(`Agendado pra ${format(when, "d 'de' MMM 'às' HH:mm", { locale: ptBR })}`);
     } catch (e) {
       console.error(e);
-      toast.error('Erro ao agendar.');
+      toast.error(userMessage(e, 'Erro ao agendar.'));
     }
   }
 
   async function backToStandby(post: UserPost) {
+    if (blockedByHistory(post)) return;
     try {
       await update(post.id, { status: 'approved', scheduled_date: null });
       toast.info('Removido da agenda — voltou pra fila.');
       setSelected(null);
     } catch (e) {
       console.error(e);
-      toast.error('Erro ao remover do calendário.');
+      toast.error(userMessage(e, 'Erro ao remover do calendário.'));
     }
   }
 
@@ -365,7 +377,6 @@ export function Agenda() {
     });
   }
 
-  type PlanRow = { post: UserPost; date: string; time: string; reason: string };
 
   // "IA distribui": a IA de verdade PROPÕE o calendário (dia + hora + porquê).
   // Não grava — abre o modal de revisão pra você aprovar/ajustar antes de aplicar.
@@ -440,28 +451,48 @@ export function Agenda() {
     }
   }
 
-  // Aplica o plano revisado: grava cada post no dia/horário propostos.
+  // Aplica o plano revisado, linha a linha. A confirmação conta só o que foi GRAVADO: linha vencida,
+  // peça já publicada ou erro ficam marcadas com o motivo e o plano continua aberto para ajustar e
+  // retomar só as pendências (as já agendadas não são regravadas).
   async function applyPlan() {
     if (!plan) return;
     setApplying(true);
-    try {
-      let firstDate: Date | null = null;
-      for (const row of plan.rows) {
-        const [yy, mm, dd] = row.date.split('-').map(Number);
-        const when = atTime(new Date(yy, mm - 1, dd), row.time);
-        if (when.getTime() < Date.now()) continue; // segurança: nunca no passado
-        await update(row.post.id, { status: 'scheduled', scheduled_date: when.toISOString() });
-        if (!firstDate) firstDate = when;
+    const rows = [...plan.rows];
+    let firstDate: Date | null = null;
+    for (const [i, row] of rows.entries()) {
+      if (row.result?.state === 'ok') continue;
+      const [yy, mm, dd] = row.date.split('-').map(Number);
+      const when = atTime(new Date(yy, mm - 1, dd), row.time);
+      const current = posts.find((p) => p.id === row.post.id) ?? row.post;
+      let result: NonNullable<PlanRow['result']>;
+      if (isPublishedHistory(current)) result = { state: 'skipped', msg: 'Já publicada — permanece no histórico.' };
+      else if (when.getTime() < Date.now()) result = { state: 'skipped', msg: 'O horário já passou — escolha uma nova data.' };
+      else {
+        try {
+          await update(row.post.id, { status: 'scheduled', scheduled_date: when.toISOString() });
+          result = { state: 'ok', msg: `Agendado para ${format(when, "d 'de' MMM 'às' HH:mm", { locale: ptBR })}` };
+          if (!firstDate) firstDate = when;
+        } catch (e) {
+          console.error(e);
+          result = { state: 'error', msg: userMessage(e, 'Não foi possível agendar.') };
+        }
       }
-      toast.success(`${plan.rows.length} post(s) agendado(s).`);
-      if (firstDate) setCursor(startOfMonth(firstDate));
-      setPlan(null);
-    } catch (e) {
-      console.error(e);
-      toast.error('Erro ao aplicar o plano.');
-    } finally {
-      setApplying(false);
+      rows[i] = { ...row, result };
     }
+    setApplying(false);
+    const ok = rows.filter((r) => r.result?.state === 'ok').length;
+    const newly = ok - plan.rows.filter((r) => r.result?.state === 'ok').length;
+    const skipped = rows.filter((r) => r.result?.state === 'skipped').length;
+    const failed = rows.filter((r) => r.result?.state === 'error').length;
+    if (firstDate) setCursor(startOfMonth(firstDate));
+    if (!skipped && !failed) {
+      toast.success(`${newly} agendamento(s) confirmado(s).`);
+      setPlan(null);
+      return;
+    }
+    setPlan({ ...plan, rows });
+    const parts = [`${newly} agendamento(s) confirmado(s)`, skipped && `${skipped} precisa(m) de nova data`, failed && `${failed} com erro`].filter(Boolean);
+    (newly ? toast.warning : toast.error)(`${parts.join(' · ')}. Ajuste e aplique de novo — só as pendentes.`);
   }
 
   // ---- Assistente semi-automático ----
@@ -603,20 +634,24 @@ export function Agenda() {
     // Sequência = UMA entrada na agenda (o agendador publica o pacote programado inteiro).
     const label = `${post.format === 'carousel' ? '▤ Carrossel · ' : post.format === 'story' ? '◫ Stories · ' : ''}${(post.carousel_text?.quote as string | undefined) || post.title || post.caption || 'Post'}`;
     const when = eventDate(post);
+    const locked = isPublishedHistory(post);   // histórico: consulta, sem arraste
     return (
       <button
         type="button"
-        draggable
-        onDragStart={(e) => { e.dataTransfer.setData('text/plain', post.id); e.dataTransfer.effectAllowed = 'move'; setDraggingId(post.id); }}
+        draggable={!locked}
+        data-testid="agenda-chip"
+        data-locked={locked ? 'true' : undefined}
+        onDragStart={(e) => { if (locked) { e.preventDefault(); return; } e.dataTransfer.setData('text/plain', post.id); e.dataTransfer.effectAllowed = 'move'; setDraggingId(post.id); }}
         onDragEnd={() => { setDraggingId(null); setOverKey(null); }}
         onClick={() => setSelected(post)}
         className={cn(
-          'group flex w-full gap-1.5 rounded-md border-l-[3px] px-1.5 py-1 text-left transition-opacity cursor-grab active:cursor-grabbing',
+          'group flex w-full gap-1.5 rounded-md border-l-[3px] px-1.5 py-1 text-left transition-opacity',
+          locked ? 'cursor-pointer opacity-70' : 'cursor-grab active:cursor-grabbing',
           big ? 'items-start py-1.5' : 'items-center',
           draggingId === post.id && 'opacity-40',
         )}
         style={{ borderLeftColor: color, backgroundColor: `${color}1F` }}
-        title={label}
+        title={locked ? `${label} · publicado (histórico)` : label}
       >
         <PlatformIcon platform={post.platform} className={cn('shrink-0', big ? 'h-3.5 w-3.5 mt-0.5' : 'h-3 w-3')} />
         {big ? (
@@ -671,7 +706,7 @@ export function Agenda() {
 
   // Reagendar (mudar data/hora) direto do popup do post. Fuso-safe + sem passado.
   async function rescheduleSelected(value: string) {
-    if (!selected) return;
+    if (!selected || blockedByHistory(selected)) return;
     const iso = localInputToIso(value);
     if (!iso) return;
     if (new Date(iso).getTime() < Date.now()) { toast.error('Não dá pra agendar no passado.'); return; }
@@ -680,7 +715,7 @@ export function Agenda() {
       toast.success('Reagendado.');
     } catch (e) {
       console.error(e);
-      toast.error('Erro ao reagendar.');
+      toast.error(userMessage(e, 'Erro ao reagendar.'));
     }
   }
 
@@ -692,15 +727,18 @@ export function Agenda() {
     const label = (post.carousel_text?.quote as string | undefined) || post.title || post.caption || 'Post';
     const mins = (when.getHours() - GRID_START) * 60 + when.getMinutes();
     const top = Math.max(0, Math.min(SLOTS * SLOT_H - 38, (mins / SLOT_MIN) * SLOT_H));
+    const locked = isPublishedHistory(post);
     return (
       <button
         type="button"
-        draggable
-        onDragStart={(e) => { e.dataTransfer.setData('text/plain', post.id); e.dataTransfer.effectAllowed = 'move'; setDraggingId(post.id); }}
+        draggable={!locked}
+        data-locked={locked ? 'true' : undefined}
+        onDragStart={(e) => { if (locked) { e.preventDefault(); return; } e.dataTransfer.setData('text/plain', post.id); e.dataTransfer.effectAllowed = 'move'; setDraggingId(post.id); }}
         onDragEnd={() => { setDraggingId(null); setOverKey(null); }}
         onClick={() => setSelected(post)}
         className={cn(
-          'absolute left-0.5 right-0.5 z-10 overflow-hidden rounded-md border-l-[3px] px-1.5 py-0.5 text-left cursor-grab active:cursor-grabbing',
+          'absolute left-0.5 right-0.5 z-10 overflow-hidden rounded-md border-l-[3px] px-1.5 py-0.5 text-left',
+          locked ? 'cursor-pointer opacity-70' : 'cursor-grab active:cursor-grabbing',
           draggingId === post.id && 'opacity-40',
         )}
         style={{ top, height: 38, borderLeftColor: color, backgroundColor: `${color}22` }}
@@ -1038,7 +1076,7 @@ export function Agenda() {
         const tips = suggestionsFor(selected, cyc, learnedTimes[selected.platform]);
         const imgs = Object.values(selected.rendered_slides ?? {}).filter(Boolean);
         const shown = imgs.length ? imgs : Object.values(selected.generated_images ?? {}).filter(Boolean);
-        const isPublished = selected.status === 'published';
+        const isPublished = isPublishedHistory(selected);
         return (
           <>
             <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setSelected(null)} aria-hidden />
@@ -1078,6 +1116,12 @@ export function Agenda() {
                 )}
                 {quote && <p className="font-display text-base font-medium leading-relaxed">"{quote}"</p>}
 
+                {isPublished && (
+                  <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground" data-testid="panel-history">
+                    {PUBLISHED_HISTORY_MSG}{' '}
+                    {selected.published_url && <a href={selected.published_url} target="_blank" rel="noreferrer" className="font-medium text-primary underline">Abrir publicação</a>}
+                  </p>
+                )}
                 {!isPublished && (
                   <div className="space-y-1 rounded-md border border-border p-2.5" data-testid="panel-move">
                     <Label className="text-xs text-muted-foreground">{when ? 'Mover (data e hora)' : 'Agendar (data e hora)'}</Label>
@@ -1256,7 +1300,8 @@ export function Agenda() {
               const [yy, mm, dd] = row.date.split('-').map(Number);
               const dayLabel = format(new Date(yy, mm - 1, dd), "EEE, d 'de' MMM", { locale: ptBR });
               return (
-                <div key={row.post.id} className="rounded-lg border border-border p-2.5">
+                <div key={row.post.id} data-testid="plan-row" data-result={row.result?.state}
+                  className={cn('rounded-lg border p-2.5', row.result?.state === 'ok' ? 'border-emerald-500/50 bg-emerald-500/5' : row.result ? 'border-destructive/50 bg-destructive/5' : 'border-border')}>
                   <div className="flex items-center gap-2">
                     <PlatformIcon platform={row.post.platform} className="h-3.5 w-3.5 shrink-0" />
                     {ed && (
@@ -1272,6 +1317,20 @@ export function Agenda() {
                   {row.reason && (
                     <p className="mt-1 text-[11px] italic text-muted-foreground">↳ {row.reason}</p>
                   )}
+                  {row.result && (
+                    <p className={cn('mt-1 text-[11px] font-medium', row.result.state === 'ok' ? 'text-emerald-600' : 'text-destructive')}>
+                      {row.result.state === 'ok' ? '✓ ' : '⚠ '}{row.result.msg}
+                    </p>
+                  )}
+                  {row.result && row.result.state !== 'ok' && !isPublishedHistory(row.post) && (
+                    <Input type="datetime-local" className="mt-1.5 h-7 text-xs" min={nowLocalInput()} aria-label="Nova data e hora"
+                      value={`${row.date}T${row.time}`}
+                      onChange={(e) => {
+                        const [d, t] = e.target.value.split('T');
+                        if (!d || !t) return;
+                        setPlan((cur) => cur && { ...cur, rows: cur.rows.map((r) => (r.post.id === row.post.id ? { ...r, date: d, time: t.slice(0, 5), result: undefined } : r)) });
+                      }} />
+                  )}
                 </div>
               );
             })}
@@ -1281,7 +1340,7 @@ export function Agenda() {
             <Button variant="outline" onClick={() => setPlan(null)} disabled={applying}>Cancelar</Button>
             <Button variant="accent" onClick={() => void applyPlan()} disabled={applying}>
               {applying ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
-              Aplicar {plan ? `(${plan.rows.length})` : ''}
+              {plan?.rows.some((r) => r.result) ? 'Aplicar pendentes' : 'Aplicar'} {plan ? `(${plan.rows.filter((r) => r.result?.state !== 'ok').length})` : ''}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -36,6 +36,7 @@ export interface PublishablePost {
   approved_version?: number | null;
   export_package?: Record<string, unknown> | null;
   title?: string | null;
+  published_url?: string | null;
   // Campanhas: a conta social da peça. Nula nos posts antigos → credenciais de
   // user_settings (comportamento de sempre).
   account_id: string | null;
@@ -48,11 +49,12 @@ interface UserSettings {
   instagram_business_account_id: string | null;
 }
 
-export interface PublishResult { url: string; id: string; platform: string }
+// reused: a peça já estava publicada — devolve o resultado conhecido, sem nova chamada à rede (doc 01 §4.2).
+export interface PublishResult { url: string; id: string; platform: string; reused?: boolean }
 
 async function loadPost(id: string): Promise<PublishablePost | null> {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/user_posts?id=eq.${id}&select=id,user_id,platform,format,caption,rendered_slides,metadata,publish_attempts,visual_decision,image_approved,account_id,status,version,scheduled_version,approved_version,export_package,title&limit=1`,
+    `${SUPABASE_URL}/rest/v1/user_posts?id=eq.${id}&select=id,user_id,platform,format,caption,rendered_slides,metadata,publish_attempts,visual_decision,image_approved,account_id,status,version,scheduled_version,approved_version,export_package,title,published_url&limit=1`,
     { headers: svcHeaders() },
   );
   if (!res.ok) return null;
@@ -62,12 +64,15 @@ async function loadPost(id: string): Promise<PublishablePost | null> {
   // só vai ao ar com "atualizar agendamento" (docs: Ajustes e alternativas §8).
   if (post && post.status === 'scheduled' && post.scheduled_version && post.scheduled_version !== post.version) {
     const vr = await fetch(`${SUPABASE_URL}/rest/v1/piece_versions?post_id=eq.${id}&version=eq.${post.scheduled_version}&select=components&limit=1`, { headers: svcHeaders() });
-    const [v] = vr.ok ? await vr.json() : [];
-    if (v?.components) {
-      post.caption = v.components.caption ?? post.caption;
-      post.rendered_slides = v.components.rendered_slides ?? post.rendered_slides;
-      post.visual_decision = v.components.visual_decision ?? post.visual_decision;
+    if (!vr.ok) throw new Error(`Não consegui recuperar o conteúdo programado (v${post.scheduled_version}). A publicação foi interrompida — tente de novo.`);
+    const [v] = await vr.json();
+    // HIVE-EST-06: sem o pacote programado, NUNCA cai na versão atual em silêncio.
+    if (!v?.components || !v.components.rendered_slides?.slide1) {
+      throw new Error(`O conteúdo programado (v${post.scheduled_version}) não foi encontrado. A publicação foi interrompida: confira a peça e atualize o agendamento.`);
     }
+    post.caption = v.components.caption ?? '';
+    post.rendered_slides = v.components.rendered_slides;
+    post.visual_decision = v.components.visual_decision ?? null;
   }
   return post;
 }
@@ -251,10 +256,52 @@ async function publishInstagramVideo(token: string, igBusinessId: string, videoU
 
 export interface DryRun { ok: boolean; format: string; platform: string; version: number | null; units: number; issues: string[]; plan: string[] }
 
+const AI_IMAGE = (variant?: string) => variant === 'M01-D' || variant === 'M01-E' || (variant?.startsWith('M02-') ?? false);
+const fail = (format: string, platform: string, issues: string[]): DryRun => ({ ok: false, format, platform, version: null, units: 0, issues, plan: [] });
+
+// VERIFICAÇÃO PRÉVIA (doc 01 §4.4 · HIVE-EST-05): só LÊ — peça, versão, arquivos, credenciais.
+// Não grava tentativa/status/erro e não chama nenhuma API de rede social. Formato sem verificação
+// implementada é recusado explicitamente (nunca cai na publicação).
+export async function inspectOne(postId: string, userId: string): Promise<DryRun> {
+  let post: PublishablePost | null;
+  try { post = await loadPost(postId); } catch (e) { return fail('', '', [(e as Error).message]); }
+  if (!post || post.user_id !== userId) return fail('', '', ['Post nao encontrado']);
+  if (post.status === 'published') return fail(post.format, post.platform, ['Esta peça já foi publicada e permanece no histórico.']);
+  if (isSequence(post.format)) return publishSequence(post, userId, { dryRun: true }) as Promise<DryRun>;
+  if (!['image', 'video', 'reel'].includes(post.format)) return fail(post.format, post.platform, ['A verificação prévia ainda não está disponível para este formato.']);
+
+  const issues: string[] = [];
+  const isVideo = post.format === 'video' || post.format === 'reel';
+  if (!(post.caption ?? '').trim()) issues.push('Falta a legenda.');
+  if (AI_IMAGE((post.visual_decision as { variant?: string } | null)?.variant) && post.metadata?.bg_approved !== true) issues.push('Aprove a imagem de IA antes de publicar.');
+  if (post.platform === 'linkedin' && isVideo) issues.push('Publicação de vídeo no LinkedIn ainda não está disponível.');
+  const fileUrl = isVideo ? (post.metadata as { video_url?: string })?.video_url : post.rendered_slides?.slide1;
+  if (!fileUrl) issues.push(isVideo ? 'Vídeo não encontrado na peça.' : 'Imagem final não renderizada.');
+  else {
+    const head = await fetch(fileUrl, { method: 'HEAD' }).catch(() => null);
+    if (!head?.ok) issues.push('O arquivo da peça está inacessível.');
+  }
+  const settings = await loadSettings(userId);
+  try {
+    const creds = settings ? await resolveCredentials(post, settings) : null;
+    const ok = post.platform === 'linkedin' ? !!(creds?.linkedin_token && creds?.linkedin_author_urn) : !!(creds?.instagram_access_token && creds?.instagram_business_account_id);
+    if (!creds) issues.push('Credenciais de publicação não configuradas.');
+    else if (!ok) issues.push(missingCreds(post.platform, creds));
+  } catch (e) { issues.push((e as Error).message); }
+  const plan = post.platform === 'linkedin'
+    ? ['registrar o upload da imagem', 'enviar a imagem', 'publicar o post com a legenda']
+    : isVideo ? ['contêiner de Reel com a legenda', 'aguardar o processamento', 'publicar'] : ['contêiner de imagem com a legenda', 'publicar'];
+  return { ok: issues.length === 0, format: post.format, platform: post.platform, version: post.scheduled_version ?? post.version ?? null, units: 1, issues, plan };
+}
+
 export async function publishOne(postId: string, userId: string, opts: { dryRun?: boolean } = {}): Promise<PublishResult> {
+  if (opts.dryRun) throw new Error('Use inspectOne para verificar sem publicar.');
   const post = await loadPost(postId);
   // Só o dono publica a própria peça (a função usa credencial de serviço: o escopo é conferido aqui).
   if (!post || post.user_id !== userId) throw new Error('Post nao encontrado');
+  // Já publicada: devolve o resultado conhecido, sem chamar a rede de novo (HIVE-EST-04, parte imediata;
+  // a reserva atômica contra corrida entre botão e agendador entra no E4).
+  if (post.status === 'published') return { url: post.published_url ?? '', id: '', platform: post.platform, reused: true };
   if (isSequence(post.format)) return publishSequence(post, userId, opts) as Promise<PublishResult>;
 
   const settings = await loadSettings(userId);
@@ -276,9 +323,7 @@ export async function publishOne(postId: string, userId: string, opts: { dryRun?
     // resta: agendar/stand-by/publicar já implicam a aprovação geral (o portão
     // geral de image_approved foi removido — barrava posts agendados que o humano
     // já tinha revisado, causando a perda silenciosa acima).
-    const variant = (post.visual_decision as { variant?: string } | null)?.variant;
-    const usesAiImage = variant === 'M01-D' || variant === 'M01-E' || (variant?.startsWith('M02-') ?? false);
-    if (usesAiImage && post.metadata?.bg_approved !== true) {
+    if (AI_IMAGE((post.visual_decision as { variant?: string } | null)?.variant) && post.metadata?.bg_approved !== true) {
       throw new Error('Aprove a imagem de IA antes de publicar (portão de imagem — M01-D/E e M02).');
     }
 

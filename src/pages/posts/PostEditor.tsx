@@ -30,6 +30,7 @@ import { generateHiveImage } from '@/lib/hive/runVisual';
 import { bgGatePending } from '@/lib/hive/bgGate';
 import { MarcosPhotoReview } from '@/components/hive/MarcosPhotoReview';
 import { PostCoach } from '@/components/ai/PostCoach';
+import { isPublishedHistory, PUBLISHED_HISTORY_MSG, userMessage } from '@/lib/errors';
 import type { HiveSeed } from '@/lib/edge';
 import { toast } from 'sonner';
 
@@ -212,6 +213,8 @@ export function PostEditor() {
     if (newObjs === 0 && storedObjs > 0) {
       console.warn(`[PostEditor] auto-save BLOQUEADO: canvas vazio sobre fabric com ${storedObjs} objeto(s) — hidratação falhou, não apaga a arte.`);
       setCanvasDirty(false);
+      // A arte salva foi preservada, mas a tela não carregou: avisar em vez de fingir que salvou.
+      toast.warning('A arte não carregou nesta tela (canvas em branco). Nada foi salvo por cima — dê um refresh antes de editar.', { id: 'canvas-blank' });
       return;
     }
     try {
@@ -245,7 +248,8 @@ export function PostEditor() {
 
   async function setStatus(status: PostStatus) {
     if (!post) return;
-    await update(post.id, { status });
+    if (isPublishedHistory(post) && status !== 'archived') { toast.info(PUBLISHED_HISTORY_MSG); return; }
+    try { await update(post.id, { status }); } catch (e) { toast.error(userMessage(e, 'Não foi possível mudar o status.')); return; }
     toast.success(`Status: ${POST_STATUS_LABELS[status]}`);
     if (status === 'published') {
       void almaApi.emitEvento({
@@ -373,8 +377,13 @@ export function PostEditor() {
       // ainda no debounce do auto-save ficaria de fora do diff.
       if (textDirty) await saveText();
       if (canvasDirty) await saveCanvas();
-      // Auto-exporta a imagem no formato da plataforma (sem botão Exportar).
-      await exportImage();
+      // Auto-exporta a imagem no formato da plataforma (sem botão Exportar). Sem imagem final
+      // pronta (render nulo, canvas em branco, imagem de IA pendente) a peça NÃO é aprovada
+      // (HIVE-EST-02): o motivo já foi mostrado pelo exportImage.
+      if (post.format !== ('video' as typeof post.format)) {
+        const url = await exportImage();
+        if (!url) { toast.error('Stand-by não concluído: a imagem final não ficou pronta. A peça continua como estava.'); return; }
+      }
 
       // Posts de EXEMPLO nunca entram na medição/aprendizado da IA.
       if ((post.metadata as { is_sample?: boolean })?.is_sample) {
@@ -538,6 +547,11 @@ export function PostEditor() {
         if (!url) { toast.error('Falha ao renderizar a imagem — verifique o canvas.'); return; }
       }
       const result = await edge.publishPost({ post_id: post.id });
+      if (result.reused) {
+        toast.info('Esta peça já foi publicada — nada foi enviado de novo.');
+        await load();
+        return;
+      }
       toast.success(`Publicado no ${platformLabel}!`);
       await update(post.id, {
         status: 'published',
@@ -570,6 +584,7 @@ export function PostEditor() {
   // data = exportar + agendar. Bloqueado pelo portão do fundo de IA (D/E) se pendente.
   async function handleSchedule(value: string) {
     if (!post) return;
+    if (isPublishedHistory(post)) { toast.info(PUBLISHED_HISTORY_MSG); return; }
     if (!value) {
       await update(post.id, {
         scheduled_date: null,
@@ -587,7 +602,8 @@ export function PostEditor() {
       const url = await exportImage();
       if (!url) return; // exportImage já avisou (fundo pendente ou canvas não pronto)
     }
-    await update(post.id, { scheduled_date: iso, status: 'scheduled' });
+    try { await update(post.id, { scheduled_date: iso, status: 'scheduled' }); }
+    catch (e) { toast.error(userMessage(e, 'Não foi possível agendar.')); return; }
     toast.success('Agendado — imagem renderizada.');
   }
 
@@ -619,7 +635,7 @@ export function PostEditor() {
         <div className="flex items-center gap-2">
           <PlatformBadge platform={post.platform} />
           <StatusBadge status={post.status} />
-          <Select value={post.status} onValueChange={(v) => void setStatus(v as PostStatus)}>
+          <Select value={post.status} onValueChange={(v) => void setStatus(v as PostStatus)} disabled={isPublishedHistory(post)}>
             <SelectTrigger className="h-8 w-36 text-xs">
               <SelectValue />
             </SelectTrigger>
@@ -826,6 +842,7 @@ export function PostEditor() {
                   min={nowLocalInput()}
                   value={isoToLocalInput(post.scheduled_date)}
                   onChange={(e) => void handleSchedule(e.target.value)}
+                  disabled={isPublishedHistory(post)}
                   className="text-xs"
                 />
                 <p className="text-[10px] text-muted-foreground">
