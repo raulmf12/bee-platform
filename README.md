@@ -1,5 +1,7 @@
 # Plataforma Bee Consulting
 
+> 🤖 **Agentes de IA:** comecem por [`AGENTS.md`](AGENTS.md) (regras, processo e contexto em [`docs/agentes/`](docs/agentes/README.md)). Partes deste README estão desatualizadas (ex.: a Alma foi substituída pelo Genesis).
+
 > Plataforma interna de criação e publicação de conteúdo da Bee Consulting — consultoria sistêmica de liderança liderada por **Marcos Piccini**.
 
 Uma SaaS-like de criação de posts pra LinkedIn e Instagram, fundamentada em RAG e na arquitetura editorial proprietária da Bee. A IA gera **só o conteúdo** (frase + caption); o sistema substitui a frase num template visual editável (sem custo de geração de imagem).
