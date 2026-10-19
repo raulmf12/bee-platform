@@ -16,6 +16,7 @@ import { uploadAssetImage } from '@/lib/storage';
 import { MEDIA_BUCKET, supabase } from '@/lib/supabase';
 import { imageKind } from '@/lib/campaign/produce';
 import type { CampaignCycle, Content, FormatCapability, PiecePlan, PostUnit, SequenceExport, UserPost } from '@/types';
+import { registerManualPublication } from '@/lib/approval';
 
 export const ARCHITECTURE_LABELS: Record<string, string> = {
   historia: 'História e aprendizagem', perspectiva: 'Mudança de perspectiva', conceito: 'Exploração de conceito',
@@ -306,8 +307,6 @@ export async function exportSequence(post: UserPost, units: PostUnit[], caps: Fo
   return { post: p, pkg };
 }
 
-// Publicação manual (etapa A): o autor publicou o pacote exportado; registra a ocorrência.
-export const markPublishedManually = (post: UserPost, url?: string) => patchPost(post.id, {
-  status: 'published', published_url: url || null, published_at: new Date().toISOString(), published_date: new Date().toISOString(),
-  metadata: { ...post.metadata, published_manually: true, published_version: post.version },
-} as Partial<UserPost>);
+// Publicação manual (etapa A): o autor publicou o pacote exportado; registra a ocorrência como
+// resultado CONFIRMADO (register_manual_publication) — mesmo registro da publicação automática.
+export const markPublishedManually = (post: UserPost, url?: string) => registerManualPublication(post.id, url || null);

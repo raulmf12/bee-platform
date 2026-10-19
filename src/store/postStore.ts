@@ -12,6 +12,10 @@ interface PostState {
   get: (id: string) => UserPost | undefined;
   create: (input: Parameters<typeof postApi.create>[0]) => Promise<UserPost>;
   update: (id: string, patch: Partial<UserPost>) => Promise<void>;
+  // Relê a peça do banco depois de um comando do servidor (aprovar/agendar): a tela mostra o que foi GRAVADO.
+  refreshOne: (id: string) => Promise<UserPost | null>;
+  // Incorpora uma peça já devolvida pelo servidor (sem nova leitura).
+  applyServer: (post: UserPost) => void;
   setStatus: (id: string, status: PostStatus) => Promise<void>;
   delete: (id: string) => Promise<void>;
 }
@@ -42,6 +46,16 @@ export const usePostStore = create<PostState>((set, get) => ({
   update: async (id, patch) => {
     const updated = await postApi.update(id, patch);
     set({ posts: get().posts.map((p) => (p.id === id ? updated : p)) });
+  },
+
+  refreshOne: async (id) => {
+    const fresh = await postApi.get(id).catch(() => null);
+    if (fresh) set({ posts: get().posts.some((p) => p.id === id) ? get().posts.map((p) => (p.id === id ? fresh : p)) : [fresh, ...get().posts] });
+    return fresh;
+  },
+
+  applyServer: (post) => {
+    set({ posts: get().posts.map((p) => (p.id === post.id ? post : p)) });
   },
 
   setStatus: async (id, status) => {

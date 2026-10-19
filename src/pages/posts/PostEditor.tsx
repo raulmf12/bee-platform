@@ -24,7 +24,11 @@ import { useAuthStore } from '@/store/authStore';
 import { uploadAssetImage, hashDataUrl, toJpegDataUrl } from '@/lib/storage';
 import { edge } from '@/lib/edge';
 import { aiApi, almaApi, severidadeOf } from '@/lib/api';
-import { isoToLocalInput, localInputToIso, nowLocalInput } from '@/lib/schedule';
+import { formatInZone, isoToLocalInput, localInputToIso, nowLocalInput, scheduleTimeZone } from '@/lib/schedule';
+import { approvePieceOnServer, registerManualPublication } from '@/lib/approval';
+import { scheduleAt, unschedule } from '@/lib/scheduling';
+import { recordReviewSafely } from '@/lib/measurement';
+import { useReadiness } from '@/lib/readiness';
 import { extractSlotText } from '@/lib/templates/extract';
 import { generateHiveImage } from '@/lib/hive/runVisual';
 import { bgGatePending } from '@/lib/hive/bgGate';
@@ -59,7 +63,7 @@ export function PostEditor() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { posts, load, update } = usePostStore();
+  const { posts, load, update, refreshOne, applyServer } = usePostStore();
   const currentUser = useAuthStore((s) => s.currentUser);
 
   const post = posts.find((p) => p.id === id);
@@ -93,6 +97,15 @@ export function PostEditor() {
   // persistida DEPOIS que o editor abriu com uma cópia velha do store).
   const hydratedFabricRef = useRef<string | null>(null);
   const [canvasKey, setCanvasKey] = useState(0);
+  // Últimos valores na tela: o salvamento só limpa o "pendente" se nada mudou enquanto gravava.
+  const latestText = useRef({ title: '', briefing: '', caption: '' });
+  latestText.current = { title, briefing, caption };
+  const latestFabric = useRef<object | undefined>(undefined);
+  latestFabric.current = fabricJson;
+  // O que falta para agendar (mesma regra do servidor), relido a cada gravação da peça.
+  const readiness = useReadiness(post?.id, 'schedule', post?.updated_at);
+  // Autosave que falhou: avisa (uma vez) e mantém a edição pendente nesta tela.
+  const warnSave = (e: unknown) => toast.error(`Não foi possível salvar automaticamente: ${userMessage(e)} Suas alterações continuam nesta tela.`, { id: 'autosave-fail' });
 
   useEffect(() => {
     void load();
@@ -136,7 +149,7 @@ export function PostEditor() {
   // Auto-save de texto (1.5s)
   useEffect(() => {
     if (!textDirty || !post) return;
-    const t = setTimeout(() => void saveText(), 1500);
+    const t = setTimeout(() => void saveText().catch(warnSave), 1500);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [title, briefing, caption, textDirty]);
@@ -153,7 +166,7 @@ export function PostEditor() {
   // Auto-save de canvas (3s; dedup por hash)
   useEffect(() => {
     if (!canvasDirty || !post || !imageDataUrl) return;
-    const t = setTimeout(() => void saveCanvas(), 3000);
+    const t = setTimeout(() => void saveCanvas().catch(warnSave), 3000);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageDataUrl, fabricJson, canvasDirty]);
@@ -191,16 +204,17 @@ export function PostEditor() {
     );
   }
 
+  // SALVAR DE VERDADE (doc 02 §6): as funções lançam o erro para quem chamou — aprovar/agendar
+  // não seguem com conteúdo que não foi gravado. O autosave só limpa o "pendente" se o texto
+  // ainda é o mesmo que foi enviado (uma edição feita durante o salvamento continua pendente).
   async function saveText() {
     if (!post) return;
-    try {
-      // Cada save manual conta pra métrica de inteligência da IA (quanto o
-      // humano precisou mexer depois de gerado).
-      await update(post.id, { title, briefing, caption, manual_edits: (post.manual_edits ?? 0) + 1 });
-      setTextDirty(false);
-    } catch (e) {
-      console.error(e);
-    }
+    const sent = { title, briefing, caption };
+    // Cada save manual conta pra métrica de inteligência da IA (quanto o
+    // humano precisou mexer depois de gerado).
+    await update(post.id, { ...sent, manual_edits: (post.manual_edits ?? 0) + 1 });
+    const now = latestText.current;
+    if (now.title === sent.title && now.briefing === sent.briefing && now.caption === sent.caption) setTextDirty(false);
   }
 
   async function saveCanvas() {
@@ -213,34 +227,40 @@ export function PostEditor() {
     if (newObjs === 0 && storedObjs > 0) {
       console.warn(`[PostEditor] auto-save BLOQUEADO: canvas vazio sobre fabric com ${storedObjs} objeto(s) — hidratação falhou, não apaga a arte.`);
       setCanvasDirty(false);
-      // A arte salva foi preservada, mas a tela não carregou: avisar em vez de fingir que salvou.
-      toast.warning('A arte não carregou nesta tela (canvas em branco). Nada foi salvo por cima — dê um refresh antes de editar.', { id: 'canvas-blank' });
-      return;
+      // A arte salva foi preservada, mas a tela não carregou: não é um "salvo".
+      throw new Error('A arte não carregou nesta tela (canvas em branco). Nada foi salvo por cima — dê um refresh antes de editar.');
     }
-    try {
-      await update(post.id, {
-        carousel_fabric_json: [fabricJson],
-        manual_edits: (post.manual_edits ?? 0) + 1,
-      });
-      setCanvasDirty(false);
-      // AUTO-RENDER: todo post de imagem renderiza sozinho ao salvar (dedup por
-      // hash; silencioso; bloqueado só se o fundo de IA estiver pendente). Garante
-      // que rendered_slides fica sempre em dia — sem post agendado "sem imagem".
-      if (post.format !== ('video' as typeof post.format)) await exportImage({ silent: true });
-    } catch (e) {
-      console.error(e);
+    const sent = fabricJson;
+    await update(post.id, {
+      carousel_fabric_json: [sent],
+      manual_edits: (post.manual_edits ?? 0) + 1,
+    });
+    if (latestFabric.current === sent) setCanvasDirty(false);
+    // AUTO-RENDER: todo post de imagem renderiza sozinho ao salvar (dedup por
+    // hash; silencioso; bloqueado só se o fundo de IA estiver pendente). Garante
+    // que rendered_slides fica sempre em dia — sem post agendado "sem imagem".
+    if (post.format !== ('video' as typeof post.format)) await exportImage({ silent: true });
+  }
+
+  // Grava o que estiver pendente; lança com a mensagem do que NÃO foi salvo.
+  async function flushPending(): Promise<void> {
+    if (textDirty) {
+      try { await saveText(); } catch (e) { throw new Error(`Não foi possível salvar o texto: ${userMessage(e)}`); }
+    }
+    if (canvasDirty) {
+      try { await saveCanvas(); } catch (e) { throw new Error(`Texto salvo; não foi possível salvar a arte: ${userMessage(e)}`); }
     }
   }
 
   async function saveAll() {
     setSaving(true);
     try {
-      if (textDirty) await saveText();
-      if (canvasDirty) await saveCanvas();
-      // Garante a renderização mesmo quando nada estava "dirty" (ex: post antigo
-      // sem imagem aberto e salvo).
-      if (post && post.format !== ('video' as typeof post.format)) await exportImage({ silent: true });
-      toast.success('Salvo');
+      await flushPending();
+      // Garante a renderização mesmo quando nada estava "dirty" (ex: post antigo sem imagem).
+      const url = post && post.format !== ('video' as typeof post.format) ? await exportImage({ silent: true }) : 'ok';
+      toast.success(url ? 'Texto e arte salvos' : 'Edição salva; a imagem final ainda não foi preparada');
+    } catch (e) {
+      toast.error(`${userMessage(e, 'Não foi possível salvar.')} Suas alterações continuam nesta tela.`);
     } finally {
       setSaving(false);
     }
@@ -249,7 +269,17 @@ export function PostEditor() {
   async function setStatus(status: PostStatus) {
     if (!post) return;
     if (isPublishedHistory(post) && status !== 'archived') { toast.info(PUBLISHED_HISTORY_MSG); return; }
-    try { await update(post.id, { status }); } catch (e) { toast.error(userMessage(e, 'Não foi possível mudar o status.')); return; }
+    // Aprovar e agendar têm comandos próprios (prontidão, pacote); publicado manual é um registro.
+    if (status === 'approved') { await handleStandby(); return; }
+    if (status === 'scheduled') { toast.info('Para agendar, escolha a data e a hora no campo "Data de publicação".'); return; }
+    try {
+      if (status === 'published') {
+        if (!confirm('Marcar como publicado manualmente? Use quando você postou fora da Hive.')) return;
+        applyServer(await registerManualPublication(post.id, prompt('Link da publicação (opcional):') || null));
+      } else {
+        await update(post.id, { status, ...(post.status === 'scheduled' ? { scheduled_date: null } : {}) });
+      }
+    } catch (e) { toast.error(userMessage(e, 'Não foi possível mudar o status.')); return; }
     toast.success(`Status: ${POST_STATUS_LABELS[status]}`);
     if (status === 'published') {
       void almaApi.emitEvento({
@@ -358,10 +388,9 @@ export function PostEditor() {
       filename: isIg ? 'render.jpg' : 'render.png',
     });
     lastUploadedHash.current = hash;
-    // Exportar a imagem final = o humano aprovou o que está no canvas (o botão
-    // "Aprovar imagem" não existe mais). Satisfaz o portão de imagem do
-    // publish.ts para posts da Hive, valendo também pra publicação via cron.
-    await update(post.id, { rendered_slides: { slide1: publicUrl }, image_approved: true, image_status: 'approved' });
+    // Exportar PREPARA o arquivo; não é revisão humana (doc 02 §6.3 · T11). A aprovação do visual
+    // acontece no "Aprovar" (approve_piece), que confere que este é o arquivo apresentado.
+    await update(post.id, { rendered_slides: { slide1: publicUrl } });
     return publicUrl;
   }
 
@@ -369,69 +398,48 @@ export function PostEditor() {
   // agendado. Exporta a imagem automaticamente no formato certo. É também o
   // instrumento de medição da eficácia da IA: aprovar sem tocar no texto = a IA
   // acertou; aprovar depois de editar = errou, e o diff vira lição pro próximo.
+  // APROVAR (antes "Stand-by") — doc 02 §8.1: confirma salvamentos, prepara a imagem final, e o
+  // SERVIDOR aprova a peça com o arquivo apresentado (approve_piece). Sem data: fica "Peça aprovada ·
+  // sem data". Já agendada: aprova e MANTÉM a data (nunca desagenda em silêncio). A medição da IA
+  // vem depois e não derruba a aprovação se falhar (fica pendente para reprocessar).
   async function handleStandby() {
-    if (!post) return;
+    if (!post || !currentUser) return;
     setApproving(true);
     try {
-      // Mede o que está salvo, não o que está na tela: sem isso uma edição
-      // ainda no debounce do auto-save ficaria de fora do diff.
-      if (textDirty) await saveText();
-      if (canvasDirty) await saveCanvas();
-      // Auto-exporta a imagem no formato da plataforma (sem botão Exportar). Sem imagem final
-      // pronta (render nulo, canvas em branco, imagem de IA pendente) a peça NÃO é aprovada
-      // (HIVE-EST-02): o motivo já foi mostrado pelo exportImage.
+      try { await flushPending(); } catch (e) { toast.error(`Aprovação não concluída. ${userMessage(e)}`); return; }
+      let rendered: string | null = post.rendered_slides?.slide1 ?? null;
       if (post.format !== ('video' as typeof post.format)) {
-        const url = await exportImage();
-        if (!url) { toast.error('Stand-by não concluído: a imagem final não ficou pronta. A peça continua como estava.'); return; }
+        rendered = await exportImage();
+        if (!rendered) { toast.error('Stand-by não concluído: a imagem final não ficou pronta. A peça continua como estava.'); return; }
       }
+      let approved;
+      try { approved = await approvePieceOnServer(post.id, rendered); }
+      catch (e) { toast.error(`Não foi possível salvar esta aprovação: ${userMessage(e)}`); return; }
+      applyServer(approved);
+      const where = approved.status === 'scheduled' && approved.scheduled_date
+        ? `continua agendada para ${formatInZone(approved.scheduled_date)}` : 'aprovada · sem data';
 
-      // Posts de EXEMPLO nunca entram na medição/aprendizado da IA.
-      if ((post.metadata as { is_sample?: boolean })?.is_sample) {
-        await update(post.id, { status: 'approved', scheduled_date: null });
-        toast.success('Stand-by — aprovado sem data (post de exemplo, não entra na medição)');
-        return;
-      }
-
-      const variation = await aiApi.variationForPost(post.id);
-      if (!variation) {
-        // Post sem geração pristina (feito antes da medição existir, ou
-        // criado à mão). Aprova, mas não inventa uma medição.
-        await update(post.id, { status: 'approved', scheduled_date: null });
-        toast.success('Stand-by — aprovado sem data (não foi gerado pela IA, não entra na medição)');
-        return;
-      }
-
+      // Posts de EXEMPLO e peças sem geração pristina não entram na medição.
+      const variation = (post.metadata as { is_sample?: boolean })?.is_sample ? null : await aiApi.variationForPost(post.id).catch(() => null);
+      if (!variation) { toast.success(`Peça ${where}.`); return; }
       const quoteFinal = extractSlotText(fabricJson ?? post.carousel_fabric_json?.[0]) ?? '';
-      const review = await aiApi.recordReview({
-        post_id: post.id,
-        variation,
-        quote_final: quoteFinal,
-        caption_final: caption,
-        // Faceta imagem: dormente. Quando os templates gerarem imagem por IA,
-        // passe image_original (a que a IA gerou) e image_final (a do canvas) —
-        // aí has_image liga e a imagem entra na medição do segmento.
-      });
-
-      await update(post.id, { status: 'approved', scheduled_date: null });
+      const m = await recordReviewSafely(currentUser.id, { post_id: post.id, variation, quote_final: quoteFinal, caption_final: caption });
+      if (!m.review) { toast.success(`Peça ${where}.${m.state === 'pending' ? ' (A medição da IA fica para depois.)' : ''}`); return; }
 
       // Régua graduada (item 2): ajuste cosmético não é erro cheio e não vira
       // lição — destilar de uma vírgula gasta uma chamada Gemini à toa.
-      const sev = severidadeOf(review);
+      const sev = severidadeOf(m.review);
       if (sev === 'reescrita') {
-        toast.success('Stand-by — a IA vai aprender com a sua correção');
+        toast.success(`Peça ${where} — a IA vai aprender com a sua correção`);
         // Fire-and-forget: destilar a licao nao pode segurar a aprovacao.
-        void edge.learnFromCorrection({ review_id: review.id }).catch((e) => {
-          console.warn('[learn-from-correction]', e);
-        });
+        void edge.learnFromCorrection({ review_id: m.review.id }).catch((e) => console.warn('[learn-from-correction]', e));
       } else if (sev === 'ajuste') {
-        toast.success('Stand-by — só um ajuste fino, a IA quase acertou');
+        toast.success(`Peça ${where} — só um ajuste fino, a IA quase acertou`);
       } else {
-        toast.success('Stand-by — aprovado sem alterações, a IA acertou 🎯');
+        toast.success(`Peça ${where} — sem alterações, a IA acertou 🎯`);
       }
-
       void almaApi.emitEvento({
-        tipo: sev === 'reescrita' ? 'post_corrigido'
-          : sev === 'ajuste' ? 'post_ajustado' : 'post_aprovado_intacto',
+        tipo: sev === 'reescrita' ? 'post_corrigido' : sev === 'ajuste' ? 'post_ajustado' : 'post_aprovado_intacto',
         descricao:
           sev === 'reescrita' ? `Reescrita em "${(post.title ?? '').slice(0, 50)}" — a IA aprende com ela`
           : sev === 'ajuste' ? `Ajuste fino em "${(post.title ?? '').slice(0, 50)}"`
@@ -440,7 +448,7 @@ export function PostEditor() {
       });
     } catch (e) {
       console.error(e);
-      toast.error(`Erro no stand-by: ${(e as Error).message.slice(0, 140)}`);
+      toast.error(`Erro ao aprovar: ${userMessage(e)}`);
     } finally {
       setApproving(false);
     }
@@ -526,8 +534,7 @@ export function PostEditor() {
   async function handlePublishLive() {
     if (!post) return;
     // Salvar texto/canvas pendente antes (o export usa o canvas mais recente).
-    if (textDirty) await saveText();
-    if (canvasDirty) await saveCanvas();
+    try { await flushPending(); } catch (e) { toast.error(`Publicação não iniciada. ${userMessage(e)}`); return; }
 
     const platformLabel = post.platform === 'instagram' ? 'Instagram' : 'LinkedIn';
     const isVideo = post.format === ('video' as typeof post.format);
@@ -582,29 +589,38 @@ export function PostEditor() {
   // Agendar RENDERIZA a imagem junto (senão o post agendado sai sem imagem e o
   // publicador/cron falha na hora — foi o que sumiu um post agendado). Setar a
   // data = exportar + agendar. Bloqueado pelo portão do fundo de IA (D/E) se pendente.
+  // Agendar pelo editor = o mesmo comando da agenda (schedule-piece): prontidão + pacote imutável.
+  // Peça ainda não aprovada: aprovar o que está na tela faz parte de agendar daqui (o produtor está
+  // vendo a peça). Limpar a data retira da agenda.
   async function handleSchedule(value: string) {
     if (!post) return;
     if (isPublishedHistory(post)) { toast.info(PUBLISHED_HISTORY_MSG); return; }
-    if (!value) {
-      await update(post.id, {
-        scheduled_date: null,
-        status: post.status === 'scheduled' ? 'approved' : post.status,
-      });
-      toast.success('Agendamento removido');
-      return;
+    try {
+      if (!value) {
+        if (post.status !== 'scheduled' && !post.scheduled_date) return;
+        await unschedule(post.id);
+        await refreshOne(post.id);
+        toast.success('Removido da agenda — a peça continua aprovada.');
+        return;
+      }
+      const iso = localInputToIso(value);
+      if (!iso || new Date(iso).getTime() < Date.now()) { toast.error('Não dá pra agendar no passado.'); return; }
+      try { await flushPending(); } catch (e) { toast.error(`Agendamento não feito. ${userMessage(e)}`); return; }
+      let current = post;
+      if (post.format !== ('video' as typeof post.format)) {
+        const url = await exportImage();
+        if (!url) return; // exportImage já avisou (fundo pendente ou canvas não pronto)
+        if (!['approved', 'scheduled'].includes(post.status)) current = await approvePieceOnServer(post.id, url);
+      } else if (!['approved', 'scheduled'].includes(post.status)) {
+        current = await approvePieceOnServer(post.id, null);
+      }
+      const r = await scheduleAt(current, iso);
+      await refreshOne(post.id);
+      toast.success(r.intent === 'reschedule' ? `Data atualizada para ${formatInZone(iso)}. O conteúdo programado permanece o mesmo.` : `Programado para ${formatInZone(iso)}. Esta é a versão que será publicada.`,
+        { action: { label: 'Ver na agenda', onClick: () => navigate(`/agenda?focus=${post.id}`) } });
+    } catch (e) {
+      toast.error(userMessage(e, 'Não foi possível agendar.'));
     }
-    const iso = localInputToIso(value);
-    if (iso && new Date(iso).getTime() < Date.now()) {
-      toast.error('Não dá pra agendar no passado.');
-      return;
-    }
-    if (post.format !== ('video' as typeof post.format)) {
-      const url = await exportImage();
-      if (!url) return; // exportImage já avisou (fundo pendente ou canvas não pronto)
-    }
-    try { await update(post.id, { scheduled_date: iso, status: 'scheduled' }); }
-    catch (e) { toast.error(userMessage(e, 'Não foi possível agendar.')); return; }
-    toast.success('Agendado — imagem renderizada.');
   }
 
   const isDirty = textDirty || canvasDirty;
@@ -627,7 +643,7 @@ export function PostEditor() {
               setTitle(e.target.value);
               setTextDirty(true);
             }}
-            onBlur={() => { if (textDirty) void saveText(); }}
+            onBlur={() => { if (textDirty) void saveText().catch(warnSave); }}
             placeholder="Titulo do post"
             className="h-8 max-w-md border-transparent bg-transparent text-base font-semibold focus-visible:border-input"
           />
@@ -664,10 +680,10 @@ export function PostEditor() {
               onClick={() => void handleStandby()}
               disabled={approving}
               className="border-emerald-500 text-emerald-600 hover:bg-emerald-50"
-              title="Aprovar sem data — exporta a imagem e deixa o post pronto no Kanban (aprovado, sem agendamento)"
+              title={post.status === 'scheduled' ? 'Aprovar a peça como está — continua agendada na mesma data' : 'Peça aprovada · sem data: prepara a imagem final e deixa a peça pronta para agendar'}
             >
               {approving ? <Loader2 className="h-4 w-4 animate-spin" /> : <PauseCircle className="h-4 w-4" />}
-              Stand-by
+              {post.status === 'scheduled' ? 'Aprovar' : 'Aprovar · Stand-by'}
             </Button>
           )}
           {isAlreadyPublished ? (
@@ -812,7 +828,7 @@ export function PostEditor() {
                     setBriefing(e.target.value);
                     setTextDirty(true);
                   }}
-                  onBlur={() => { if (textDirty) void saveText(); }}
+                  onBlur={() => { if (textDirty) void saveText().catch(warnSave); }}
                   className="text-xs"
                 />
               </div>
@@ -828,12 +844,18 @@ export function PostEditor() {
                     setCaption(e.target.value);
                     setTextDirty(true);
                   }}
-                  onBlur={() => { if (textDirty) void saveText(); }}
+                  onBlur={() => { if (textDirty) void saveText().catch(warnSave); }}
                   className="text-xs leading-relaxed"
                 />
                 <p className="text-[10px] text-muted-foreground">{caption.length} chars</p>
               </div>
 
+              {readiness && !readiness.ready && !isPublishedHistory(post) && (
+                <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-[11px]" data-testid="readiness-missing">
+                  <p className="font-semibold">Para agendar falta:</p>
+                  <ul className="ml-4 list-disc">{readiness.missing.map((m, i) => <li key={i}>{m.reason}</li>)}</ul>
+                </div>
+              )}
               <div className="space-y-2 pt-2 border-t border-border">
                 <Label htmlFor="sched">Data de publicação (opcional)</Label>
                 <Input
@@ -847,7 +869,7 @@ export function PostEditor() {
                 />
                 <p className="text-[10px] text-muted-foreground">
                   {post.scheduled_date
-                    ? `Publicação: ${new Date(post.scheduled_date).toLocaleString('pt-BR')}`
+                    ? `Publicação: ${formatInZone(post.scheduled_date)} (${scheduleTimeZone().replace('_', ' ')})`
                     : 'Sem data — fica no Kanban como está'}
                 </p>
               </div>

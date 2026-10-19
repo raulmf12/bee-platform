@@ -44,7 +44,7 @@ import { beeApi } from '@/lib/api';
 import { edge } from '@/lib/edge';
 import {
   DEFAULT_DISTRIBUTION, atTime, cadenceFor, distributeGuided, distributeStandby,
-  editorialGapDays, guideFor, isoToLocalInput, localInputToIso, mergePrefs, nowLocalInput, weekKey,
+  editorialGapDays, guideFor, isoToLocalInput, localInputToIso, mergePrefs, nowLocalInput, toZoned, weekKey,
   type GuidedPlatformCfg, type MergedPrefs,
 } from '@/lib/schedule';
 import {
@@ -53,6 +53,8 @@ import {
 } from '@/types';
 import { cn } from '@/lib/utils';
 import { isPublishedHistory, PUBLISHED_HISTORY_MSG, userMessage } from '@/lib/errors';
+import { scheduleAt, unschedule } from '@/lib/scheduling';
+import { db } from '@/lib/db';
 import { toast } from 'sonner';
 
 const NEUTRAL = '#94A3B8';
@@ -86,18 +88,20 @@ const dayKey = (d: Date) => format(d, 'yyyy-MM-dd');
 const isPostDrag = (e: React.DragEvent) => e.dataTransfer.types.includes('text/plain');
 
 // Linha do plano em lote + resultado REAL da gravação (doc 02 §10): só "ok" conta como agendada.
-type PlanRow = { post: UserPost; date: string; time: string; reason: string; result?: { state: 'ok' | 'skipped' | 'error'; msg: string } };
+type PlanRow = { post: UserPost; date: string; time: string; reason: string; command_id: string; result?: { state: 'ok' | 'skipped' | 'error'; msg: string } };
+type StoredPlanRow = Omit<PlanRow, 'post'> & { post_id: string };
 
 // Data em que o post "acontece" no calendário.
+// Devolvida na hora de parede do fuso da operação (grade, HH:mm), não do navegador.
 function eventDate(p: UserPost): Date | null {
-  if (p.scheduled_date) return new Date(p.scheduled_date);
-  if (p.status === 'published' && p.published_at) return new Date(p.published_at);
+  if (p.scheduled_date) return toZoned(new Date(p.scheduled_date));
+  if (p.status === 'published' && p.published_at) return toZoned(new Date(p.published_at));
   return null;
 }
 
 export function Agenda() {
   const navigate = useNavigate();
-  const { posts, load, update } = usePostStore();
+  const { posts, load, refreshOne } = usePostStore();
   const settings = useAuthStore((s) => s.settings);
   const updateSettings = useAuthStore((s) => s.updateSettings);
 
@@ -120,6 +124,11 @@ export function Agenda() {
   const [metrics, setMetrics] = useState<PostMetrics[]>([]);
   const [acjCyclePlans, setAcjCyclePlans] = useState<Array<{ cycle_id: string; counts: Record<string, number> }>>([]);
   useEffect(() => { acjCycleApi.listActive().then(setAcjCyclePlans).catch(() => setAcjCyclePlans([])); }, []);
+  // Plano em lote que ficou com pendências (aberto em outra visita ou antes de recarregar a página).
+  useEffect(() => {
+    db.select<{ id: string; summary: string | null; rows: StoredPlanRow[] }>('schedule_plans', { status: 'eq.open', select: 'id,summary,rows', order: 'created_at.desc', limit: '1' })
+      .then((r) => setOpenPlan(r[0] ?? null)).catch(() => setOpenPlan(null));
+  }, []);
   const setLens = (id: string | null) => {
     const n = new URLSearchParams(searchParams);
     if (id) n.set('campaign', id); else n.delete('campaign');
@@ -130,13 +139,34 @@ export function Agenda() {
   const [hiddenPlatforms, setHiddenPlatforms] = useState<Set<string>>(new Set());
   const [hiddenEditorials, setHiddenEditorials] = useState<Set<string>>(new Set());
 
+  // "Ver na agenda" (doc 02 §11 · T27): ?focus=<peça> abre o mês da data confirmada, mostra a peça
+  // mesmo que um filtro/lente a escondesse e abre o painel dela.
+  const focusId = searchParams.get('focus');
+  useEffect(() => {
+    if (!focusId) return;
+    const p = posts.find((x) => x.id === focusId);
+    if (!p) return;
+    const d = eventDate(p);
+    if (d) setCursor(startOfMonth(d));
+    setHiddenPlatforms(new Set());
+    setHiddenEditorials(new Set());
+    const n = new URLSearchParams(searchParams);
+    n.delete('focus');
+    if (lens && p.campaign_id !== lens) n.delete('campaign');
+    setSearchParams(n, { replace: true });
+    setSelectedId(p.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId, posts]);
+
   // Config da distribuição (diálogo)
   const [configOpen, setConfigOpen] = useState(false);
   const [cfg, setCfg] = useState<MergedPrefs>(DEFAULT_DISTRIBUTION);
 
   // Plano proposto (revisão antes de aplicar). Cai aqui tanto o modo IA quanto o
   // semi-automático. Cada linha traz o porquê.
-  const [plan, setPlan] = useState<{ summary?: string; rows: PlanRow[] } | null>(null);
+  const [plan, setPlan] = useState<{ id?: string; summary?: string; rows: PlanRow[] } | null>(null);
+  // Plano em lote salvo com pendências (sobrevive a recarregar a página — doc 02 §10.4).
+  const [openPlan, setOpenPlan] = useState<{ id: string; summary: string | null; rows: StoredPlanRow[] } | null>(null);
   const [applying, setApplying] = useState(false);
 
   // Assistente semi-automático (guiado): pergunta frequência/dias/horários por
@@ -313,8 +343,9 @@ export function Agenda() {
       when = next;
     }
     try {
-      await update(postId, { status: 'scheduled', scheduled_date: when.toISOString() });
-      toast.success(`Agendado pra ${format(when, "d 'de' MMM 'às' HH:mm", { locale: ptBR })}`);
+      await scheduleAt(post, when.toISOString());
+      await refreshOne(postId);
+      toast.success(`Agendado pra ${format(toZoned(when), "d 'de' MMM 'às' HH:mm", { locale: ptBR })}`);
     } catch (e) {
       console.error(e);
       toast.error(userMessage(e, 'Erro ao agendar.'));
@@ -333,8 +364,9 @@ export function Agenda() {
       return;
     }
     try {
-      await update(postId, { status: 'scheduled', scheduled_date: when.toISOString() });
-      toast.success(`Agendado pra ${format(when, "d 'de' MMM 'às' HH:mm", { locale: ptBR })}`);
+      await scheduleAt(post, when.toISOString());
+      await refreshOne(postId);
+      toast.success(`Agendado pra ${format(toZoned(when), "d 'de' MMM 'às' HH:mm", { locale: ptBR })}`);
     } catch (e) {
       console.error(e);
       toast.error(userMessage(e, 'Erro ao agendar.'));
@@ -344,7 +376,8 @@ export function Agenda() {
   async function backToStandby(post: UserPost) {
     if (blockedByHistory(post)) return;
     try {
-      await update(post.id, { status: 'approved', scheduled_date: null });
+      await unschedule(post.id);
+      await refreshOne(post.id);
       toast.info('Removido da agenda — voltou pra fila.');
       setSelected(null);
     } catch (e) {
@@ -421,13 +454,13 @@ export function Agenda() {
       const rows = res.plan
         .map((r): PlanRow | null => {
           const post = byId.get(r.post_id);
-          return post ? { post, date: r.date, time: r.time, reason: r.reason } : null;
+          return post ? { post, date: r.date, time: r.time, reason: r.reason, command_id: crypto.randomUUID() } : null;
         })
         .filter((x): x is PlanRow => x !== null)
         .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
 
       if (!rows.length) throw new Error('plano vazio');
-      setPlan({ summary: res.summary, rows });
+      setPlan({ id: await savePlan(res.summary, rows), summary: res.summary, rows });
     } catch (e) {
       console.error(e);
       // Fallback: se a IA falhar, monta o plano pela regra local pra você revisar.
@@ -436,12 +469,13 @@ export function Agenda() {
       const rows = local
         .map(({ postId, date }): PlanRow | null => {
           const post = byId.get(postId);
-          return post ? { post, date: format(date, 'yyyy-MM-dd'), time: format(date, 'HH:mm'), reason: 'Regra local (IA indisponível)' } : null;
+          return post ? { post, date: format(toZoned(date), 'yyyy-MM-dd'), time: format(toZoned(date), 'HH:mm'), reason: 'Regra local (IA indisponível)', command_id: crypto.randomUUID() } : null;
         })
         .filter((x): x is PlanRow => x !== null)
         .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
       if (rows.length) {
-        setPlan({ summary: 'A IA não respondeu; usei a distribuição local. Revise e ajuste.', rows });
+        const summary = 'A IA não respondeu; usei a distribuição local. Revise e ajuste.';
+        setPlan({ id: await savePlan(summary, rows), summary, rows });
         toast.warning('IA indisponível — usei a regra local. Revise antes de aplicar.');
       } else {
         toast.error('Erro na distribuição.');
@@ -449,6 +483,41 @@ export function Agenda() {
     } finally {
       setDistributing(false);
     }
+  }
+
+  // Plano em lote durável (schedule_plans): linhas + command_id de cada uma.
+  async function savePlan(summary: string | undefined, rows: PlanRow[]): Promise<string | undefined> {
+    const uid = useAuthStore.getState().currentUser?.id;
+    if (!uid) return undefined;
+    const stored: StoredPlanRow[] = rows.map(({ post, ...r }) => ({ ...r, post_id: post.id }));
+    const [row] = await db.insert<{ id: string }>('schedule_plans', { user_id: uid, summary: summary ?? null, rows: stored }).catch(() => [] as Array<{ id: string }>);
+    return row?.id;
+  }
+  async function storePlan(id: string | undefined, rows: PlanRow[], status: 'open' | 'done' | 'dismissed') {
+    if (!id) return;
+    const stored: StoredPlanRow[] = rows.map(({ post, ...r }) => ({ ...r, post_id: post.id }));
+    await db.update('schedule_plans', { id: `eq.${id}` }, { rows: stored, status, updated_at: new Date().toISOString() }).catch(() => {});
+    setOpenPlan(status === 'open' ? { id, summary: plan?.summary ?? null, rows: stored } : null);
+  }
+  // Fechar o plano: sem nada aplicado, descarta; com algo aplicado, fica guardado para retomar.
+  function closePlan() {
+    if (!plan) return;
+    const applied = plan.rows.some((r) => r.result?.state === 'ok');
+    void storePlan(plan.id, plan.rows, applied ? 'open' : 'dismissed');
+    setPlan(null);
+  }
+  // Retomar: o resultado de cada linha vem do comando gravado no servidor (não da memória).
+  async function resumePlan() {
+    if (!openPlan) return;
+    const ids = openPlan.rows.map((r) => r.command_id);
+    const done = new Set((await db.select<{ command_id: string }>('schedule_commands', { command_id: `in.(${ids.join(',')})`, select: 'command_id' }).catch(() => [])).map((c) => c.command_id));
+    const rows: PlanRow[] = openPlan.rows.flatMap((r) => {
+      const post = posts.find((p) => p.id === r.post_id);
+      if (!post) return [];
+      const result: PlanRow['result'] = done.has(r.command_id) ? { state: 'ok', msg: 'Já agendado por este plano.' } : r.result?.state === 'ok' ? undefined : r.result;
+      return [{ ...r, post, result }];
+    });
+    setPlan({ id: openPlan.id, summary: openPlan.summary ?? undefined, rows });
   }
 
   // Aplica o plano revisado, linha a linha. A confirmação conta só o que foi GRAVADO: linha vencida,
@@ -469,8 +538,9 @@ export function Agenda() {
       else if (when.getTime() < Date.now()) result = { state: 'skipped', msg: 'O horário já passou — escolha uma nova data.' };
       else {
         try {
-          await update(row.post.id, { status: 'scheduled', scheduled_date: when.toISOString() });
-          result = { state: 'ok', msg: `Agendado para ${format(when, "d 'de' MMM 'às' HH:mm", { locale: ptBR })}` };
+          // command_id estável por linha: retomar/repetir não agenda duas vezes nem regrava o que já foi
+          const r = await scheduleAt(current, when.toISOString(), { commandId: row.command_id, planId: plan.id ?? null });
+          result = { state: 'ok', msg: `${r.replayed ? 'Já estava aplicado' : 'Agendado'} para ${format(toZoned(when), "d 'de' MMM 'às' HH:mm", { locale: ptBR })}` };
           if (!firstDate) firstDate = when;
         } catch (e) {
           console.error(e);
@@ -480,11 +550,13 @@ export function Agenda() {
       rows[i] = { ...row, result };
     }
     setApplying(false);
+    await Promise.all(rows.filter((r) => r.result?.state === 'ok').map((r) => refreshOne(r.post.id)));
     const ok = rows.filter((r) => r.result?.state === 'ok').length;
     const newly = ok - plan.rows.filter((r) => r.result?.state === 'ok').length;
     const skipped = rows.filter((r) => r.result?.state === 'skipped').length;
     const failed = rows.filter((r) => r.result?.state === 'error').length;
     if (firstDate) setCursor(startOfMonth(firstDate));
+    await storePlan(plan.id, rows, !skipped && !failed ? 'done' : 'open');
     if (!skipped && !failed) {
       toast.success(`${newly} agendamento(s) confirmado(s).`);
       setPlan(null);
@@ -526,7 +598,7 @@ export function Agenda() {
     patchWiz(pl, { times: cur.times.includes(time) ? cur.times.filter((t) => t !== time) : [...cur.times, time] });
   }
 
-  function generateGuidedPlan() {
+  async function generateGuidedPlan() {
     const toPlace = standby;
     if (!toPlace.length) { setWizardOpen(false); return; }
 
@@ -556,7 +628,7 @@ export function Agenda() {
 
     const byId = new Map(toPlace.map((p) => [p.id, p]));
     const rows = result
-      .map(({ postId, date }) => {
+      .map(({ postId, date }): PlanRow | null => {
         const post = byId.get(postId);
         if (!post) return null;
         // "Porquê" qualitativo: junta o motivo do dia + do horário (do guia).
@@ -564,9 +636,10 @@ export function Agenda() {
         const dSug = g.weekdays.find((d) => d.dow === date.getDay());
         const tSug = g.times.find((t) => t.time === format(date, 'HH:mm'));
         const reason = [dSug?.reason, tSug?.reason].filter(Boolean).join(' · ') || 'Semi-automático';
-        return { post, date: format(date, 'yyyy-MM-dd'), time: format(date, 'HH:mm'), reason };
+        const z = toZoned(date);
+        return { post, date: format(z, 'yyyy-MM-dd'), time: format(z, 'HH:mm'), reason, command_id: crypto.randomUUID() as string };
       })
-      .filter((x): x is { post: UserPost; date: string; time: string; reason: string } => x !== null)
+      .filter((x): x is PlanRow => x !== null)
       .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
 
     setWizardOpen(false);
@@ -575,10 +648,8 @@ export function Agenda() {
       return;
     }
     const missing = toPlace.length - rows.length;
-    setPlan({
-      summary: `Semi-automático${missing > 0 ? ` · ${missing} post(s) não couberam nos dias escolhidos (revise ou rode de novo com mais dias)` : ''}`,
-      rows,
-    });
+    const summary = `Semi-automático${missing > 0 ? ` · ${missing} post(s) não couberam nos dias escolhidos (revise ou rode de novo com mais dias)` : ''}`;
+    setPlan({ id: await savePlan(summary, rows), summary, rows });
   }
 
   function openConfig() {
@@ -711,8 +782,10 @@ export function Agenda() {
     if (!iso) return;
     if (new Date(iso).getTime() < Date.now()) { toast.error('Não dá pra agendar no passado.'); return; }
     try {
-      await update(selected.id, { status: 'scheduled', scheduled_date: iso });
-      toast.success('Reagendado.');
+      await scheduleAt(selected, iso);
+      const fresh = await refreshOne(selected.id);
+      if (fresh) setSelected(fresh);
+      toast.success(selected.status === 'scheduled' ? 'Data atualizada. O conteúdo programado permanece o mesmo.' : 'Agendado.');
     } catch (e) {
       console.error(e);
       toast.error(userMessage(e, 'Erro ao reagendar.'));
@@ -937,6 +1010,14 @@ export function Agenda() {
             ))}
           </ul>
         </section>
+      )}
+
+      {openPlan && !plan && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-accent/50 bg-accent/5 px-3 py-2 text-sm" data-testid="open-plan-banner">
+          <span className="flex-1">Há um plano de distribuição com pendências ({openPlan.rows.filter((r) => r.result?.state !== 'ok').length} de {openPlan.rows.length} linhas).</span>
+          <Button size="sm" variant="accent" onClick={() => void resumePlan()}>Retomar pendências</Button>
+          <Button size="sm" variant="ghost" onClick={() => { void db.update('schedule_plans', { id: `eq.${openPlan.id}` }, { status: 'dismissed' }).catch(() => {}); setOpenPlan(null); }}>Descartar</Button>
+        </div>
       )}
 
       <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
@@ -1281,7 +1362,7 @@ export function Agenda() {
       </Dialog>
 
       {/* Plano proposto pela IA — revisão antes de aplicar (curadoria humana). */}
-      <Dialog open={!!plan} onOpenChange={(o) => !o && !applying && setPlan(null)}>
+      <Dialog open={!!plan} onOpenChange={(o) => !o && !applying && closePlan()}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -1337,7 +1418,7 @@ export function Agenda() {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPlan(null)} disabled={applying}>Cancelar</Button>
+            <Button variant="outline" onClick={closePlan} disabled={applying}>{plan?.rows.some((r) => r.result?.state === 'ok') ? 'Fechar' : 'Cancelar'}</Button>
             <Button variant="accent" onClick={() => void applyPlan()} disabled={applying}>
               {applying ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
               {plan?.rows.some((r) => r.result) ? 'Aplicar pendentes' : 'Aplicar'} {plan ? `(${plan.rows.filter((r) => r.result?.state !== 'ok').length})` : ''}

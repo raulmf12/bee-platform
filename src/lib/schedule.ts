@@ -95,34 +95,71 @@ export function timeForPlatform(prefs: MergedPrefs, platform: Platform): string 
 // save gravando string local crua) — daí o bug do "13h vira 10h".
 // ---------------------------------------------------------------------------
 
-// ISO (UTC) -> "yyyy-MM-ddTHH:mm" na hora LOCAL (valor do input datetime-local).
+// ---------------------------------------------------------------------------
+// FUSO DA OPERAÇÃO (Estabilização · doc 02 §9.3): o banco guarda o INSTANTE (UTC);
+// entrada e exibição usam o fuso do produtor (user_settings.timezone, padrão
+// America/Sao_Paulo) — não o do navegador. Assim "13h" é 13h em São Paulo mesmo
+// abrindo a Hive de outro fuso, e o horário inexistente/ambíguo de troca de
+// horário de verão cai num instante bem definido.
+// ---------------------------------------------------------------------------
+let TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Sao_Paulo'; } catch { return 'America/Sao_Paulo'; } })();
+export function setScheduleTimeZone(tz?: string | null): void {
+  if (!tz) return;
+  try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); TZ = tz; } catch { /* fuso inválido: mantém o atual */ }
+}
+export const scheduleTimeZone = (): string => TZ;
+
+// Diferença (minutos) entre o relógio do fuso e o UTC naquele instante.
+export function tzOffsetMinutes(d: Date, tz = TZ): number {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(d);
+  const g = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  return Math.round((Date.UTC(g('year'), g('month') - 1, g('day'), g('hour'), g('minute'), g('second')) - Math.floor(d.getTime() / 1000) * 1000) / 60000);
+}
+// Hora de parede (no fuso) → instante.
+export function wallTimeToInstant(y: number, mo: number, d: number, h: number, mi: number, tz = TZ): Date {
+  const guess = Date.UTC(y, mo, d, h, mi);
+  const off = tzOffsetMinutes(new Date(guess), tz);
+  let inst = guess - off * 60000;
+  const off2 = tzOffsetMinutes(new Date(inst), tz);
+  if (off2 !== off) inst = guess - off2 * 60000;            // perto da troca de horário
+  return new Date(inst);
+}
+// Instante → Date cujos getters locais mostram a hora de parede do fuso (para grade/format).
+export function toZoned(d: Date, tz = TZ): Date {
+  return new Date(d.getTime() + (tzOffsetMinutes(d, tz) + d.getTimezoneOffset()) * 60000);
+}
+const pad = (n: number) => String(n).padStart(2, '0');
+const wallString = (z: Date) => `${z.getFullYear()}-${pad(z.getMonth() + 1)}-${pad(z.getDate())}T${pad(z.getHours())}:${pad(z.getMinutes())}`;
+
+// ISO (UTC) -> "yyyy-MM-ddTHH:mm" na hora do FUSO (valor do input datetime-local).
 export function isoToLocalInput(iso?: string | null): string {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 16);
+  return wallString(toZoned(d));
 }
 
-// "yyyy-MM-ddTHH:mm" (hora LOCAL, vindo do input) -> ISO em UTC pra salvar.
+// "yyyy-MM-ddTHH:mm" (hora no FUSO, vinda do input) -> ISO em UTC pra salvar.
 export function localInputToIso(value: string): string | undefined {
-  if (!value) return undefined;
-  const d = new Date(value); // datetime-local sem timezone é interpretado como LOCAL
-  if (Number.isNaN(d.getTime())) return undefined;
-  return d.toISOString();
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value ?? '');
+  if (!m) return undefined;
+  return wallTimeToInstant(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).toISOString();
 }
 
-// "Agora" no formato do input datetime-local — pra usar em min= (bloquear passado).
+// "Agora" no formato do input datetime-local (no fuso) — pra usar em min= (bloquear passado).
 export function nowLocalInput(): string {
-  const d = new Date();
-  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 16);
+  return wallString(toZoned(new Date()));
 }
 
-// Aplica o horário 'HH:mm' num dia (zera segundos/ms).
+// Aplica o horário 'HH:mm' (no fuso) ao dia do calendário → instante real.
 export function atTime(day: Date, hhmm: string): Date {
   const { h, m } = parseTime(hhmm);
-  return set(startOfDay(day), { hours: h, minutes: m, seconds: 0, milliseconds: 0 });
+  return wallTimeToInstant(day.getFullYear(), day.getMonth(), day.getDate(), h, m);
+}
+
+// Data/hora legível no fuso da operação.
+export function formatInZone(iso: string | Date, opts: Intl.DateTimeFormatOptions = { dateStyle: 'short', timeStyle: 'short' }): string {
+  return new Date(iso).toLocaleString('pt-BR', { ...opts, timeZone: TZ });
 }
 
 // Ritmo mínimo (em dias) entre dois posts da MESMA editoria, lido do texto livre

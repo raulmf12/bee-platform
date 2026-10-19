@@ -39,7 +39,7 @@ export const E2E_OWNED_TABLES = [
   'ai_variations',
   'ai_generations',
   'post_metrics',
-  'post_unit_publications', 'post_publications', 'schedule_commands',   // antes da peça (pacotes saem em cascata com ela)
+  'post_unit_publications', 'post_publications', 'schedule_commands', 'schedule_plans', 'ai_measurement_events',   // antes da peça (pacotes saem em cascata com ela)
   'user_posts',
   'contents',
   'ideas',

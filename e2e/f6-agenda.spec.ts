@@ -1,6 +1,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { addDays, format } from 'date-fns';
-import { cleanupE2EData, sql } from './helpers/admin';
+import { readFileSync } from 'node:fs';
+import { cleanupE2EData, cleanupE2EStorage, sql, uploadE2EImage } from './helpers/admin';
 import { mockEdge } from './helpers/mocks';
 import { seedAccounts, seedCampaign } from './helpers/fixtures';
 import { e2eUser } from './helpers/env';
@@ -9,7 +10,10 @@ import { e2eUser } from './helpers/env';
 // arrasto, painel lateral com sugestões da Hive, IA distribuir por campanha).
 test.describe('F6 · agenda orquestradora', () => {
   test.beforeEach(async () => { await cleanupE2EData(); });
-  test.afterAll(async () => { await cleanupE2EData(); });
+  test.afterAll(async () => { await cleanupE2EData(); await cleanupE2EStorage(); });
+  // Agendar fecha o pacote imutável copiando a imagem final: as peças precisam de um arquivo real.
+  let IMG = '';
+  test.beforeAll(async () => { IMG = await uploadE2EImage('agenda-peca.jpg', readFileSync('e2e/fixtures/peca-a.jpg')); });
 
   const tomorrow = addDays(new Date(), 1);
   const tomorrowKey = format(tomorrow, 'yyyy-MM-dd');
@@ -21,7 +25,7 @@ test.describe('F6 · agenda orquestradora', () => {
       values ('${userId}', '${o.platform}', 'image', '${o.scheduled ? 'scheduled' : 'approved'}', 'Peça', 'Legenda da peça ${o.quote}', '{"quote":"${o.quote}"}'::jsonb, true, true,
         ${o.campaignId ? `'${o.campaignId}'` : 'null'}, ${o.cycleId ? `'${o.cycleId}'` : 'null'}, ${o.accountId ? `'${o.accountId}'` : 'null'},
         ${o.role ? `'${o.role}'` : 'null'}, ${o.virality ?? 'null'}, ${o.scheduled ? `'${o.scheduled}'` : 'null'},
-        '{"slide1":"https://example.com/x.jpg"}'::jsonb, '{"editorial_slug":"diagnostico-sistemico"}'::jsonb) returning id`);
+        jsonb_build_object('slide1', '${IMG}'), '{"editorial_slug":"diagnostico-sistemico"}'::jsonb) returning id`);
     return r.id;
   }
 

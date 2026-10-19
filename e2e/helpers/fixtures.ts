@@ -3,8 +3,9 @@ import { e2eUser } from './env';
 
 // Contas do usuário de teste (sem tokens — nunca publica de verdade).
 export async function seedAccounts(): Promise<{ linkedin: string; instagram: string }> {
-  const linkedin = await seed('social_accounts', { platform: 'linkedin', label: 'E2E', is_default: true, status: 'connected' });
-  const instagram = await seed('social_accounts', { platform: 'instagram', label: 'E2E', is_default: true, status: 'connected' });
+  // Identidade e token FALSOS: agendar resolve o destino real da conta (pacote imutável); nada publica com eles.
+  const linkedin = await seed('social_accounts', { platform: 'linkedin', label: 'E2E', is_default: true, status: 'connected', linkedin_token: 'tok-falso', linkedin_author_urn: 'urn:li:person:e2e-seed' });
+  const instagram = await seed('social_accounts', { platform: 'instagram', label: 'E2E', is_default: true, status: 'connected', instagram_access_token: 'tok-falso', instagram_business_account_id: '17840000000000000' });
   return { linkedin, instagram };
 }
 

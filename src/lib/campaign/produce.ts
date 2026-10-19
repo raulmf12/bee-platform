@@ -8,7 +8,10 @@
 // imagem de IA → render → upload) e mantém o ciclo de aprendizado (ai_variations).
 import { generateHiveImage } from '@/lib/hive/runVisual';
 import { edge, type HiveSeed, type GeneratedVariation } from '@/lib/edge';
-import { aiApi } from '@/lib/api';
+import { aiApi, postApi } from '@/lib/api';
+import { approvePieceOnServer } from '@/lib/approval';
+import { scheduleAt } from '@/lib/scheduling';
+import { recordReviewSafely } from '@/lib/measurement';
 import { db } from '@/lib/db';
 import { cycleApi } from '@/lib/campaignApi';
 import { getPhotoGeneration, reviewMarcosPhoto } from '@/lib/hive/marcosPhoto';
@@ -251,19 +254,18 @@ export async function approvePiece(piece: UserPost): Promise<UserPost> {
     const g = await getPhotoGeneration(photoId).catch(() => null);
     if (g?.review_status === 'pending') await reviewMarcosPhoto(photoId, 'approve').catch(console.error);
   }
-  const approved = await updatePiece(piece.id, {
-    status: 'approved', image_status: 'approved', image_approved: true,
-    metadata: { ...piece.metadata, review_stage: 'done', ...(AI_IMAGE_VARIANT(variant) ? { bg_approved: true } : {}) },
-  });
+  // Aprovação no SERVIDOR (approve_piece): confere prontidão e o arquivo apresentado, inclui a
+  // imagem de IA vista na revisão e nunca tira da agenda uma peça já agendada (doc 02 §5/§8).
+  const approved = await approvePieceOnServer(piece.id, piece.rendered_slides?.slide1 ?? null, true);
   // Opção nova (outro design/imagem) tem a MESMA frase da peça de origem: o
   // aprendizado mede a edição humana contra a variação pristina da origem.
   const altOf = piece.metadata?.alt_of as string | undefined;
   const variation = await db.selectOne<AiVariation>('ai_variations', { post_id: `eq.${piece.id}` })
     ?? (altOf ? await db.selectOne<AiVariation>('ai_variations', { post_id: `eq.${altOf}` }) : null);
   if (variation && piece.piece_role === 'unfold') {
-    void aiApi.recordReview({
+    void recordReviewSafely(piece.user_id, {
       post_id: piece.id, variation, quote_final: (approved.carousel_text?.quote as string | undefined) ?? '', caption_final: approved.caption ?? '',
-    }).catch(console.error);
+    });
   }
   return approved;
 }
@@ -334,6 +336,8 @@ export async function createAlternatives(userId: string, base: UserPost, group: 
 }
 
 // Reprogramar (ou agendar) uma peça aprovada direto da revisão.
+// Mesmo comando da agenda (schedule-piece): prontidão + pacote imutável; agendada só muda a data.
 export async function reschedulePiece(piece: UserPost, iso: string): Promise<UserPost> {
-  return updatePiece(piece.id, { status: 'scheduled', scheduled_date: iso });
+  await scheduleAt(piece, iso);
+  return (await postApi.get(piece.id)) ?? piece;
 }

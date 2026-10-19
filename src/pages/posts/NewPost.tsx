@@ -25,6 +25,10 @@ import { cn } from '@/lib/utils';
 import { usePostStore } from '@/store/postStore';
 import { useAuthStore } from '@/store/authStore';
 import { beeApi, aiApi, postApi } from '@/lib/api';
+import { approvePieceOnServer, mergeReview } from '@/lib/approval';
+import { scheduleAt } from '@/lib/scheduling';
+import { recordReviewSafely } from '@/lib/measurement';
+import { userMessage } from '@/lib/errors';
 import { isTextPending } from '@/lib/postReview';
 import { edge, type HiveSeed } from '@/lib/edge';
 import { renderBeeQuote } from '@/lib/templates/resolve';
@@ -185,6 +189,8 @@ export function NewPost() {
   const [batch, setBatch] = useState<BatchItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [correctingField, setCorrectingField] = useState<'titulo' | 'legenda' | null>(null);
+  // Aprovação de campo em gravação: o botão só mostra "aprovado" depois que o servidor confirmou.
+  const [savingField, setSavingField] = useState<'titulo' | 'legenda' | 'ambos' | null>(null);
   const [correctingMode, setCorrectingMode] = useState<'corrigir' | 'rejeitar'>('rejeitar');
   // Rejeição do post inteiro (título + legenda) via diálogo de motivo.
   const [correctingWhole, setCorrectingWhole] = useState(false);
@@ -394,13 +400,39 @@ export function NewPost() {
     setBatch((prev) => prev.map((it) => (it.post.id === id ? { ...it, ...patch } : it)));
   }
 
-  // Persiste o ESTÁGIO de revisão no metadata do post (status por campo +
-  // review_stage), pra poder RETOMAR a aprovação de textos depois de sair.
-  // Fire-and-forget: mescla no metadata atual e atualiza o item em memória.
-  function persistReview(item: BatchItem, meta: Record<string, unknown>) {
-    const nextMeta = { ...(item.post.metadata ?? {}), ...meta };
-    patchItem(item.post.id, { post: { ...item.post, metadata: nextMeta } });
-    void postApi.update(item.post.id, { metadata: nextMeta }).catch((e) => console.error('[persistReview]', e));
+  // Persiste o ESTÁGIO de revisão (status por campo + review_stage) pra poder RETOMAR depois.
+  // Mescla NO SERVIDOR (merge_post_review) — nunca regrava o metadata inteiro de uma cópia em
+  // memória, que apagava decisões paralelas (doc 02 §5.2). Reabrir campo (pendente) não bloqueia;
+  // se falhar, avisa em vez de sumir no console.
+  function persistReview(item: BatchItem, meta: Record<string, string>) {
+    patchItem(item.post.id, { post: { ...item.post, metadata: { ...(item.post.metadata ?? {}), ...meta } } });
+    void mergeReview(item.post.id, meta).catch((e) => {
+      console.error('[persistReview]', e);
+      toast.error(`Não foi possível salvar o estado da revisão: ${userMessage(e)}`, { id: 'review-save' });
+    });
+  }
+
+  // Aprovação de campo(s): grava no servidor com a impressão digital do texto APRESENTADO; só
+  // então a tela mostra aprovado. Se o texto mudou no meio (outra aba), o servidor recusa.
+  async function confirmApproval(item: BatchItem, fields: Array<'titulo' | 'legenda'>, extra: Record<string, string> = {}): Promise<boolean> {
+    setSavingField(fields.length > 1 ? 'ambos' : fields[0]);
+    try {
+      const patch: Record<string, string> = { ...extra };
+      const expect: Partial<Record<'titulo' | 'legenda', string>> = {};
+      for (const f of fields) { patch[`${f}_status`] = 'approved'; expect[f] = f === 'titulo' ? item.quote : item.caption; }
+      const fresh = await mergeReview(item.post.id, patch, expect);
+      patchItem(item.post.id, {
+        post: { ...item.post, metadata: fresh.metadata },
+        ...(fields.includes('titulo') ? { tituloStatus: 'approved' as FieldStatus } : {}),
+        ...(fields.includes('legenda') ? { legendaStatus: 'approved' as FieldStatus } : {}),
+      });
+      return true;
+    } catch (e) {
+      toast.error(`Não foi possível salvar esta aprovação: ${userMessage(e)}`);
+      return false;
+    } finally {
+      setSavingField(null);
+    }
   }
 
   // Monta o carousel_text a partir dos valores ATUAIS do item (não do post
@@ -699,9 +731,8 @@ export function NewPost() {
 
   // Aprova/Rejeita um campo (título=quote ou legenda=caption) do post ativo.
   function approveField(field: 'titulo' | 'legenda') {
-    if (!activeItem) return;
-    patchItem(activeItem.post.id, field === 'titulo' ? { tituloStatus: 'approved' } : { legendaStatus: 'approved' });
-    persistReview(activeItem, field === 'titulo' ? { titulo_status: 'approved' } : { legenda_status: 'approved' });
+    if (!activeItem || savingField) return;
+    void confirmApproval(activeItem, [field]);
   }
 
   // Abre o feedback pra IA regenerar um campo. mode 'corrigir' APROVEITA o texto
@@ -1106,23 +1137,25 @@ export function NewPost() {
       // difere do baseline → registra drift; senão, intacto. As regenerações da IA
       // contam em ai_edit_rounds; as edições manuais, em manual_edits. Mantém os
       // FKs (variation_id/generation_id) da linha real.
-      void aiApi
-        .recordReview({
-          post_id: item.post.id,
-          variation: { ...item.variation, quote: item.aiQuote, caption: item.aiCaption },
-          quote_final: item.quote,
-          caption_final: item.caption,
-        })
-        .catch(console.error);
-
+      // 1) conteúdo final  2) aprovação da peça APRESENTADA (inclui a imagem de IA que ela viu)
+      // 3) agendamento pelo comando único (prontidão + pacote). Cada passo confirmado antes do próximo.
       await postApi.update(item.post.id, {
-        status: date ? 'scheduled' : 'approved',
         ai_edit_rounds: item.editRounds,
         manual_edits: item.manualEdits,
-        ...(date ? { scheduled_date: date.toISOString() } : {}),
         carousel_fabric_json: [item.fabricJson],
         rendered_slides: renderedSlides,
         ...(item.hiveDecision ? { visual_decision: item.hiveDecision, image_status: 'pending' as const } : {}),
+      });
+      const approved = await approvePieceOnServer(item.post.id, publicUrl, true);
+      if (date) {
+        try { await scheduleAt(approved, date.toISOString()); }
+        catch (e) { toast.error(`Peça aprovada, mas o agendamento não foi feito: ${userMessage(e)} Ela ficou em stand-by.`); date = null; }
+      }
+      void recordReviewSafely(currentUser.id, {
+        post_id: item.post.id,
+        variation: { ...item.variation, quote: item.aiQuote, caption: item.aiCaption },
+        quote_final: item.quote,
+        caption_final: item.caption,
       });
 
       toast.success(date ? `Post agendado! (${item.codigo})` : `Post em stand-by (${item.codigo})`);
@@ -1469,17 +1502,17 @@ export function NewPost() {
     if (!draftPost) return;
     setScheduleOpen(false);
     try {
+      const approved = await approvePieceOnServer(draftPost.id, null);
       if (date) {
-        await postApi.update(draftPost.id, { status: 'scheduled', scheduled_date: date.toISOString() });
+        await scheduleAt(approved, date.toISOString());
         toast.success('Vídeo agendado com sucesso!');
       } else {
-        await postApi.update(draftPost.id, { status: 'approved' });
         toast.success('Vídeo em stand-by — publique quando quiser.');
       }
       navigate('/');
     } catch (err) {
       console.error(err);
-      toast.error('Erro ao agendar o vídeo.');
+      toast.error(`Erro ao agendar o vídeo: ${userMessage(err)}`);
     }
   };
 
@@ -2003,8 +2036,10 @@ export function NewPost() {
                       size="sm"
                       variant={activeItem.tituloStatus === 'approved' ? 'accent' : 'outline'}
                       onClick={() => approveField('titulo')}
+                      disabled={savingField !== null}
                     >
-                      <Check className="h-4 w-4 mr-1" /> Aprovar
+                      {savingField === 'titulo' ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
+                      {savingField === 'titulo' ? 'Salvando…' : 'Aprovar'}
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => setAiEditField('titulo')}>
                       <Wand2 className="h-4 w-4 mr-1" /> Editar com IA
@@ -2072,8 +2107,10 @@ export function NewPost() {
                       size="sm"
                       variant={activeItem.legendaStatus === 'approved' ? 'accent' : 'outline'}
                       onClick={() => approveField('legenda')}
+                      disabled={savingField !== null}
                     >
-                      <Check className="h-4 w-4 mr-1" /> Aprovar
+                      {savingField === 'legenda' ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
+                      {savingField === 'legenda' ? 'Salvando…' : 'Aprovar'}
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => setAiEditField('legenda')}>
                       <Wand2 className="h-4 w-4 mr-1" /> Editar com IA
@@ -2109,8 +2146,7 @@ export function NewPost() {
                   variant="accent"
                   disabled={!bothApproved}
                   onClick={() => {
-                    persistReview(activeItem, { review_stage: 'design', titulo_status: 'approved', legenda_status: 'approved' });
-                    setState('IMAGE_PREVIEW');
+                    void confirmApproval(activeItem, ['titulo', 'legenda'], { review_stage: 'design' }).then((ok) => { if (ok) setState('IMAGE_PREVIEW'); });
                   }}
                 >
                   <ArrowRight className="h-4 w-4 mr-1" /> Ir pro design

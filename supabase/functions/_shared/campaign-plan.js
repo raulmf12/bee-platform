@@ -1688,6 +1688,13 @@ function validateTimezone(_hours, minutes) {
 }
 
 // src/lib/schedule.ts
+var TZ = (() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
+  } catch {
+    return "America/Sao_Paulo";
+  }
+})();
 var PLATFORM_GUIDE = {
   linkedin: {
     defaultPerWeek: 2,

@@ -1,7 +1,9 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { addDays, format } from 'date-fns';
-import { cleanupE2EData, seed, sql } from './helpers/admin';
+import { readFileSync } from 'node:fs';
+import { cleanupE2EData, cleanupE2EStorage, seed, sql, uploadE2EImage } from './helpers/admin';
 import { mockEdge } from './helpers/mocks';
+import { seedAccounts } from './helpers/fixtures';
 import { e2eUser } from './helpers/env';
 import { loginAs } from './helpers/tenant';
 
@@ -9,7 +11,7 @@ import { loginAs } from './helpers/tenant';
 // publica; render nulo não aprova; o lote confirma só o que foi gravado.
 test.describe('F22 · Estabilização E1', () => {
   test.beforeEach(async () => { await cleanupE2EData(); });
-  test.afterAll(async () => { await cleanupE2EData(); });
+  test.afterAll(async () => { await cleanupE2EData(); await cleanupE2EStorage(); });
 
   const tomorrow = addDays(new Date(), 1);
   const tomorrowKey = format(tomorrow, 'yyyy-MM-dd');
@@ -108,14 +110,18 @@ test.describe('F22 · Estabilização E1', () => {
   });
 
   test('lote: só conta o que foi gravado; linha vencida fica pendente e é retomada (02/T17–T18)', async ({ page }) => {
-    const ok = await piece({ status: 'approved', quote: 'Linha boa' });
-    const late = await piece({ status: 'approved', quote: 'Linha vencida' });
+    // agendar fecha o pacote imutável copiando a imagem: precisa de um arquivo real
+    const img = await uploadE2EImage('e1-lote.jpg', readFileSync('e2e/fixtures/peca-a.jpg'));
+    const { linkedin } = await seedAccounts();                        // agendar exige um destino
+    const ok = await piece({ status: 'approved', quote: 'Linha boa', extra: { rendered_slides: { slide1: img }, account_id: linkedin } });
+    const late = await piece({ status: 'approved', quote: 'Linha vencida', extra: { rendered_slides: { slide1: img }, account_id: linkedin } });
     const yesterday = format(addDays(new Date(), -1), 'yyyy-MM-dd');
     await mockEdge(page, 'distribute-schedule', () => ({
       success: true, summary: 'Plano de teste.',
       plan: [{ post_id: ok, date: tomorrowKey, time: '12:00', reason: 'ok' }, { post_id: late, date: yesterday, time: '12:00', reason: 'vencida' }],
     }));
     await page.goto('/agenda');
+    await expect(page.getByTestId('queue-count')).toHaveText('2');
     await page.getByRole('button', { name: 'IA distribuir' }).click();
     await page.getByRole('button', { name: 'Aplicar (2)' }).click();
     await expect(page.getByText(/1 agendamento\(s\) confirmado\(s\) · 1 precisa\(m\) de nova data/)).toBeVisible();

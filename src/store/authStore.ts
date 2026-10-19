@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { setAuthCache } from '@/lib/db';
 import { kanbanApi, profileApi, settingsApi } from '@/lib/api';
+import { setScheduleTimeZone } from '@/lib/schedule';
 import type { Profile, UserSettings } from '@/types';
 
 interface AuthState {
@@ -40,6 +41,7 @@ async function bootstrapUser(): Promise<{
   }
   try {
     settings = await settingsApi.ensureExists();
+    setScheduleTimeZone(settings?.timezone);     // agenda/editor no fuso do produtor
   } catch (e) {
     console.warn('[auth] bootstrap settings', e);
   }

@@ -41,6 +41,7 @@ export interface Profile {
 // ---------------------------------------------------------------------------
 export interface UserSettings {
   user_id: string;
+  timezone?: string;              // fuso da operação (agenda/editor); padrão America/Sao_Paulo
   archetype?: Archetype;
   persona?: string;
   tone_of_voice?: string;

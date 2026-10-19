@@ -33,8 +33,8 @@ test.describe('F20 · Stories e publicação de sequências', () => {
       const pid = String(b.post_id);
       if (b.dry_run) return { success: true, check: { ok: true, issues: [], plan: ['Story 1', 'Story 2', 'Story 3'], version: 1, units: 3 } };
       const [p] = await sql<{ version: number }>(`select version from user_posts where id='${pid}'`);
-      await sql(`with pub as (insert into post_publications (user_id, post_id, version, destination, platform, format, status, units_total, units_published, url)
-          values ('${uid}','${pid}',${p.version},'instagram:x','instagram','story','published',3,3,'https://www.instagram.com/stories/x/') returning id)
+      await sql(`with pub as (insert into post_publications (user_id, post_id, version, destination, platform, format, status, stage, units_total, units_published, url)
+          values ('${uid}','${pid}',${p.version},'instagram:x','instagram','story','published','confirmed',3,3,'https://www.instagram.com/stories/x/') returning id)
         insert into post_unit_publications (publication_id, user_id, post_id, unit_id, position, status)
           select pub.id, '${uid}', '${pid}', u.id, u.position, 'published' from pub, post_units u where u.post_id='${pid}';
         update user_posts set status='published', published_url='https://www.instagram.com/stories/x/', published_at=now() where id='${pid}';`);

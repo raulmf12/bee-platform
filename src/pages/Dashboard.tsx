@@ -1,7 +1,7 @@
 // HOME regente (Tela 01). A Hive rege a operação: o que está acontecendo, o que
 // precisa de você (com prazo), o que ela recomenda e o que vai ao ar. "+ Criar"
 // quando você quer começar algo por conta própria. O Kanban mora em /pipeline.
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowRight, CalendarClock, ImageIcon, Instagram, Layers, Linkedin, Loader2, Plus, Sparkles, Workflow } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -9,10 +9,13 @@ import { useAuthStore } from '@/store/authStore';
 import { useOps } from '@/lib/campaign/useOps';
 import { happening, pendingItems, recommendations, upcoming, type HomeData } from '@/lib/campaign/home';
 import { cn } from '@/lib/utils';
+import { retryPendingMeasurements } from '@/lib/measurement';
 
 export function Dashboard() {
   const navigate = useNavigate();
   const { currentUser } = useAuthStore();
+  // Medições da IA que falharam depois de uma aprovação: reprocessa em segundo plano (doc 02 §12).
+  useEffect(() => { if (currentUser?.id) void retryPendingMeasurements(currentUser.id); }, [currentUser?.id]);
   const { ops, posts } = useOps();
 
   const data: HomeData | null = useMemo(() => (ops ? { ...ops, posts } : null), [ops, posts]);
