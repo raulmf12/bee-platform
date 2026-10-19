@@ -61,3 +61,25 @@ confirmação de um clique · publicado pode ser arquivado · resultado incerto 
 5. **Fuso de São Paulo.** Os horários são gravados e mostrados no fuso configurado (padrão São Paulo), mesmo abrindo a Hive de outro fuso.
 6. **"IA distribuir" lembra o plano.** Se uma linha ficou pendente e você fechou ou recarregou a página, a agenda mostra "Há um plano com pendências" → "Retomar pendências" aplica só o que faltou.
 7. **"Ver na agenda".** Depois de agendar no editor, o aviso traz um atalho que abre a agenda no mês certo com a peça aberta, mesmo com filtros.
+
+---
+
+## E4 — Publicação exclusiva e versão programada · implantada em 18–19/10/2026
+
+| Campo | Informação |
+|---|---|
+| Banco | `20261024000001_publicacao_pacote.sql`: marca `edited_after_approval` (prontidão exige aprovar a edição antes de agendar/trocar/publicar); `update_scheduled_package` antigo vira recusa explícita (+ rollback) |
+| Funções | `_shared/publish.ts` reescrito (resolver pacote → `acquire_publication` → conferir sob reserva → `mark_publication_sending` → enviar o PACOTE → `confirm`/`fail`), `_shared/publish-sequence.ts` (sequências e Stories a partir do manifesto; PDF derivado guardado no pacote; falha classificada: antes do envio × resultado desconhecido), `publish-post` (409 com estado; conferência no Instagram), `publish-scheduler` (só agendamentos com pacote; expira envios parados como "conferir"), `schedule-piece` (confirmação de legado), `campaign-tick` (bundle regenerado) |
+| App | `ScheduledPackageCard` (editor e agenda: programado, alterações fora do agendamento, comparar, atualizar conteúdo, confirmar material legado), `ReconcileDialog` (editor e publicação de sequência), "Publicar agora" deixa claro que antecipa a versão programada, `updateScheduledPackage` → `replace_package` |
+| Critérios | 01/T04, T06, T07, T09, T10, T14, T15, T16, T17, T18 · 03/T01–T08, T11–T13, T16–T21, T27–T29, T34, T35, T37, T38 |
+| Evidência | `e2e/f25-publicacao-e4.spec.ts` (5/5) + suites afetadas (f1, f5, f6, f12, f16, f18–f24). Dois defeitos reais achados pelos testes e corrigidos antes de liberar: impressão digital do manifesto contava campos vazios (todo pacote parecia adulterado) e a checagem de integridade lia a cópia da CDN em vez do arquivo gravado |
+| Implantação | Pausa do agendador não foi possível (sem permissão direta na tabela do cron); risco nulo na janela — próximo agendamento só em 20/10 15:00 UTC. Agendador conferido respondendo 200 após a troca |
+| Limitações | Vídeo: o pacote referencia o arquivo original (não copia por tamanho) — integridade por acessibilidade. Publicação real ainda não exercitada (decisão: só com conta/autorização de teste). |
+| Retorno | Não voltar ao publicador antigo enquanto houver agendamentos com pacote (doc 03 §21): suspender o envio e manter consulta. |
+
+### Nota para o Marcos — o que mudou
+1. **O que vai ao ar é o que foi agendado.** *Antes:* editar uma peça depois de agendar mudava o que seria publicado, sem aviso (e "Publicar agora" podia regravar a imagem programada). *Agora:* ao agendar, a Hive guarda uma cópia fixa (texto + imagem + conta). Editar depois aparece como **"Há alterações fora do agendamento"**, com **Comparar** (programado × em edição) e **"Atualizar conteúdo programado"** — que só libera depois de aprovar a edição. Data e conta continuam as mesmas.
+2. **Uma publicação por peça.** Botão e agendador não publicam a mesma peça duas vezes: se uma publicação já está em andamento, a outra espera; se já foi publicada, a Hive mostra o resultado e não envia de novo.
+3. **Quando a rede não confirma.** Se a rede pode ter publicado sem a Hive receber a resposta, aparece **"Precisamos conferir se a publicação foi concluída"**. Nada é reenviado até você dizer "Foi publicado" (com o link) ou "Não foi publicado". No Instagram, o botão **"Procurar no Instagram"** acha o post pela legenda.
+4. **Agendamentos antigos pedem uma confirmação.** Os 6 agendamentos feitos antes desta versão aparecem com ⚠ na agenda e o aviso **"Confirme o material programado"**; um clique em **Confirmar material** congela a versão atual. **Até confirmar, o agendador não publica essa peça.** Próximo da fila: *"O cansaço da liderança raramente vem…"* (20/10).
+5. **"Publicar agora" numa peça agendada** antecipa a versão programada (o aviso diz isso); para incluir edições, atualize o conteúdo programado antes.

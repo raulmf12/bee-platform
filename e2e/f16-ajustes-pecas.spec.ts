@@ -64,9 +64,11 @@ test.describe('F16 · ajustes de peças (candidatos e versões)', () => {
     expect(s1).toEqual({ status: 'scheduled', v: 2, sv: 1, out: 'true' });
     const [pkg] = await sql<{ caption: string }>(`select components->>'caption' caption from piece_versions where post_id='${pid}' and version=1`);
     expect(pkg.caption).toBe('Legenda original');                  // é este pacote que a publicação usa
-    await sql(`select public.update_scheduled_package('${pid}')`);
+    // Estabilização E4: trocar o conteúdo programado não é mais só trocar o número — o comando
+    // replace_package fecha um pacote imutável novo (coberto em f25); o atalho antigo recusa explicitamente.
+    await expect(sql(`select public.update_scheduled_package('${pid}')`)).rejects.toThrow(/Atualize o conteúdo programado/);
     const [s2] = await sql<{ sv: number; out: string | null }>(`select scheduled_version sv, metadata->>'scheduled_outdated' out from user_posts where id='${pid}'`);
-    expect(s2).toEqual({ sv: 2, out: null });
+    expect(s2).toEqual({ sv: 1, out: 'true' });
   });
 
   test('UI: conflito de versão e "Atualizar agendamento" na revisão do ciclo', async ({ page }) => {

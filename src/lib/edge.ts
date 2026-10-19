@@ -4,6 +4,11 @@
 import { SUPABASE_KEY, SUPABASE_URL, supabase } from './supabase';
 import type { AcjContractFields, AcjId, AcjPlanDraft, AcjSignalReading, AcjValidation } from '@/types';
 
+// Publicação que não pode seguir agora: em andamento por outra execução, ou resultado externo a conferir.
+export class PublishStateError extends Error {
+  constructor(message: string, readonly state: 'in_progress' | 'needs_reconciliation', readonly publicationId: string | null) { super(message); }
+}
+
 async function authHeader(): Promise<HeadersInit> {
   const { data } = await supabase.auth.getSession();
   const jwt = data.session?.access_token ?? SUPABASE_KEY;
@@ -704,7 +709,22 @@ export const edge = {
       body: JSON.stringify(input),
     });
     const text = await res.text();
-    if (!res.ok) throw new Error(`publish-post HTTP ${res.status}: ${text.slice(0, 500)}`);
+    if (!res.ok) {
+      // 409 = estado da operação (em andamento / precisa conferir): a tela decide, não é "tente de novo".
+      let body: { error?: string; details?: string; state?: string; publication_id?: string } = {};
+      try { body = JSON.parse(text); } catch { /* texto cru */ }
+      if (res.status === 409 && body.state) throw new PublishStateError(body.error ?? 'Publicação em andamento.', body.state as PublishStateError['state'], body.publication_id ?? null);
+      throw new Error(body.details || body.error || `publish-post HTTP ${res.status}: ${text.slice(0, 500)}`);
+    }
+    return JSON.parse(text);
+  },
+
+  // Conferência de resultado incerto: procura a publicação nos posts recentes do Instagram da conta.
+  async findOnInstagram(publicationId: string): Promise<{ success: boolean; found: boolean; url?: string; posted_at?: string }> {
+    const headers = await authHeader();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/publish-post`, { method: 'POST', headers, body: JSON.stringify({ post_id: 'n/a', find_on_instagram: publicationId }) });
+    const text = await res.text();
+    if (!res.ok) throw new Error(JSON.parse(text || '{}').error ?? `HTTP ${res.status}`);
     return JSON.parse(text);
   },
 

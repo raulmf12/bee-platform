@@ -26,8 +26,18 @@ test.describe('F22 · Estabilização E1', () => {
     });
   }
 
+  // A agenda re-renderiza enquanto carrega (planos, ACJ): mede a posição só quando os dois estão estáveis.
+  async function box(l: Locator) {
+    for (let i = 0; i < 10; i++) {
+      await l.waitFor({ state: 'visible' });
+      const b = await l.boundingBox();
+      if (b) return b;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    throw new Error('elemento sem posição');
+  }
   async function dragInto(page: Page, src: Locator, dst: Locator) {
-    const a = (await src.boundingBox())!, b = (await dst.boundingBox())!;
+    const a = await box(src), b = await box(dst);
     await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
     await page.mouse.down();
     await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 8 });

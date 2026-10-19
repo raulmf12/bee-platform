@@ -54,6 +54,7 @@ import {
 import { cn } from '@/lib/utils';
 import { isPublishedHistory, PUBLISHED_HISTORY_MSG, userMessage } from '@/lib/errors';
 import { scheduleAt, unschedule } from '@/lib/scheduling';
+import { ScheduledPackageCard } from '@/components/publication/ScheduledPackageCard';
 import { db } from '@/lib/db';
 import { toast } from 'sonner';
 
@@ -722,13 +723,14 @@ export function Agenda() {
           draggingId === post.id && 'opacity-40',
         )}
         style={{ borderLeftColor: color, backgroundColor: `${color}1F` }}
-        title={locked ? `${label} · publicado (histórico)` : label}
+        title={locked ? `${label} · publicado (histórico)` : post.status === 'scheduled' && !post.scheduled_package_id ? `${label} · confirme o material programado` : label}
+        data-legacy={post.status === 'scheduled' && !post.scheduled_package_id ? 'true' : undefined}
       >
         <PlatformIcon platform={post.platform} className={cn('shrink-0', big ? 'h-3.5 w-3.5 mt-0.5' : 'h-3 w-3')} />
         {big ? (
           <span className="min-w-0 flex-1">
             {when && <span className="mr-1 text-[11px] font-semibold text-muted-foreground">{format(when, 'HH:mm')}</span>}
-            <span className="text-[12px] font-medium leading-snug line-clamp-2">{label}</span>
+            <span className="text-[12px] font-medium leading-snug line-clamp-2">{post.status === 'scheduled' && !post.scheduled_package_id ? '⚠ ' : ''}{label}</span>
           </span>
         ) : (
           <span className={cn('truncate text-[11px] font-medium', compact ? 'max-w-[130px]' : '')}>
@@ -1196,6 +1198,7 @@ export function Agenda() {
                   </p>
                 )}
                 {quote && <p className="font-display text-base font-medium leading-relaxed">"{quote}"</p>}
+                <ScheduledPackageCard post={selected} compact onChanged={(p) => { if (p) { void refreshOne(p.id).then((f) => f && setSelected(f)); } }} />
 
                 {isPublished && (
                   <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground" data-testid="panel-history">

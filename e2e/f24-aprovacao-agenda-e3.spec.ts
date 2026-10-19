@@ -98,7 +98,7 @@ test.describe('F24 · Aprovação e agenda (E3)', () => {
     expect(a).toMatchObject({ status: 'approved', image_approved: true });
     expect(a.slide).toContain('/render.png');
     await page.locator('#sched').fill(`${tomorrowKey}T15:00`);
-    await expect(page.getByText(/Programado para .*Esta é a versão que será publicada/)).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/Programado para .*Esta é a versão que será publicada/).first()).toBeVisible({ timeout: 30_000 });
     const [s] = await sql<{ status: string; pkg: string | null; d: string }>(`select status, scheduled_package_id pkg, scheduled_date::text d from user_posts where id='${pid}'`);
     expect(s.status).toBe('scheduled');
     expect(s.pkg).not.toBeNull();                                                      // pacote imutável fechado ao agendar

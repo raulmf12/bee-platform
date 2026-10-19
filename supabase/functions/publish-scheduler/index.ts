@@ -9,7 +9,8 @@
 // pra o cron conseguir chamar (mesmo padrão do editorial-line-tick).
 
 import { corsHeaders, jsonResponse } from '../_shared/security.ts';
-import { publishOne } from '../_shared/publish.ts';
+import { publishOne, PublishStateError } from '../_shared/publish.ts';
+import { rpc } from '../_shared/package.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 
@@ -39,6 +40,8 @@ async function fetchDuePosts(): Promise<DuePost[]> {
   const url = `${SUPABASE_URL}/rest/v1/user_posts` +
     `?select=id,user_id,scheduled_date` +
     `&status=eq.scheduled&scheduled_date=lte.${upper}&scheduled_date=gte.${lower}` +
+    // Só agendamentos com pacote preservado (E4): os antigos pedem confirmação do material na agenda.
+    `&scheduled_package_id=not.is.null` +
     // Sequências entram na fila só quando o formato tem publicação automática habilitada (format_capabilities).
     `&format=in.(${await autoFormats()})` +
     `&order=scheduled_date.asc&limit=10`;
@@ -51,16 +54,22 @@ Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
+    // Envio que parou no meio (função derrubada) vira "conferir" — nunca "pode reenviar".
+    await rpc('expire_publication_leases', {}).catch((e) => console.warn('[publish-scheduler] leases', e));
     const due = await fetchDuePosts();
     if (!due.length) return jsonResponse({ success: true, processed: 0, message: 'nada vencido' });
 
     const results: Array<{ id: string; ok: boolean; url?: string; error?: string }> = [];
     for (const post of due) {
       try {
-        const r = await publishOne(post.id, post.user_id);
+        const r = await publishOne(post.id, post.user_id, { source: 'scheduler' });
         results.push({ id: post.id, ok: true, url: r.url });
-        console.log('[publish-scheduler] publicado', post.id, r.url);
+        console.log('[publish-scheduler] publicado', post.id, r.url, r.reused ? '(já estava publicado)' : '');
       } catch (e) {
+        if (e instanceof PublishStateError && (e.state === 'in_progress' || e.state === 'needs_reconciliation')) {
+          results.push({ id: post.id, ok: false, error: e.state });       // não repete: outra execução cuida / produtor confere
+          continue;
+        }
         results.push({ id: post.id, ok: false, error: (e as Error).message.slice(0, 200) });
         console.error('[publish-scheduler] falhou', post.id, (e as Error).message);
       }

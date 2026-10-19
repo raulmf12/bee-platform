@@ -47,7 +47,7 @@ Deno.serve(async (req: Request) => {
 
     let packageId: string | null = null;
     if (b.intent === 'schedule' || b.intent === 'replace_package') {
-      const [post] = await rest<Array<{ user_id: string; version: number }>>(`/user_posts?id=eq.${b.post_id}&select=user_id,version`);
+      const [post] = await rest<Array<{ user_id: string; version: number; scheduled_package_id: string | null }>>(`/user_posts?id=eq.${b.post_id}&select=user_id,version,scheduled_package_id`);
       if (!post || post.user_id !== userId) return jsonResponse({ success: false, error: 'Peça não encontrada.', code: 'PT404' }, 404);
       if (params.expected_version != null && post.version !== params.expected_version) {
         return jsonResponse({ success: false, error: `A peça mudou enquanto você agendava (versão ${params.expected_version} → ${post.version}). Revise e tente de novo.`, code: 'PT409' }, 409);
@@ -56,7 +56,10 @@ Deno.serve(async (req: Request) => {
       if (!ready.ready) {
         return jsonResponse({ success: false, error: `A peça não está pronta para agendar: ${ready.missing.map((m) => m.reason).join(' ')}`, code: 'PT422', missing: ready.missing }, 422);
       }
-      packageId = (await sealPackage(b.post_id, userId, 'schedule', b.command_id)).id;
+      // Agendamento antigo sem pacote: "confirmar o material programado" fecha o pacote do que está lá
+      // agora, com a confirmação explícita do produtor (doc 03 §20 · decisão de 18/10).
+      const origin = b.intent === 'replace_package' && !post.scheduled_package_id ? 'legacy_confirmed' : 'schedule';
+      packageId = (await sealPackage(b.post_id, userId, origin, b.command_id)).id;
     }
     return jsonResponse({ success: true, result: await commit(packageId) });
   } catch (e) {

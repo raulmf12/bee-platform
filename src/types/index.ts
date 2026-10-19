@@ -263,6 +263,7 @@ export interface UserPost {
   // Versão da peça (ajustes viram candidatos aplicados) e versão presa ao agendamento.
   version?: number;
   scheduled_version?: number | null;
+  scheduled_package_id?: string | null;   // pacote IMUTÁVEL programado (Estabilização E2–E4)
   // Sequências (Fase 4): plano de origem, roteiro, direção visual do conjunto, aprovação por versão, exportação.
   plan_id?: string | null;
   narrative_architecture?: string | null;

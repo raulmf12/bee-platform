@@ -22,13 +22,16 @@ import { PlatformBadge } from '@/components/shared/PlatformBadge';
 import { POST_STATUS_LABELS, type AiVariation, type PostStatus } from '@/types';
 import { useAuthStore } from '@/store/authStore';
 import { uploadAssetImage, hashDataUrl, toJpegDataUrl } from '@/lib/storage';
-import { edge } from '@/lib/edge';
+import { edge, PublishStateError } from '@/lib/edge';
 import { aiApi, almaApi, severidadeOf } from '@/lib/api';
 import { formatInZone, isoToLocalInput, localInputToIso, nowLocalInput, scheduleTimeZone } from '@/lib/schedule';
 import { approvePieceOnServer, registerManualPublication } from '@/lib/approval';
 import { scheduleAt, unschedule } from '@/lib/scheduling';
 import { recordReviewSafely } from '@/lib/measurement';
 import { useReadiness } from '@/lib/readiness';
+import { ScheduledPackageCard } from '@/components/publication/ScheduledPackageCard';
+import { ReconcileDialog } from '@/components/publication/ReconcileDialog';
+import { db } from '@/lib/db';
 import { extractSlotText } from '@/lib/templates/extract';
 import { generateHiveImage } from '@/lib/hive/runVisual';
 import { bgGatePending } from '@/lib/hive/bgGate';
@@ -102,6 +105,14 @@ export function PostEditor() {
   latestText.current = { title, briefing, caption };
   const latestFabric = useRef<object | undefined>(undefined);
   latestFabric.current = fabricJson;
+  // Publicação com resultado incerto aguardando conferência (doc 01 §4.3).
+  const [reconcile, setReconcile] = useState<{ open: boolean; pub: string | null }>({ open: false, pub: null });
+  const [pendingCheck, setPendingCheck] = useState(false);
+  useEffect(() => {
+    if (!post?.id) return;
+    db.select<{ id: string }>('post_publications', { post_id: `eq.${post.id}`, stage: 'eq.unknown', select: 'id' })
+      .then((r) => setPendingCheck(r.length > 0)).catch(() => setPendingCheck(false));
+  }, [post?.id, post?.updated_at, reconcile.open]);
   // O que falta para agendar (mesma regra do servidor), relido a cada gravação da peça.
   const readiness = useReadiness(post?.id, 'schedule', post?.updated_at);
   // Autosave que falhou: avisa (uma vez) e mantém a edição pendente nesta tela.
@@ -531,46 +542,37 @@ export function PostEditor() {
     await runHive(text);
   }
 
+  // PUBLICAR AGORA (Estabilização E4): o servidor reserva a peça (uma execução por vez) e envia o PACOTE.
+  // Agendada: antecipa a versão PROGRAMADA (não a edição atual). Aprovada sem data: fecha o pacote com a
+  // versão aprovada que está na tela. Resultado incerto abre a conferência — nunca reenvia às cegas.
   async function handlePublishLive() {
     if (!post) return;
-    // Salvar texto/canvas pendente antes (o export usa o canvas mais recente).
     try { await flushPending(); } catch (e) { toast.error(`Publicação não iniciada. ${userMessage(e)}`); return; }
-
     const platformLabel = post.platform === 'instagram' ? 'Instagram' : 'LinkedIn';
     const isVideo = post.format === ('video' as typeof post.format);
-
-    if (!caption.trim()) {
-      toast.error('Adicione uma caption antes de publicar.');
-      return;
-    }
-    if (!confirm(`Publicar agora no ${platformLabel}?\n\nCaption: ${caption.slice(0, 80)}...\n\nEsta acao e irreversivel.`)) return;
+    const scheduled = post.status === 'scheduled';
+    if (scheduled && !post.scheduled_package_id) { toast.error('Confirme o material programado (no painel ao lado) antes de publicar.'); return; }
+    const outdated = !!(post.metadata as { scheduled_outdated?: boolean } | null)?.scheduled_outdated;
+    const msg = scheduled
+      ? `Publicar agora no ${platformLabel} a versão PROGRAMADA para ${post.scheduled_date ? formatInZone(post.scheduled_date) : ''}?${outdated ? '\n\nAs alterações feitas depois do agendamento NÃO entram. Para incluí-las, use "Atualizar conteúdo programado" antes.' : ''}\n\nEsta ação é irreversível.`
+      : `Publicar agora no ${platformLabel}?\n\nLegenda: ${caption.slice(0, 80)}...\n\nEsta ação é irreversível.`;
+    if (!scheduled && !caption.trim()) { toast.error('Adicione uma legenda antes de publicar.'); return; }
+    if (!confirm(msg)) return;
 
     setPostingLive(true);
     try {
-      // Auto-exporta a imagem no formato certo antes de publicar (não há mais
-      // botão Exportar). Vídeo já vem armazenado, não precisa render.
-      if (!isVideo) {
+      // Aprovada sem data: a imagem final precisa estar pronta (é ela que entra no pacote).
+      if (!scheduled && !isVideo) {
         const url = await exportImage();
-        if (!url) { toast.error('Falha ao renderizar a imagem — verifique o canvas.'); return; }
+        if (!url) { toast.error('A imagem final não ficou pronta — verifique o canvas.'); return; }
       }
       const result = await edge.publishPost({ post_id: post.id });
-      if (result.reused) {
-        toast.info('Esta peça já foi publicada — nada foi enviado de novo.');
-        await load();
-        return;
-      }
+      await refreshOne(post.id);
+      if (result.reused) { toast.info('Esta peça já foi publicada — nada foi enviado de novo.'); return; }
       toast.success(`Publicado no ${platformLabel}!`);
-      await update(post.id, {
-        status: 'published',
-        published_url: result.published_url,
-        published_at: new Date().toISOString(),
-      });
       // Metodologia viva: a frase publicada vira candidata a few-shot (passa pela
       // curadoria). Fire-and-forget — nunca atrapalha a publicacao.
-      void import('@/lib/api').then(({ suggestionApi }) =>
-        suggestionApi.captureFromPublishedPost({ ...post, caption }),
-      );
-      // Barramento da Alma: a publicação ao vivo é uma experiência que a alimenta.
+      void import('@/lib/api').then(({ suggestionApi }) => suggestionApi.captureFromPublishedPost({ ...post, caption }));
       void almaApi.emitEvento({
         tipo: 'post_publicado',
         descricao: `Publicado ao vivo no ${platformLabel}: "${(post.title ?? caption ?? '').slice(0, 55)}"`,
@@ -579,8 +581,13 @@ export function PostEditor() {
       window.open(result.published_url, '_blank');
     } catch (e) {
       console.error(e);
-      const msg = (e as Error).message;
-      toast.error(`Falha: ${msg.slice(0, 250)}`);
+      if (e instanceof PublishStateError) {
+        if (e.state === 'needs_reconciliation') setReconcile({ open: true, pub: e.publicationId });
+        toast.warning(e.message);
+      } else {
+        toast.error(`Falha: ${userMessage(e).slice(0, 250)}`);
+      }
+      await refreshOne(post.id);
     } finally {
       setPostingLive(false);
     }
@@ -801,6 +808,14 @@ export function PostEditor() {
         </div>
 
         <aside className="flex flex-col gap-3 overflow-y-auto">
+          {pendingCheck && (
+            <div className="rounded-lg border border-rose-500/40 bg-rose-500/5 p-2.5 text-xs" data-testid="needs-check">
+              <p className="font-semibold">Precisamos conferir se a publicação foi concluída.</p>
+              <p className="text-muted-foreground">Nada será reenviado até você conferir na conta.</p>
+              <Button size="sm" variant="outline" className="mt-1.5 h-7 text-xs" onClick={() => setReconcile({ open: true, pub: null })}>Conferir publicação</Button>
+            </div>
+          )}
+          <ScheduledPackageCard post={post} onChanged={(p) => { if (p) applyServer(p); else void refreshOne(post.id); }} />
           {/* Coach focado neste post: ancora as lições no que a IA gerou (variação
               pristina; sem ela, no texto atual) e reescreve o texto da peça. */}
           {post.format !== ('video' as typeof post.format) && (!!variation || !!post.caption || !!post.carousel_text?.quote) && (
@@ -877,6 +892,8 @@ export function PostEditor() {
           </Card>
         </aside>
       </div>
+      <ReconcileDialog postId={post.id} publicationId={reconcile.pub} open={reconcile.open}
+        onClose={() => setReconcile({ open: false, pub: null })} onResolved={() => void refreshOne(post.id)} />
     </div>
   );
 }

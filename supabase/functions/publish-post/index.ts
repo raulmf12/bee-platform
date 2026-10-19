@@ -4,9 +4,9 @@
 // pelo publish-scheduler, que publica os posts agendados vencidos).
 
 import { errorResponse, jsonResponse, preflight, userIdFromAuth } from '../_shared/security.ts';
-import { inspectOne, publishOne } from '../_shared/publish.ts';
+import { findOnInstagram, inspectOne, publishOne, PublishStateError } from '../_shared/publish.ts';
 
-interface Input { post_id: string; dry_run?: boolean }
+interface Input { post_id: string; dry_run?: boolean; find_on_instagram?: string }
 
 Deno.serve(async (req: Request) => {
   const cors = preflight(req);
@@ -26,8 +26,13 @@ Deno.serve(async (req: Request) => {
       try { return jsonResponse({ success: true, check: await inspectOne(input.post_id, userId) }); }
       catch (e) { return jsonResponse({ success: true, check: { ok: false, issues: [(e as Error).message], plan: [] } }); }
     }
+    // Conferência de resultado incerto: procura a publicação nos posts recentes do Instagram da conta.
+    if (input.find_on_instagram) {
+      try { return jsonResponse({ success: true, ...(await findOnInstagram(input.find_on_instagram, userId)) }); }
+      catch (e) { return errorResponse((e as Error).message, 400); }
+    }
     try {
-      const result = await publishOne(input.post_id, userId);
+      const result = await publishOne(input.post_id, userId, { source: 'manual' });
       return jsonResponse({
         success: true,
         platform: result.platform,
@@ -36,6 +41,10 @@ Deno.serve(async (req: Request) => {
         reused: !!result.reused,
       });
     } catch (e) {
+      // Em andamento / precisa conferir: estado da operação para a interface (não é "tente de novo").
+      if (e instanceof PublishStateError && (e.state === 'in_progress' || e.state === 'needs_reconciliation')) {
+        return jsonResponse({ success: false, error: e.message, state: e.state, publication_id: e.publicationId ?? null }, 409);
+      }
       return errorResponse('Falha ao publicar', 500, (e as Error).message);
     }
   } catch (e) {

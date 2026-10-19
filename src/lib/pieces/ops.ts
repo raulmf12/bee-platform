@@ -7,6 +7,7 @@ import { edge, type HiveSeed } from '@/lib/edge';
 import { generateHiveImage } from '@/lib/hive/runVisual';
 import { imageKind, seedFromDecision } from '@/lib/campaign/produce';
 import type { UserPost } from '@/types';
+import { runScheduleCommand } from '@/lib/scheduling';
 
 export type PieceAction = 'adjust_text' | 'swap_image' | 'swap_template' | 'explore_visual' | 'other_approach' | 'vary_both';
 export type Component = 'quote' | 'caption' | 'image' | 'visual';
@@ -245,7 +246,12 @@ export async function applyCandidate(c: PieceCandidate): Promise<UserPost> {
 export async function discardCandidate(c: PieceCandidate): Promise<void> {
   await db.update('piece_candidates', { id: `eq.${c.id}` }, { status: 'discarded' });
 }
+// "Atualizar agendamento" = adotar explicitamente a versão atual APROVADA como conteúdo programado:
+// fecha um pacote imutável novo (schedule-piece · replace_package); data e conta continuam (doc 03 §10).
 export async function updateScheduledPackage(postId: string): Promise<UserPost> {
-  const p = await db.rpc<UserPost | UserPost[]>('update_scheduled_package', { pid: postId });
-  return (Array.isArray(p) ? p[0] : p) as UserPost;
+  const cur = await db.selectOne<UserPost>('user_posts', { id: `eq.${postId}` });
+  await runScheduleCommand({ postId, intent: 'replace_package', expectedVersion: cur?.version ?? null });
+  const p = await db.selectOne<UserPost>('user_posts', { id: `eq.${postId}` });
+  if (!p) throw new Error('A peça não foi encontrada.');
+  return p;
 }

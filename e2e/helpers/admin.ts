@@ -115,6 +115,16 @@ export async function cleanupE2EStorage(): Promise<number> {
   return names.length + pnames.length;
 }
 
+// Sobrescreve um arquivo de PACOTE do usuário de teste (simula adulteração para os testes de integridade).
+export async function overwritePackageFile(path: string, bytes: Buffer, mime = 'image/jpeg'): Promise<void> {
+  const { id } = e2eUser();
+  if (!id || id === MARCOS || !path.startsWith(`${id}/`)) throw new Error('recusado: só pacotes do usuário de teste');
+  const keys = await fetch(`https://api.supabase.com/v1/projects/${REF}/api-keys`, { headers: { Authorization: `Bearer ${mgmtToken()}` } }).then((r) => r.json()) as Array<{ name: string; api_key: string }>;
+  const svc = keys.find((k) => k.name === 'service_role')?.api_key;
+  const r = await fetch(`https://${REF}.supabase.co/storage/v1/object/packages/${path}`, { method: 'PUT', headers: { apikey: svc!, Authorization: `Bearer ${svc}`, 'Content-Type': mime, 'x-upsert': 'true' }, body: bytes });
+  if (!r.ok) throw new Error(`overwrite: ${r.status} ${await r.text()}`);
+}
+
 // Sobe uma imagem de teste em media/<uid>/e2e/ e devolve a URL pública.
 export async function uploadE2EImage(name: string, bytes: Buffer, mime = 'image/jpeg'): Promise<string> {
   const { id } = e2eUser();

@@ -33,10 +33,13 @@ export async function sha256Hex(data: ArrayBuffer | Uint8Array | string): Promis
   const h = await crypto.subtle.digest('SHA-256', bytes);
   return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
-// JSON canônico (chaves ordenadas) para a impressão digital do manifesto.
+// JSON canônico (chaves ordenadas, campos indefinidos omitidos — como o banco guarda) para a impressão
+// digital do manifesto: o mesmo manifesto lido do banco precisa dar o mesmo hash.
 export function canonical(v: unknown): string {
-  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
-  if (v && typeof v === 'object') return `{${Object.keys(v as Row).sort().map((k) => `${JSON.stringify(k)}:${canonical((v as Row)[k])}`).join(',')}}`;
+  if (Array.isArray(v)) return `[${v.map((x) => (x === undefined ? 'null' : canonical(x))).join(',')}]`;
+  if (v && typeof v === 'object') {
+    return `{${Object.keys(v as Row).filter((k) => (v as Row)[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canonical((v as Row)[k])}`).join(',')}}`;
+  }
   return JSON.stringify(v ?? null);
 }
 
@@ -176,7 +179,8 @@ export async function verifyPackage(pkg: PackageRow, opts: { bytes?: boolean } =
       continue;
     }
     if (!opts.bytes) continue;
-    const r = await fetch(f.url).catch(() => null);
+    // Lê o objeto GRAVADO (API do storage com a credencial do servidor), não a cópia em cache da CDN.
+    const r = await fetch(f.path ? `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${f.path}` : f.url, { headers: f.path ? svc() : {}, cache: 'no-store' }).catch(() => null);
     if (!r?.ok) { issues.push(`O ${label} programado está indisponível.`); continue; }
     const sum = await sha256Hex(await r.arrayBuffer());
     if (sum !== f.sha256) issues.push(`O ${label} programado não corresponde à versão escolhida.`);
