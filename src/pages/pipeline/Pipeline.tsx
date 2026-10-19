@@ -21,6 +21,7 @@ import { repeatOf,
 } from '@/lib/campaign/pipeline';
 import { FUNCTION_COLORS, FUNCTION_SHORT, type BeeEditorial, type CampaignCycle, type IdeaChannel, type UserPost } from '@/types';
 import { cn } from '@/lib/utils';
+import { LoadError } from '@/components/shared/LoadState';
 
 const PAGE = 6;
 const NET = (p: string) => (p === 'linkedin' ? 'LinkedIn' : p === 'instagram' ? 'Instagram' : p);
@@ -34,7 +35,7 @@ function NetIcon({ platform, className = 'h-3 w-3' }: { platform: string; classN
 
 export function Pipeline() {
   const navigate = useNavigate();
-  const { ops, posts, reload } = useOps();
+  const { ops, posts, reload, error, retry } = useOps();
   const removePost = usePostStore((s) => s.delete);
   const [params, setParams] = useSearchParams();
   const [editorials, setEditorials] = useState<BeeEditorial[]>([]);
@@ -57,6 +58,16 @@ export function Pipeline() {
   }, [openId]);
 
   const cards = useMemo(() => (ops ? buildPipeline({ campaigns: ops.campaigns, ideas: ops.ideas, contents: ops.contents, posts }) : []), [ops, posts]);
+  // ?focus=<peça ou card> (voltar do editor, "Ver"): abre o card certo; se saiu dos filtros, limpa-os (doc 04 §8.3).
+  const focusId = params.get('focus');
+  useEffect(() => {
+    if (!focusId || !cards.length) return;
+    const card = cards.find((c) => c.id === focusId || c.pieces.some((p) => p.id === focusId));
+    if (!card) return;
+    if (!filterCards([card], f).length) setF({ ...NO_FILTER });
+    setOpenId(card.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId, cards]);
   const visible = useMemo(() => filterCards(cards, f), [cards, f]);
   const byPost = useMemo(() => metricsByPost(ops?.metrics ?? []), [ops]);
   const base = useMemo(() => baselines(posts, byPost), [posts, byPost]);
@@ -159,7 +170,9 @@ export function Pipeline() {
         </div>
       )}
 
-      {!ops ? (
+      {error ? (
+        <LoadError what="os conteúdos" onRetry={() => void retry()} />
+      ) : !ops ? (
         <div className="flex h-40 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-accent" /></div>
       ) : (
         <div className="overflow-x-auto pb-2">
@@ -224,7 +237,7 @@ export function Pipeline() {
                   <div className="space-y-2">
                     <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Manifestações</p>
                     {open.pieces.map((p) => (
-                      <Link key={p.id} to={postClickRoute(p)} data-testid="drawer-piece" className="flex items-center gap-3 rounded-lg border p-2 hover:bg-accent/5">
+                      <Link key={p.id} to={postClickRoute(p)} state={{ from: `/pipeline?${params.toString()}${params.toString() ? '&' : ''}focus=${p.id}` }} data-testid="drawer-piece" className="flex items-center gap-3 rounded-lg border p-2 hover:bg-accent/5">
                         <span className="h-14 w-11 shrink-0 overflow-hidden rounded border bg-secondary/40">
                           {p.rendered_slides?.slide1 ? <img src={p.rendered_slides.slide1} alt="" className="h-full w-full object-cover" /> : <ImageIcon className="m-auto mt-4 h-4 w-4 text-muted-foreground" />}
                         </span>

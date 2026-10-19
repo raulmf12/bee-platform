@@ -96,7 +96,20 @@ const NAV_GROUPS: NavGroup[] = [
   { label: 'Configurações', to: '/configuracoes', icon: Settings },
 ];
 
+// Barra lateral (telas largas). O MESMO menu aparece em gaveta no Topbar em telas estreitas (doc 04 §14).
 export function Sidebar() {
+  return (
+    <aside className="hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
+      <div className="flex h-16 items-center border-b border-border px-5">
+        <BeeLogo showTagline />
+      </div>
+      <SidebarNav />
+    </aside>
+  );
+}
+
+// Itens do menu (fonte única para a barra lateral e para a gaveta do celular).
+export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const location = useLocation();
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   // Cadeado de itens `gated` (nenhum no menu atual — a antiga "Campanha de conteúdo" saiu).
@@ -135,12 +148,7 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
-      <div className="flex h-16 items-center border-b border-border px-5">
-        <BeeLogo showTagline />
-      </div>
-
-      <nav className="flex-1 overflow-y-auto space-y-1 px-3 py-4">
+      <nav className="flex-1 overflow-y-auto space-y-1 px-3 py-4" aria-label="Menu principal" onClick={(e) => { if ((e.target as HTMLElement).closest('a')) onNavigate?.(); }}>
         <NavLink to="/criar" data-testid="nav-create"
           className="mb-3 flex items-center justify-center gap-2 rounded-md bg-accent px-3 py-2 text-sm font-semibold text-accent-foreground transition-opacity hover:opacity-90">
           <Plus className="h-4 w-4" /> Criar
@@ -224,6 +232,5 @@ export function Sidebar() {
           );
         })}
       </nav>
-    </aside>
   );
 }

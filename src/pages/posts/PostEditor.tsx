@@ -1,7 +1,8 @@
 // PostEditor — canvas Fabric.js + caption + status + export pro Storage.
 
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams, useLocation } from 'react-router-dom';
+import { Link, useBlocker, useNavigate, useParams, useLocation } from 'react-router-dom';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ArrowLeft, CheckCircle2, ExternalLink, Loader2, PauseCircle, Save, Send, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -40,6 +41,7 @@ import { PostCoach } from '@/components/ai/PostCoach';
 import { isPublishedHistory, PUBLISHED_HISTORY_MSG, userMessage } from '@/lib/errors';
 import type { HiveSeed } from '@/lib/edge';
 import { toast } from 'sonner';
+import { useBack } from '@/lib/navigation';
 
 // Mapeia plataforma+formato pro preset inicial mais adequado.
 // User pode trocar via Select da mini-toolbar do CanvasStudio.
@@ -70,6 +72,8 @@ export function PostEditor() {
   const currentUser = useAuthStore((s) => s.currentUser);
 
   const post = posts.find((p) => p.id === id);
+  // Voltar: origem que abriu o editor (agenda, pipeline, produção, revisão) ou a lista de conteúdos com foco nesta peça.
+  const back = useBack(`/pipeline?focus=${id}`);
 
   const [title, setTitle] = useState('');
   const [briefing, setBriefing] = useState('');
@@ -105,6 +109,14 @@ export function PostEditor() {
   latestText.current = { title, briefing, caption };
   const latestFabric = useRef<object | undefined>(undefined);
   latestFabric.current = fabricJson;
+  // Último trabalho aberto (Início › "Continuar") — local, por usuário; nunca contém dados privados além do id/título.
+  useEffect(() => {
+    if (!post?.id || !currentUser?.id) return;
+    try { localStorage.setItem(`hive.lastWork.post.${currentUser.id}`, JSON.stringify({ id: post.id, title: (post.carousel_text?.quote as string | undefined) || post.title || 'Peça', at: Date.now() })); } catch { /* sem storage */ }
+  }, [post?.id, currentUser?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Sair com edição pendente (doc 04 §11.2): pergunta antes de trocar de tela dentro da Hive.
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => (textDirty || canvasDirty) && currentLocation.pathname !== nextLocation.pathname);
+  const [leaving, setLeaving] = useState(false);
   // Publicação com resultado incerto aguardando conferência (doc 01 §4.3).
   const [reconcile, setReconcile] = useState<{ open: boolean; pub: string | null }>({ open: false, pub: null });
   const [pendingCheck, setPendingCheck] = useState(false);
@@ -641,7 +653,7 @@ export function PostEditor() {
     <div className="flex h-full flex-col">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-card/60 px-6 py-3 backdrop-blur">
         <div className="flex items-center gap-3 min-w-0">
-          <Button variant="ghost" size="icon" onClick={() => { const from = (location.state as { from?: string } | null)?.from; if (from) navigate(from); else navigate(-1); }}>
+          <Button variant="ghost" size="icon" onClick={back.go} aria-label={back.label} title={back.label}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <Input
@@ -892,6 +904,24 @@ export function PostEditor() {
           </Card>
         </aside>
       </div>
+      <Dialog open={blocker.state === 'blocked'} onOpenChange={(o) => { if (!o && blocker.state === 'blocked') blocker.reset(); }}>
+        <DialogContent className="sm:max-w-md" data-testid="leave-dialog">
+          <DialogHeader>
+            <DialogTitle>Há alterações não salvas</DialogTitle>
+            <DialogDescription>O texto ou a arte mudaram desde o último salvamento. O que você quer fazer?</DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="ghost" onClick={() => blocker.state === 'blocked' && blocker.reset()}>Continuar editando</Button>
+            <Button variant="outline" onClick={() => blocker.state === 'blocked' && blocker.proceed()}>Sair sem salvar</Button>
+            <Button variant="accent" disabled={leaving} onClick={async () => {
+              setLeaving(true);
+              try { await flushPending(); if (blocker.state === 'blocked') blocker.proceed(); }
+              catch (e) { toast.error(`Não foi possível salvar — você continua na peça. ${userMessage(e)}`); if (blocker.state === 'blocked') blocker.reset(); }
+              finally { setLeaving(false); }
+            }}>{leaving && <Loader2 className="h-4 w-4 animate-spin" />} Salvar e sair</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <ReconcileDialog postId={post.id} publicationId={reconcile.pub} open={reconcile.open}
         onClose={() => setReconcile({ open: false, pub: null })} onResolved={() => void refreshOne(post.id)} />
     </div>

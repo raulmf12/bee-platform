@@ -6,6 +6,8 @@ import type { PostStatus, UserPost } from '@/types';
 
 interface PostState {
   posts: UserPost[];
+  // Falha ao ler as peças (≠ "não há peças"): a tela mostra o erro e oferece tentar de novo.
+  error: string | null;
   loading: boolean;
 
   load: () => Promise<void>;
@@ -23,15 +25,16 @@ interface PostState {
 export const usePostStore = create<PostState>((set, get) => ({
   posts: [],
   loading: false,
+  error: null,
 
   load: async () => {
     set({ loading: true });
     try {
       const posts = await postApi.list();
-      set({ posts, loading: false });
+      set({ posts, loading: false, error: null });
     } catch (e) {
       console.error('[postStore.load]', e);
-      set({ loading: false });
+      set({ loading: false, error: String((e as Error).message ?? e) });
     }
   },
 

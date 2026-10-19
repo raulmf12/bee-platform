@@ -15,6 +15,8 @@ import { accountApi, campaignApi, cycleApi, ideaApi } from '@/lib/campaignApi';
 import { beeApi } from '@/lib/api';
 import { isAvulso } from '@/lib/campaign/avulso';
 import type { BeeEditorial, Campaign, CampaignCycle, CycleStatus, Idea, SocialAccount } from '@/types';
+import { LoadError } from '@/components/shared/LoadState';
+import { useAuthStore } from '@/store/authStore';
 
 const STEP_BY_STATUS: Record<CycleStatus, number> = {
   not_started: 2, planned: 3, pauta_ready: 3, pauta_approved: 4, developing: 4, producing: 5, ready: 5, done: 5,
@@ -35,8 +37,9 @@ export function Production() {
   const [accounts, setAccounts] = useState<SocialAccount[]>([]);
   const [editorials, setEditorials] = useState<BeeEditorial[]>([]);
   const [ideas, setIdeas] = useState<Idea[]>([]);
-  const [viewStep, setViewStep] = useState<number | null>(null);
   const [avulso, setAvulso] = useState<Campaign | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const currentUser = useAuthStore((s) => s.currentUser);
 
   const campaignId = params.get('campaign') ?? undefined;
   const cycleId = params.get('cycle') ?? undefined;
@@ -48,35 +51,66 @@ export function Production() {
   const rec = useMemo(() => recommendedCycle(cycles), [cycles]);
   const today = new Date().toISOString().slice(0, 10);
 
-  useEffect(() => {
+  const loadBase = useCallback(() => {
+    setLoadError(false);
     Promise.all([campaignApi.list(), accountApi.list(), beeApi.editorials(), campaignApi.getAvulso()])
       .then(([c, a, e, av]) => { setCampaigns(c.filter((x) => x.status === 'active')); setAccounts(a); setEditorials(e.filter((x) => x.is_active !== false)); setAvulso(av); })
-      .catch(() => setCampaigns([]));
+      .catch(() => setLoadError(true));                    // falha ≠ "nenhuma campanha ativa" (doc 04 §13)
   }, []);
+  useEffect(() => { loadBase(); }, [loadBase]);
 
-  // Sem campanha na URL: pré-seleciona a primeira ativa (não pergunta o que já sabe).
+  // Sem campanha na URL (doc 04 §9.2): retoma o último trabalho escolhido (se ainda vale); com UMA só
+  // campanha, abre ela; com várias, NÃO assume a primeira — mostra o seletor com a recomendação.
+  const lastKey = currentUser ? `hive.lastWork.production.${currentUser.id}` : null;
   useEffect(() => {
-    if (campaigns && !campaignId && campaigns[0]) setParams({ campaign: campaigns[0].id }, { replace: true });
-  }, [campaigns, campaignId, setParams]);
+    if (!campaigns || campaignId) return;
+    let last: { campaign?: string; cycle?: string } = {};
+    try { last = JSON.parse((lastKey && localStorage.getItem(lastKey)) || '{}'); } catch { /* ignora */ }
+    const target = campaigns.find((c) => c.id === last.campaign) ?? (campaigns.length === 1 ? campaigns[0] : undefined);
+    if (target) setParams({ campaign: target.id, ...(last.campaign === target.id && last.cycle ? { cycle: last.cycle } : {}) }, { replace: true });
+  }, [campaigns, campaignId, setParams, lastKey]);
 
+  // Ciclos da campanha: resposta de uma campanha anterior (troca rápida) é descartada.
   useEffect(() => {
     if (!campaignId) { setCycles([]); return; }
-    cycleApi.listByCampaign(campaignId).then(setCycles).catch(() => setCycles([]));
+    let alive = true;
+    cycleApi.listByCampaign(campaignId).then((c) => { if (alive) setCycles(c); }).catch(() => { if (alive) setCycles([]); });
+    return () => { alive = false; };
   }, [campaignId]);
 
-  // Sem ciclo na URL: o recomendado.
+  // Sem ciclo na URL: o recomendado — preservando o foco independente (content) que veio no link.
   useEffect(() => {
-    if (campaignId && !cycleId && rec) setParams({ campaign: campaignId, cycle: rec.id }, { replace: true });
-  }, [campaignId, cycleId, rec, setParams]);
+    if (campaignId && !cycleId && rec) setParams({ campaign: campaignId, cycle: rec.id, ...(contentId ? { content: contentId } : {}) }, { replace: true });
+  }, [campaignId, cycleId, rec, setParams, contentId]);
+  // Ciclo da URL que não é desta campanha: limpa (nunca mistura contexto antigo com campanha nova).
+  useEffect(() => {
+    if (campaignId && cycleId && cycles.length && !cycles.some((c) => c.id === cycleId)) setParams({ campaign: campaignId }, { replace: true });
+  }, [campaignId, cycleId, cycles, setParams]);
+  // Lembra o trabalho escolhido para a próxima entrada em /producao.
+  useEffect(() => {
+    if (lastKey && campaignId && cycleId) try { localStorage.setItem(lastKey, JSON.stringify({ campaign: campaignId, cycle: cycleId, at: Date.now() })); } catch { /* sem storage */ }
+  }, [lastKey, campaignId, cycleId]);
 
   const loadIdeas = useCallback(async () => {
     if (!cycleId) { setIdeas([]); return; }
-    setIdeas(await ideaApi.listByCycle(cycleId));
+    const forCycle = cycleId;
+    const list = await ideaApi.listByCycle(forCycle);
+    setIdeas((cur) => (params.get('cycle') === forCycle || !params.get('cycle') ? list : cur));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cycleId]);
-  useEffect(() => { void loadIdeas(); setViewStep(null); }, [loadIdeas]);
+  useEffect(() => { void loadIdeas(); }, [loadIdeas]);
+
+  // Etapa revisitada fica na URL (?step=): sobrevive a recarregar e ao voltar; o estado de negócio continua no servidor.
+  const stepParam = params.get('step');
+  const setViewStep = (i: number | null) => {
+    const n = new URLSearchParams(params);
+    if (i === null) n.delete('step'); else n.set('step', String(i));
+    setParams(n, { replace: true });
+  };
 
   function replaceCycle(c: CampaignCycle) { setCycles((cs) => cs.map((x) => (x.id === c.id ? c : x))); }
 
+  if (loadError) return <div className="mx-auto max-w-xl p-10"><LoadError what="as campanhas" onRetry={loadBase} /></div>;
   if (!campaigns) return <div className="flex h-64 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-accent" /></div>;
 
   if (campaigns.length === 0 && !solo) {
@@ -93,7 +127,9 @@ export function Production() {
   }
 
   const statusStep = cycle ? STEP_BY_STATUS[cycle.status] : campaign ? 1 : 0;
-  const step = viewStep ?? statusStep;
+  // etapa escolhida só vale se ainda é permitida (≤ etapa alcançada); senão, a etapa real do ciclo
+  const wanted = stepParam !== null ? Number(stepParam) : null;
+  const step = wanted !== null && wanted <= statusStep && wanted >= 0 ? wanted : statusStep;
 
   return (
     <div className="flex min-h-full flex-col">
@@ -119,7 +155,9 @@ export function Production() {
         </aside>
         <main className="min-w-0">
           {!campaign || !cycle ? (
-            <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-muted-foreground">Escolha a campanha e o ciclo para continuar.</div>
+            <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-muted-foreground" data-testid="choose-work">
+              {!campaign ? 'Escolha em qual campanha você quer trabalhar (ao lado). A Hive não abre uma campanha por conta própria quando há mais de uma.' : 'Escolha o ciclo para continuar.'}
+            </div>
           ) : step === 2 ? (
             <PlanStep key={cycle.id} campaign={campaign} cycle={cycle} accounts={accounts}
               isCurrent={cycle.start_date <= today && today <= cycle.end_date}

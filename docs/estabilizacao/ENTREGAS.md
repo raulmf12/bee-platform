@@ -83,3 +83,25 @@ confirmação de um clique · publicado pode ser arquivado · resultado incerto 
 3. **Quando a rede não confirma.** Se a rede pode ter publicado sem a Hive receber a resposta, aparece **"Precisamos conferir se a publicação foi concluída"**. Nada é reenviado até você dizer "Foi publicado" (com o link) ou "Não foi publicado". No Instagram, o botão **"Procurar no Instagram"** acha o post pela legenda.
 4. **Agendamentos antigos pedem uma confirmação.** Os 6 agendamentos feitos antes desta versão aparecem com ⚠ na agenda e o aviso **"Confirme o material programado"**; um clique em **Confirmar material** congela a versão atual. **Até confirmar, o agendador não publica essa peça.** Próximo da fila: *"O cansaço da liderança raramente vem…"* (20/10).
 5. **"Publicar agora" numa peça agendada** antecipa a versão programada (o aviso diz isso); para incluir edições, atualize o conteúdo programado antes.
+
+---
+
+## E5 — Navegação, orientação e retomada · implantada em 19/10/2026
+
+| Campo | Informação |
+|---|---|
+| App | `src/lib/navigation.ts` (origem validada + destinos-pai; destino pendente no login/configuração), `LoadState` (erro ≠ vazio), roteador de dados (`createBrowserRouter`) para o aviso de saída, `SidebarNav` em gaveta no celular, Produção (sem "primeira campanha" silenciosa, `?step=`, respostas antigas descartadas, contexto limpo ao trocar), Pipeline/Agenda com foco por `?focus=`, Início com "Continuar", trilho de etapas por estado persistido, recomendação com alcance limitado |
+| Critérios | 04/T01–T07, T09, T11, T12, T15–T21, T28, T29, T30, T31, T32 · parcial: T10 (avulso entra pela lista/criar), T22–T27, T33–T34 (dependem de E3/E4, já implantados) |
+| Evidência | `e2e/f26-navegacao-e5.spec.ts` (9/9) + regressão completa **174/174** (19/10, 37,9 min) |
+| Limitações | "Continuar" usa o último trabalho aberto neste navegador (não sincroniza entre aparelhos). Etapas que ainda não têm rascunho salvo (início da nova campanha) não prometem retomada: protegem só contra sair sem querer pelo editor. |
+| Retorno | Reverter o commit do app (sem banco). |
+
+### Nota para o Marcos — o que mudou
+1. **"Voltar" sempre leva a um lugar da Hive.** *Antes:* em várias telas o Voltar dependia do histórico do navegador (link aberto direto ou em nova aba saía da Hive ou caía num fluxo vazio). *Agora:* volta para de onde você veio (agenda, conteúdos, produção, revisão) e, sem origem, para o lugar certo: Criar → Início; Nova campanha → Campanhas; peça → Conteúdos com a peça aberta. O botão diz o destino ("Voltar à agenda").
+2. **Abrir uma peça pela agenda e voltar** reabre a agenda no mês da peça, com o painel dela aberto.
+3. **Link de peça sem estar logado:** depois de entrar, você cai na peça (não no Início).
+4. **Produção não escolhe campanha por você.** *Antes:* entrar em Produção abria a primeira campanha da lista. *Agora:* abre a que você estava trabalhando por último; se houver uma só, abre ela; se houver várias e nenhuma anterior, pede para escolher. A etapa que você abriu fica no endereço — recarregar não te joga para outra etapa.
+5. **Erro de carregamento não parece "vazio".** Se a Hive não consegue carregar, aparece "Não foi possível carregar… — tente de novo", em vez de "Nenhuma campanha" ou "Nada esperando por você".
+6. **Sair do editor com alteração não salva pergunta antes:** Salvar e sair · Sair sem salvar · Continuar editando.
+7. **Início › "Continuar":** atalho para o último trabalho que você abriu (peça ou produção), enquanto ele ainda pede ação.
+8. **Celular:** o menu completo abre pelo botão ☰ no topo.

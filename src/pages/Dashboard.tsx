@@ -10,13 +10,15 @@ import { useOps } from '@/lib/campaign/useOps';
 import { happening, pendingItems, recommendations, upcoming, type HomeData } from '@/lib/campaign/home';
 import { cn } from '@/lib/utils';
 import { retryPendingMeasurements } from '@/lib/measurement';
+import { LoadError } from '@/components/shared/LoadState';
+import { POST_STATUS_LABELS } from '@/types';
 
 export function Dashboard() {
   const navigate = useNavigate();
   const { currentUser } = useAuthStore();
   // Medições da IA que falharam depois de uma aprovação: reprocessa em segundo plano (doc 02 §12).
   useEffect(() => { if (currentUser?.id) void retryPendingMeasurements(currentUser.id); }, [currentUser?.id]);
-  const { ops, posts } = useOps();
+  const { ops, posts, error, retry } = useOps();
 
   const data: HomeData | null = useMemo(() => (ops ? { ...ops, posts } : null), [ops, posts]);
   const pend = useMemo(() => (data ? pendingItems(data) : []), [data]);
@@ -24,6 +26,21 @@ export function Dashboard() {
   const recs = useMemo(() => (data ? recommendations(data) : []), [data]);
   const next = useMemo(() => (data ? upcoming(data) : []), [data]);
   const firstName = (currentUser?.name ?? '').split(' ')[0];
+  // "Continuar" (doc 04 §6.1): o último trabalho ABERTO pelo produtor (editor ou produção), se ainda existe
+  // e ainda pede ação. Sem evidência confiável, não inventa continuidade.
+  const resume = useMemo(() => {
+    if (!data || !currentUser?.id) return null;
+    const read = (k: string) => { try { return JSON.parse(localStorage.getItem(`hive.lastWork.${k}.${currentUser.id}`) || 'null'); } catch { return null; } };
+    const lp = read('post') as { id: string; title: string; at: number } | null;
+    const lw = read('production') as { campaign: string; cycle: string; at: number } | null;
+    const p = lp && data.posts.find((x) => x.id === lp.id && !['published', 'archived'].includes(x.status));
+    const c = lw && data.campaigns.find((x) => x.id === lw.campaign && x.status === 'active');
+    const cands = [
+      p && lp ? { at: lp.at, title: lp.title, state: POST_STATUS_LABELS[p.status], to: `/posts/${p.id}`, label: 'Abrir a peça' } : null,
+      c && lw ? { at: lw.at, title: c.name, state: 'Produção da campanha', to: `/producao?campaign=${c.id}&cycle=${lw.cycle}`, label: 'Voltar à produção' } : null,
+    ].filter(Boolean) as Array<{ at: number; title: string; state: string; to: string; label: string }>;
+    return cands.sort((a, b) => b.at - a.at)[0] ?? null;
+  }, [data, currentUser?.id]);
 
   return (
     <div className="mx-auto max-w-6xl space-y-8 p-6 lg:p-8">
@@ -35,10 +52,22 @@ export function Dashboard() {
         <Button variant="accent" size="lg" onClick={() => navigate('/criar')} data-testid="home-create"><Plus className="h-4 w-4" /> Criar</Button>
       </header>
 
-      {!data || !stats ? (
+      {error ? (
+        <LoadError what="o seu trabalho (campanhas, conteúdos e peças)" onRetry={() => void retry()} />
+      ) : !data || !stats ? (
         <div className="flex h-40 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-accent" /></div>
       ) : (
         <>
+          {resume && (
+            <section className="flex flex-wrap items-center gap-3 rounded-2xl border border-accent/40 bg-accent/5 p-4" data-testid="home-resume">
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold uppercase tracking-wider text-accent">Continuar</p>
+                <p className="truncate font-display text-base font-semibold">{resume.title}</p>
+                <p className="text-xs text-muted-foreground">{resume.state}</p>
+              </div>
+              <Button asChild variant="accent" size="sm"><Link to={resume.to}>{resume.label} <ArrowRight className="h-3.5 w-3.5" /></Link></Button>
+            </section>
+          )}
           <section className="space-y-3" aria-labelledby="h-happening">
             <h2 id="h-happening" className="font-display text-base font-semibold">O que está acontecendo</h2>
             <div className="grid gap-3 sm:grid-cols-3">

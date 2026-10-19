@@ -13,6 +13,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useAuthStore } from '@/store/authStore';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { takeNext } from '@/lib/navigation';
 
 type Step = 'persona' | 'gemini';
 
@@ -52,7 +53,7 @@ export function OnboardingWizard() {
       try {
         await updateSettings({ gemini_api_key: geminiKey });
         toast.success('Pronto. Vamos cocriar.');
-        navigate('/');
+        navigate(takeNext() ?? '/');
       } catch (e) {
         console.error(e);
         toast.error('Falha ao salvar.');

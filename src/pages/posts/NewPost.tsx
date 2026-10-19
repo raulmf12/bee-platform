@@ -46,6 +46,7 @@ import { SnippetRegenDialog } from '@/components/posts/wizard/SnippetRegenDialog
 import { PostChatPanel } from '@/components/posts/wizard/PostChatPanel';
 import type { AiVariation, BeeEditorial, BeeAvatar, Platform, PostContent, TargetAvatar, UserPost, QaResult } from '@/types';
 import { POST_STATUS_LABELS } from '@/types';
+import { useBack } from '@/lib/navigation';
 
 type WizardState =
   | 'FORMAT' | 'BATCH_CONFIG'
@@ -162,6 +163,7 @@ function StatusPill({ status }: { status: FieldStatus }) {
 }
 
 export function NewPost() {
+  const back = useBack('/criar');
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { create, posts, load: loadPosts } = usePostStore();
@@ -1535,7 +1537,7 @@ export function NewPost() {
   const bothApproved = !!activeItem && activeItem.tituloStatus === 'approved' && activeItem.legendaStatus === 'approved';
 
   function handleBack() {
-    if (state === 'FORMAT') { navigate(-1); return; }
+    if (state === 'FORMAT') { back.go(); return; }
     if (state === 'REVIEW_ONE') { setActiveId(null); setState('REVIEW_QUEUE'); return; }
     if (state === 'IMAGE_PREVIEW') { setState('REVIEW_ONE'); return; }
     setState('FORMAT');

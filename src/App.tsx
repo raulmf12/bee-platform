@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { rememberNext } from '@/lib/navigation';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useAuthStore, needsOnboarding } from '@/store/authStore';
 import { AppShell } from '@/components/layout/AppShell';
@@ -49,11 +50,16 @@ import { NewCampaign } from '@/pages/campanhas/NewCampaign';
 import { CampaignDetail } from '@/pages/campanhas/CampaignDetail';
 import { Production } from '@/pages/producao/Production';
 
+// Link de tarefa aberto sem sessão (doc 04 §12): o destino vai junto para o login e é retomado depois de
+// entrar (e depois do gate de configuração, se houver) — validado como rota interna; a autorização do
+// objeto continua sendo conferida pela própria tela.
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { currentUser, settings, initialized } = useAuthStore();
+  const loc = useLocation();
   if (!initialized) return null;
-  if (!currentUser) return <Navigate to="/login" replace />;
-  if (needsOnboarding(settings)) return <Navigate to="/onboarding" replace />;
+  const here = `${loc.pathname}${loc.search}`;
+  if (!currentUser) return <Navigate to={here === '/' ? '/login' : `/login?next=${encodeURIComponent(here)}`} replace />;
+  if (needsOnboarding(settings)) { rememberNext(here); return <Navigate to="/onboarding" replace />; }
   return <>{children}</>;
 }
 

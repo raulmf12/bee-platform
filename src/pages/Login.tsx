@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { safeInternalPath, takeNext } from '@/lib/navigation';
 import { ArrowRight, AlertCircle, Loader2 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { Button } from '@/components/ui/button';
@@ -11,6 +12,7 @@ import { BeeLogo } from '@/components/shared/BeeLogo';
 export function Login() {
   const { signIn, loading, error } = useAuthStore();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
@@ -18,7 +20,8 @@ export function Login() {
     e.preventDefault();
     try {
       await signIn(email.trim(), password);
-      navigate('/');
+      // Volta para a tarefa que pediu login (rota interna validada); senão, o Início.
+      navigate(safeInternalPath(params.get('next')) ?? takeNext() ?? '/');
     } catch {
       // erro fica em useAuthStore.error e ja eh exibido abaixo
     }

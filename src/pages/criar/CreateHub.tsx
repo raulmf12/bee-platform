@@ -6,8 +6,10 @@ import { Button } from '@/components/ui/button';
 import { WizardShell, ChoiceCard } from '@/components/campaign/WizardShell';
 import { HiveNote } from '@/components/campaign/HiveNote';
 import { recommendNextMove, type NextMove } from '@/lib/campaign/recommend';
+import { useBack } from '@/lib/navigation';
 
 export function CreateHub() {
+  const back = useBack('/');                    // sem origem confiável: Início (doc 04 §8.2)
   const navigate = useNavigate();
   const [move, setMove] = useState<NextMove | null>(null);
   const [loading, setLoading] = useState(false);
@@ -18,7 +20,7 @@ export function CreateHub() {
   }
 
   return (
-    <WizardShell title="O que você quer criar agora?" onBack={() => navigate(-1)}>
+    <WizardShell title="O que você quer criar agora?" onBack={back.go}>
       <div className="grid gap-3">
         <ChoiceCard testId="create-campaign" onClick={() => navigate('/campanhas/nova')} icon={<Layers className="h-5 w-5" />}
           title="Campanha de conteúdos" description="Uma estratégia que a Hive transforma em ciclos de ideias, conteúdos e peças." />

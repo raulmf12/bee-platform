@@ -24,10 +24,12 @@ import { beeApi, podcastApi, podcastClipApi, postApi } from '@/lib/api';
 import type { BeeEditorial, Platform, Podcast, TargetAvatar } from '@/types';
 import { v4 as uuid } from 'uuid';
 import { toast } from 'sonner';
+import { useBack } from '@/lib/navigation';
 
 type Phase = 'source' | 'upload' | 'transcribing' | 'config' | 'generating' | 'edit' | 'creating';
 
 export function NewPodcastClip() {
+  const back = useBack('/podcasts');
   const navigate = useNavigate();
   const currentUser = useAuthStore((s) => s.currentUser);
   const { create } = usePostStore();
@@ -258,7 +260,7 @@ export function NewPodcastClip() {
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-6 lg:p-8">
       <header className="flex items-center gap-3">
-        <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
+        <Button variant="ghost" size="icon" onClick={back.go} aria-label={back.label} title={back.label}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div>

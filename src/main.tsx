@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
+import { RouterProvider, createBrowserRouter } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import App from './App';
 import './index.css';
@@ -19,11 +19,12 @@ if (typeof window !== 'undefined' && !localStorage.getItem(MIGRATION_FLAG)) {
   localStorage.setItem(MIGRATION_FLAG, '1');
 }
 
+// Roteador de dados (antes BrowserRouter): necessário para avisar antes de sair de uma tela com edição
+// pendente (useBlocker — doc 04 §11.2). As rotas continuam declaradas em <App /> (rota curinga).
+const router = createBrowserRouter([{ path: '*', element: <><App /><Toaster richColors position="top-right" /></> }]);
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <App />
-      <Toaster richColors position="top-right" />
-    </BrowserRouter>
+    <RouterProvider router={router} />
   </React.StrictMode>,
 );

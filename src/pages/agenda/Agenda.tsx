@@ -57,6 +57,7 @@ import { scheduleAt, unschedule } from '@/lib/scheduling';
 import { ScheduledPackageCard } from '@/components/publication/ScheduledPackageCard';
 import { db } from '@/lib/db';
 import { toast } from 'sonner';
+import { LoadError } from '@/components/shared/LoadState';
 
 const NEUTRAL = '#94A3B8';
 const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -103,6 +104,7 @@ function eventDate(p: UserPost): Date | null {
 export function Agenda() {
   const navigate = useNavigate();
   const { posts, load, refreshOne } = usePostStore();
+  const postsError = usePostStore((s) => s.error);
   const settings = useAuthStore((s) => s.settings);
   const updateSettings = useAuthStore((s) => s.updateSettings);
 
@@ -1014,6 +1016,7 @@ export function Agenda() {
         </section>
       )}
 
+      {postsError && <LoadError compact what="as peças da agenda" onRetry={() => void load()} />}
       {openPlan && !plan && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-accent/50 bg-accent/5 px-3 py-2 text-sm" data-testid="open-plan-banner">
           <span className="flex-1">Há um plano de distribuição com pendências ({openPlan.rows.filter((r) => r.result?.state !== 'ok').length} de {openPlan.rows.length} linhas).</span>
@@ -1246,7 +1249,7 @@ export function Agenda() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2 border-t p-3">
-                <Button variant="accent" size="sm" onClick={() => navigate(`/posts/${selected.id}`)}><Edit3 className="mr-1 h-4 w-4" /> Editar</Button>
+                <Button variant="accent" size="sm" onClick={() => navigate(`/posts/${selected.id}`, { state: { from: `/agenda?focus=${selected.id}${lens ? `&campaign=${lens}` : ''}` } })}><Edit3 className="mr-1 h-4 w-4" /> Editar</Button>
                 <Button variant="outline" size="sm" onClick={() => setFullView((v) => !v)} data-testid="panel-full">{fullView ? 'Ver resumo' : 'Ver versão completa'}</Button>
                 {when && !isPublished && (
                   <Button variant="ghost" size="sm" className="ml-auto" onClick={() => void backToStandby(selected)} data-testid="panel-unschedule">

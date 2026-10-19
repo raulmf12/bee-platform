@@ -25,12 +25,14 @@ import { normalizeMix, phasesToMatrix } from '@/lib/campaign/strategy';
 import { activateCampaign, defaultCadence, defaultCampaignName, type DraftStrategy } from '@/lib/campaign/activate';
 import { buildCycleRanges, formatDay, mondayOf } from '@/lib/campaign/dates';
 import type { AcjPlanDraft, BeeProduct, Campaign, CampaignCycle, CampaignMoment, CampaignType, SocialAccount, StrategicFunction } from '@/types';
+import { useBack } from '@/lib/navigation';
 
 type Step = 'tipo' | 'momento' | 'estrategia' | 'duracao' | 'definida' | 'ativa';
 const STEPS: Step[] = ['tipo', 'momento', 'estrategia', 'duracao', 'definida', 'ativa'];
 const ADJUST_EXAMPLES = ['Quero aumentar autoridade.', 'Quero falar menos de produtos.', 'Quero aumentar minha presença pessoal.'];
 
 export function NewCampaign() {
+  const exitBack = useBack('/campanhas');       // 1º passo sem origem: Campanhas
   const navigate = useNavigate();
   const { currentUser, settings } = useAuthStore();
   const [step, setStep] = useState<Step>('tipo');
@@ -186,7 +188,7 @@ export function NewCampaign() {
   if (step === 'tipo') {
     return (
       <WizardShell step={stepNo} total={STEPS.length} eyebrow="Nova campanha" title="Que tipo de campanha você quer criar?"
-        onBack={() => navigate(-1)}
+        onBack={exitBack.go}
         footer={(
           <Button variant="accent" size="lg" onClick={() => readMoment()} disabled={busy === 'momento' || (type === 'vendas' && !productId && products.length > 0)}>
             {busy === 'momento' ? <><Loader2 className="h-4 w-4 animate-spin" /> A Hive está lendo seu momento…</> : 'Continuar →'}

@@ -110,6 +110,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   signOut: async () => {
     await supabase.auth.signOut();
     setAuthCache(null, null);
+    // Retomada local é do usuário que saiu (doc 04 §12): não mostrar tarefas dele para o próximo.
+    try {
+      Object.keys(localStorage).filter((k) => k.startsWith('hive.lastWork')).forEach((k) => localStorage.removeItem(k));
+      sessionStorage.removeItem('hive.next');
+    } catch { /* sem storage */ }
     set({ currentUser: null, settings: null });
   },
 

@@ -13,7 +13,7 @@ export function ProductionStepper({ current, reached, onSelect, steps = PRODUCTI
       <ol className="mx-auto flex min-w-[720px] max-w-6xl items-center gap-2 px-4 py-3">
         {steps.map((label, n) => {
           const i = n + offset;
-          const done = i < current;
+          const done = i < reached && i !== current;   // concluída = estado persistido, não posição relativa à etapa vista (doc 04 §9.3)
           const active = i === current;
           const clickable = !!onSelect && i >= 2 && i <= reached && i !== current;
           return (
