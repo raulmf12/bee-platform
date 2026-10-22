@@ -1,24 +1,14 @@
-import { execSync } from 'node:child_process';
+import { managementFetch } from './management';
 import { e2eUser } from './env';
 
 // Acesso administrativo ao banco SÓ pra preparar/limpar dados do usuário de
 // teste. Usa o token da Supabase CLI do keychain (nada de segredo em arquivo).
 const REF = 'djlorvdehedcupeykyes';
 const MARCOS = 'dfa11979-83c5-4737-9601-56e4df05746a';
-let _mgmt: string | null = null;
-
-function mgmtToken(): string {
-  if (!_mgmt) {
-    const raw = execSync('security find-generic-password -s "Supabase CLI" -w').toString().trim();
-    _mgmt = Buffer.from(raw.replace(/^go-keyring-base64:/, ''), 'base64').toString();
-  }
-  return _mgmt;
-}
-
 export async function sql<T = Record<string, unknown>>(query: string): Promise<T[]> {
-  const r = await fetch(`https://api.supabase.com/v1/projects/${REF}/database/query`, {
+  const r = await managementFetch(`https://api.supabase.com/v1/projects/${REF}/database/query`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${mgmtToken()}`, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query }),
   });
   const j = await r.json();
@@ -93,7 +83,7 @@ export async function cleanupE2EStorage(): Promise<number> {
   if (!id || id === MARCOS) throw new Error('cleanup recusado: id inválido');
   const rows = await sql<{ name: string }>(`select name from storage.objects where bucket_id='media' and name like '${id}/%'`);
   if (!rows.length) return 0;
-  const keys = await fetch(`https://api.supabase.com/v1/projects/${REF}/api-keys`, { headers: { Authorization: `Bearer ${mgmtToken()}` } }).then((r) => r.json()) as Array<{ name: string; api_key: string }>;
+  const keys = await managementFetch(`https://api.supabase.com/v1/projects/${REF}/api-keys`, {}).then((r) => r.json()) as Array<{ name: string; api_key: string }>;
   const svc = keys.find((k) => k.name === 'service_role')?.api_key;
   if (!svc) return 0;
   const names = rows.map((r) => r.name).filter((n) => n.startsWith(`${id}/`));
@@ -119,7 +109,7 @@ export async function cleanupE2EStorage(): Promise<number> {
 export async function overwritePackageFile(path: string, bytes: Buffer, mime = 'image/jpeg'): Promise<void> {
   const { id } = e2eUser();
   if (!id || id === MARCOS || !path.startsWith(`${id}/`)) throw new Error('recusado: só pacotes do usuário de teste');
-  const keys = await fetch(`https://api.supabase.com/v1/projects/${REF}/api-keys`, { headers: { Authorization: `Bearer ${mgmtToken()}` } }).then((r) => r.json()) as Array<{ name: string; api_key: string }>;
+  const keys = await managementFetch(`https://api.supabase.com/v1/projects/${REF}/api-keys`, {}).then((r) => r.json()) as Array<{ name: string; api_key: string }>;
   const svc = keys.find((k) => k.name === 'service_role')?.api_key;
   const r = await fetch(`https://${REF}.supabase.co/storage/v1/object/packages/${path}`, { method: 'PUT', headers: { apikey: svc!, Authorization: `Bearer ${svc}`, 'Content-Type': mime, 'x-upsert': 'true' }, body: bytes });
   if (!r.ok) throw new Error(`overwrite: ${r.status} ${await r.text()}`);
@@ -129,7 +119,7 @@ export async function overwritePackageFile(path: string, bytes: Buffer, mime = '
 export async function uploadE2EImage(name: string, bytes: Buffer, mime = 'image/jpeg'): Promise<string> {
   const { id } = e2eUser();
   if (!id || id === MARCOS) throw new Error('upload recusado: id inválido');
-  const keys = await fetch(`https://api.supabase.com/v1/projects/${REF}/api-keys`, { headers: { Authorization: `Bearer ${mgmtToken()}` } }).then((r) => r.json()) as Array<{ name: string; api_key: string }>;
+  const keys = await managementFetch(`https://api.supabase.com/v1/projects/${REF}/api-keys`, {}).then((r) => r.json()) as Array<{ name: string; api_key: string }>;
   const svc = keys.find((k) => k.name === 'service_role')?.api_key;
   if (!svc) throw new Error('service_role indisponível');
   const path = `${id}/e2e/${name}`;
@@ -148,7 +138,7 @@ export async function callEdgeAsService<T = Record<string, unknown>>(fn: string,
   const { id } = e2eUser();
   if (!id || id === MARCOS) throw new Error('chamada recusada: id inválido');
   if (!_svc) {
-    const keys = await fetch(`https://api.supabase.com/v1/projects/${REF}/api-keys`, { headers: { Authorization: `Bearer ${mgmtToken()}` } }).then((r) => r.json()) as Array<{ name: string; api_key: string }>;
+    const keys = await managementFetch(`https://api.supabase.com/v1/projects/${REF}/api-keys`, {}).then((r) => r.json()) as Array<{ name: string; api_key: string }>;
     _svc = keys.find((k) => k.name === 'service_role')?.api_key ?? null;
     if (!_svc) throw new Error('service_role indisponível');
   }
@@ -169,7 +159,7 @@ export async function cleanupE2EPhotoFiles(): Promise<number> {
   if (!id || id === MARCOS) throw new Error('cleanup recusado: id inválido');
   const rows = await sql<{ storage_path: string }>(`select storage_path from photo_generations where user_id='${id}' and storage_path is not null`);
   if (!rows.length) return 0;
-  const keys = await fetch(`https://api.supabase.com/v1/projects/${REF}/api-keys`, { headers: { Authorization: `Bearer ${mgmtToken()}` } }).then((r) => r.json()) as Array<{ name: string; api_key: string }>;
+  const keys = await managementFetch(`https://api.supabase.com/v1/projects/${REF}/api-keys`, {}).then((r) => r.json()) as Array<{ name: string; api_key: string }>;
   const svc = keys.find((k) => k.name === 'service_role')?.api_key;
   if (!svc) return 0;
   const paths = rows.map((r) => r.storage_path).filter((p) => p.startsWith('hive/marcos-photo/'));

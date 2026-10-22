@@ -1,3 +1,4 @@
+import { canvasSignature, canvasTextPatch, createEditorQueue, type EditorSnapshot } from '@/lib/editorSnapshot';
 // PostEditor — canvas Fabric.js + caption + status + export pro Storage.
 
 import { useEffect, useRef, useState } from 'react';
@@ -88,7 +89,7 @@ export function PostEditor() {
   const [variation, setVariation] = useState<AiVariation | null>(null);
   const [textDirty, setTextDirty] = useState(false);
   const [canvasDirty, setCanvasDirty] = useState(false);
-  const lastUploadedHash = useRef<string | null>(null);
+  const lastUploadedHash = useRef<{ hash: string; url: string } | null>(null);
   // Quando o post carregou. O CanvasStudio dispara onChange na hidratação
   // inicial (não é edição do humano) — usamos isso pra IGNORAR essas mudanças
   // e não inflar manual_edits só por abrir o editor.
@@ -107,8 +108,18 @@ export function PostEditor() {
   // Últimos valores na tela: o salvamento só limpa o "pendente" se nada mudou enquanto gravava.
   const latestText = useRef({ title: '', briefing: '', caption: '' });
   latestText.current = { title, briefing, caption };
-  const latestFabric = useRef<object | undefined>(undefined);
-  latestFabric.current = fabricJson;
+  const snapshotRef = useRef<(() => EditorSnapshot | null) | null>(null);
+  const editorQueue = useRef(createEditorQueue());
+  const activePostId = useRef(post?.id);
+  activePostId.current = post?.id;
+  useEffect(() => { activePostId.current = post?.id; return () => { activePostId.current = undefined; }; }, [post?.id]);
+  function queueEditor<T>(operation: () => Promise<T>): Promise<T> {
+    const expected = post?.id;
+    return editorQueue.current(async () => {
+      if (!expected || activePostId.current !== expected) throw new Error('A peça aberta mudou. Refaça a ação na peça atual.');
+      return operation();
+    });
+  }
   // Último trabalho aberto (Início › "Continuar") — local, por usuário; nunca contém dados privados além do id/título.
   useEffect(() => {
     if (!post?.id || !currentUser?.id) return;
@@ -140,7 +151,7 @@ export function PostEditor() {
     setBriefing(post.briefing ?? '');
     setCaption(post.caption ?? '');
     setFabricJson(post.carousel_fabric_json?.[0]);
-    hydratedFabricRef.current = JSON.stringify(post.carousel_fabric_json?.[0] ?? null);
+    hydratedFabricRef.current = canvasSignature(post.carousel_fabric_json?.[0]);
     setTextDirty(false);
     setCanvasDirty(false);
     lastUploadedHash.current = null;
@@ -157,7 +168,7 @@ export function PostEditor() {
   useEffect(() => {
     if (!post) return;
     if (canvasDirty || textDirty) return; // nunca sobrescreve edição não salva
-    const sig = JSON.stringify(post.carousel_fabric_json?.[0] ?? null);
+    const sig = canvasSignature(post.carousel_fabric_json?.[0]);
     if (hydratedFabricRef.current === null || sig === hydratedFabricRef.current) return;
     hydratedFabricRef.current = sig;
     setFabricJson(post.carousel_fabric_json?.[0]);
@@ -206,7 +217,7 @@ export function PostEditor() {
     if (liveObjsRef.current <= 0) return;           // canvas em branco (hidratação falhou)
     if (autoRenderedRef.current === post.id) return;
     autoRenderedRef.current = post.id;
-    void exportImage({ silent: true });
+    void queueEditor(async () => { await flushPending(); await exportImage({ silent: true }); }).catch(warnSave);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageDataUrl, post?.id]);
 
@@ -230,52 +241,67 @@ export function PostEditor() {
   // SALVAR DE VERDADE (doc 02 §6): as funções lançam o erro para quem chamou — aprovar/agendar
   // não seguem com conteúdo que não foi gravado. O autosave só limpa o "pendente" se o texto
   // ainda é o mesmo que foi enviado (uma edição feita durante o salvamento continua pendente).
-  async function saveText() {
+  const saveText = () => queueEditor(persistText);
+  const saveCanvas = () => queueEditor(async () => { await persistCanvas(); await exportImage({ silent: true }); });
+
+  async function persistText() {
     if (!post) return;
-    const sent = { title, briefing, caption };
-    // Cada save manual conta pra métrica de inteligência da IA (quanto o
-    // humano precisou mexer depois de gerado).
-    await update(post.id, { ...sent, manual_edits: (post.manual_edits ?? 0) + 1 });
-    const now = latestText.current;
-    if (now.title === sent.title && now.briefing === sent.briefing && now.caption === sent.caption) setTextDirty(false);
-  }
-
-  async function saveCanvas() {
-    if (!post || !fabricJson) return;
-    // TRAVA ANTI-PERDA: nunca sobrescreve um post que TEM conteúdo com um canvas
-    // vazio. Se a hidratação falhar (editor "em branco"), o auto-save gravava o
-    // canvas vazio por cima do fabric bom e apagava a arte. Aqui recusamos.
-    const newObjs = (fabricJson as { objects?: unknown[] }).objects?.length ?? 0;
-    const storedObjs = (post.carousel_fabric_json?.[0] as { objects?: unknown[] } | undefined)?.objects?.length ?? 0;
-    if (newObjs === 0 && storedObjs > 0) {
-      console.warn(`[PostEditor] auto-save BLOQUEADO: canvas vazio sobre fabric com ${storedObjs} objeto(s) — hidratação falhou, não apaga a arte.`);
-      setCanvasDirty(false);
-      // A arte salva foi preservada, mas a tela não carregou: não é um "salvo".
-      throw new Error('A arte não carregou nesta tela (canvas em branco). Nada foi salvo por cima — dê um refresh antes de editar.');
+    const stored = usePostStore.getState().get(post.id);
+    if (!stored || isPublishedHistory(stored)) return;
+    const sent = { ...latestText.current };
+    if (sent.title !== (stored.title ?? '') || sent.briefing !== (stored.briefing ?? '') || sent.caption !== (stored.caption ?? '')) {
+      await update(post.id, { ...sent, carousel_text: { ...stored.carousel_text, caption: sent.caption }, manual_edits: (stored.manual_edits ?? 0) + 1 });
     }
-    const sent = fabricJson;
-    await update(post.id, {
-      carousel_fabric_json: [sent],
-      manual_edits: (post.manual_edits ?? 0) + 1,
-    });
-    if (latestFabric.current === sent) setCanvasDirty(false);
-    // AUTO-RENDER: todo post de imagem renderiza sozinho ao salvar (dedup por
-    // hash; silencioso; bloqueado só se o fundo de IA estiver pendente). Garante
-    // que rendered_slides fica sempre em dia — sem post agendado "sem imagem".
-    if (post.format !== ('video' as typeof post.format)) await exportImage({ silent: true });
+    if (canvasSignature(latestText.current) === canvasSignature(sent)) setTextDirty(false);
   }
 
-  // Grava o que estiver pendente; lança com a mensagem do que NÃO foi salvo.
+  async function persistCanvas() {
+    if (!post || post.format === ('video' as typeof post.format)) return;
+    const stored = usePostStore.getState().get(post.id);
+    if (!stored || isPublishedHistory(stored)) return;
+    const snapshot = snapshotRef.current?.();
+    if (!snapshot) throw new Error('A arte ainda não terminou de carregar. Aguarde e tente novamente.');
+    const sent = snapshot.fabricJson;
+    const newObjs = (sent as { objects?: unknown[] }).objects?.length ?? 0;
+    const storedObjs = (stored.carousel_fabric_json?.[0] as { objects?: unknown[] })?.objects?.length ?? 0;
+    if (!newObjs && storedObjs) throw new Error('O canvas está vazio. A arte salva foi preservada; recarregue a tela.');
+    const signature = canvasSignature(sent);
+    const patch = canvasTextPatch(sent, stored.carousel_text);
+    if (signature !== canvasSignature(stored.carousel_fabric_json?.[0]) ||
+        (patch.carousel_text && canvasSignature(patch.carousel_text) !== canvasSignature(stored.carousel_text))) {
+      const previous = hydratedFabricRef.current;
+      hydratedFabricRef.current = signature;
+      try {
+        await update(post.id, { carousel_fabric_json: [sent], ...patch, manual_edits: (stored.manual_edits ?? 0) + 1 });
+      } catch (e) { hydratedFabricRef.current = previous; throw e; }
+    }
+    if (canvasSignature(snapshotRef.current?.()?.fabricJson) === signature) setCanvasDirty(false);
+  }
+
+  function assertCurrentSaved() {
+    if (!post || activePostId.current !== post.id) throw new Error('A peça aberta mudou. Refaça a ação.');
+    const stored = usePostStore.getState().get(post.id);
+    const text = latestText.current;
+    if (!stored || text.title !== (stored.title ?? '') || text.caption !== (stored.caption ?? '') || text.briefing !== (stored.briefing ?? '')) {
+      throw new Error('O texto mudou durante a preparação. Salve novamente antes de continuar.');
+    }
+    if (stored.format !== ('video' as typeof stored.format) && canvasSignature(snapshotRef.current?.()?.fabricJson) !== canvasSignature(stored.carousel_fabric_json?.[0])) {
+      throw new Error('A arte mudou durante a preparação. Salve novamente antes de continuar.');
+    }
+  }
+
   async function flushPending(): Promise<void> {
-    if (textDirty) {
-      try { await saveText(); } catch (e) { throw new Error(`Não foi possível salvar o texto: ${userMessage(e)}`); }
-    }
-    if (canvasDirty) {
-      try { await saveCanvas(); } catch (e) { throw new Error(`Texto salvo; não foi possível salvar a arte: ${userMessage(e)}`); }
-    }
+    // Consulta valores vivos, inclusive antes de disparar o debounce do canvas.
+    await persistText();
+    await persistCanvas();
   }
 
-  async function saveAll() {
+  const saveAll = () => queueEditor(saveAllCurrent).catch(warnSave);
+  const handleStandby = () => queueEditor(approveCurrent).catch(warnSave);
+  const handleSchedule = (value: string) => queueEditor(() => scheduleCurrent(value)).catch(warnSave);
+  const handlePublishLive = () => queueEditor(publishCurrent).catch(warnSave);
+
+  async function saveAllCurrent() {
     setSaving(true);
     try {
       await flushPending();
@@ -377,43 +403,35 @@ export function PostEditor() {
   // mostra toasts de erro pra não spammar durante a edição.
   async function exportImage(opts?: { silent?: boolean }): Promise<string | null> {
     const silent = opts?.silent ?? false;
-    if (!post) return null;
-    if (post.format === ('video' as typeof post.format)) return post.rendered_slides?.slide1 ?? null;
-    // PORTÃO DO FUNDO DE IA (M01-D/E, M02): não deixa exportar/publicar até a
-    // imagem gerada por IA ser aprovada explicitamente. Ver bgGate.ts.
-    if (bgGatePending(post)) {
+    if (!post || !currentUser) return null;
+    const stored = usePostStore.getState().get(post.id);
+    if (!stored) return null;
+    if (stored.format === ('video' as typeof stored.format) || isPublishedHistory(stored)) return stored.rendered_slides?.slide1 ?? null;
+    if (bgGatePending(stored)) {
       if (!silent) toast.error('Aprove a imagem de IA antes (barra no topo do editor).');
       return null;
     }
-    if (!imageDataUrl || !currentUser) {
-      if (!silent) toast.error('Renderiza o canvas antes (edita qualquer elemento).');
-      return null;
-    }
-    // GUARDA ANTI-BRANCO: se o canvas AO VIVO não tem objetos, a hidratação
-    // falhou (canvas em branco) — NÃO sobe um render vazio por cima. O post que
-    // TEM fabric salvo com objetos mas o canvas veio vazio = hidratação quebrada:
-    // pede refresh em vez de destruir a arte com um branco.
-    const storedObjs = (post.carousel_fabric_json?.[0] as { objects?: unknown[] } | undefined)?.objects?.length ?? 0;
-    if (storedObjs > 0 && liveObjsRef.current === 0) {
-      if (!silent) toast.error('O canvas não carregou a arte (tela em branco). Dá um refresh e tente de novo.');
-      return null;
-    }
-    const hash = await hashDataUrl(imageDataUrl);
-    if (hash === lastUploadedHash.current && post.rendered_slides?.slide1) {
-      return post.rendered_slides.slide1; // sem mudanças desde a última exportação
-    }
-    const isIg = post.platform === 'instagram';
-    const uploadUrl = isIg ? await toJpegDataUrl(imageDataUrl) : imageDataUrl;
+    const snapshot = snapshotRef.current?.();
+    if (!snapshot) throw new Error('A arte ainda não terminou de carregar.');
+    const signature = canvasSignature(snapshot.fabricJson);
+    if (signature !== canvasSignature(stored.carousel_fabric_json?.[0])) throw new Error('A arte mudou durante o salvamento. Salve novamente antes de continuar.');
+    const objects = (snapshot.fabricJson as { objects?: unknown[] }).objects ?? [];
+    if (!objects.length) throw new Error('O canvas está vazio; nenhum arquivo foi substituído.');
+    if (stored.image_approved && stored.rendered_slides?.slide1) return stored.rendered_slides.slide1;
+    const hash = await hashDataUrl(snapshot.dataUrl);
+    const cached = lastUploadedHash.current;
+    if (hash === cached?.hash && cached.url === stored.rendered_slides?.slide1) return cached.url;
+    const isIg = stored.platform === 'instagram';
+    const uploadUrl = isIg ? await toJpegDataUrl(snapshot.dataUrl) : snapshot.dataUrl;
     const { publicUrl } = await uploadAssetImage({
-      userId: currentUser.id,
-      assetId: post.id,
-      dataUrl: uploadUrl,
-      filename: isIg ? 'render.jpg' : 'render.png',
+      userId: currentUser.id, assetId: post.id, dataUrl: uploadUrl,
+      filename: isIg ? 'render.jpg' : 'render.png', immutable: true,
     });
-    lastUploadedHash.current = hash;
-    // Exportar PREPARA o arquivo; não é revisão humana (doc 02 §6.3 · T11). A aprovação do visual
-    // acontece no "Aprovar" (approve_piece), que confere que este é o arquivo apresentado.
+    if (activePostId.current !== post.id || canvasSignature(snapshotRef.current?.()?.fabricJson) !== signature) {
+      throw new Error('A arte mudou durante a preparação da imagem. Salve novamente antes de continuar.');
+    }
     await update(post.id, { rendered_slides: { slide1: publicUrl } });
+    lastUploadedHash.current = { hash, url: publicUrl };
     return publicUrl;
   }
 
@@ -425,7 +443,7 @@ export function PostEditor() {
   // SERVIDOR aprova a peça com o arquivo apresentado (approve_piece). Sem data: fica "Peça aprovada ·
   // sem data". Já agendada: aprova e MANTÉM a data (nunca desagenda em silêncio). A medição da IA
   // vem depois e não derruba a aprovação se falhar (fica pendente para reprocessar).
-  async function handleStandby() {
+  async function approveCurrent() {
     if (!post || !currentUser) return;
     setApproving(true);
     try {
@@ -436,7 +454,7 @@ export function PostEditor() {
         if (!rendered) { toast.error('Stand-by não concluído: a imagem final não ficou pronta. A peça continua como estava.'); return; }
       }
       let approved;
-      try { approved = await approvePieceOnServer(post.id, rendered); }
+      try { assertCurrentSaved(); approved = await approvePieceOnServer(post.id, rendered); }
       catch (e) { toast.error(`Não foi possível salvar esta aprovação: ${userMessage(e)}`); return; }
       applyServer(approved);
       const where = approved.status === 'scheduled' && approved.scheduled_date
@@ -445,8 +463,8 @@ export function PostEditor() {
       // Posts de EXEMPLO e peças sem geração pristina não entram na medição.
       const variation = (post.metadata as { is_sample?: boolean })?.is_sample ? null : await aiApi.variationForPost(post.id).catch(() => null);
       if (!variation) { toast.success(`Peça ${where}.`); return; }
-      const quoteFinal = extractSlotText(fabricJson ?? post.carousel_fabric_json?.[0]) ?? '';
-      const m = await recordReviewSafely(currentUser.id, { post_id: post.id, variation, quote_final: quoteFinal, caption_final: caption });
+      const quoteFinal = extractSlotText(snapshotRef.current?.()?.fabricJson ?? post.carousel_fabric_json?.[0]) ?? '';
+      const m = await recordReviewSafely(currentUser.id, { post_id: post.id, variation, quote_final: quoteFinal, caption_final: latestText.current.caption });
       if (!m.review) { toast.success(`Peça ${where}.${m.state === 'pending' ? ' (A medição da IA fica para depois.)' : ''}`); return; }
 
       // Régua graduada (item 2): ajuste cosmético não é erro cheio e não vira
@@ -557,7 +575,7 @@ export function PostEditor() {
   // PUBLICAR AGORA (Estabilização E4): o servidor reserva a peça (uma execução por vez) e envia o PACOTE.
   // Agendada: antecipa a versão PROGRAMADA (não a edição atual). Aprovada sem data: fecha o pacote com a
   // versão aprovada que está na tela. Resultado incerto abre a conferência — nunca reenvia às cegas.
-  async function handlePublishLive() {
+  async function publishCurrent() {
     if (!post) return;
     try { await flushPending(); } catch (e) { toast.error(`Publicação não iniciada. ${userMessage(e)}`); return; }
     const platformLabel = post.platform === 'instagram' ? 'Instagram' : 'LinkedIn';
@@ -578,6 +596,7 @@ export function PostEditor() {
         const url = await exportImage();
         if (!url) { toast.error('A imagem final não ficou pronta — verifique o canvas.'); return; }
       }
+      if (!scheduled) assertCurrentSaved();
       const result = await edge.publishPost({ post_id: post.id });
       await refreshOne(post.id);
       if (result.reused) { toast.info('Esta peça já foi publicada — nada foi enviado de novo.'); return; }
@@ -611,7 +630,7 @@ export function PostEditor() {
   // Agendar pelo editor = o mesmo comando da agenda (schedule-piece): prontidão + pacote imutável.
   // Peça ainda não aprovada: aprovar o que está na tela faz parte de agendar daqui (o produtor está
   // vendo a peça). Limpar a data retira da agenda.
-  async function handleSchedule(value: string) {
+  async function scheduleCurrent(value: string) {
     if (!post) return;
     if (isPublishedHistory(post)) { toast.info(PUBLISHED_HISTORY_MSG); return; }
     try {
@@ -625,14 +644,16 @@ export function PostEditor() {
       const iso = localInputToIso(value);
       if (!iso || new Date(iso).getTime() < Date.now()) { toast.error('Não dá pra agendar no passado.'); return; }
       try { await flushPending(); } catch (e) { toast.error(`Agendamento não feito. ${userMessage(e)}`); return; }
-      let current = post;
+      let current = usePostStore.getState().get(post.id) ?? post;
       if (post.format !== ('video' as typeof post.format)) {
         const url = await exportImage();
         if (!url) return; // exportImage já avisou (fundo pendente ou canvas não pronto)
-        if (!['approved', 'scheduled'].includes(post.status)) current = await approvePieceOnServer(post.id, url);
-      } else if (!['approved', 'scheduled'].includes(post.status)) {
+        current = usePostStore.getState().get(post.id) ?? current;
+        if (!current.image_approved || !['approved', 'scheduled'].includes(current.status)) current = await approvePieceOnServer(post.id, url);
+      } else if (!['approved', 'scheduled'].includes(current.status)) {
         current = await approvePieceOnServer(post.id, null);
       }
+      assertCurrentSaved();
       const r = await scheduleAt(current, iso);
       await refreshOne(post.id);
       toast.success(r.intent === 'reschedule' ? `Data atualizada para ${formatInZone(iso)}. O conteúdo programado permanece o mesmo.` : `Programado para ${formatInZone(iso)}. Esta é a versão que será publicada.`,
@@ -797,6 +818,7 @@ export function PostEditor() {
             <CanvasStudio
               key={`${post.id}:${canvasKey}`}
               embedded
+              snapshotRef={snapshotRef}
               initialPreset={derivePreset(post.platform, post.format, post.metadata?.canvas_size as string | undefined, !!post.visual_decision)}
               // Nunca passa undefined na montagem: o state `fabricJson` só é
               // preenchido por um effect DEPOIS do mount, e abrir o post direto
@@ -813,7 +835,7 @@ export function PostEditor() {
                 // Ignora as mudanças da hidratação inicial (~primeiros 2s): não
                 // são edição manual do humano. Sem isso, só abrir o editor já
                 // contava como edição e o contador nascia > 0.
-                if (Date.now() - canvasLoadedAt.current > 2000) setCanvasDirty(true);
+                if (Date.now() - canvasLoadedAt.current > 2000) setCanvasDirty(canvasSignature(fj) !== canvasSignature(usePostStore.getState().get(post.id)?.carousel_fabric_json?.[0]));
               }}
             />
           )}
@@ -915,7 +937,7 @@ export function PostEditor() {
             <Button variant="outline" onClick={() => blocker.state === 'blocked' && blocker.proceed()}>Sair sem salvar</Button>
             <Button variant="accent" disabled={leaving} onClick={async () => {
               setLeaving(true);
-              try { await flushPending(); if (blocker.state === 'blocked') blocker.proceed(); }
+              try { await queueEditor(flushPending); if (blocker.state === 'blocked') blocker.proceed(); }
               catch (e) { toast.error(`Não foi possível salvar — você continua na peça. ${userMessage(e)}`); if (blocker.state === 'blocked') blocker.reset(); }
               finally { setLeaving(false); }
             }}>{leaving && <Loader2 className="h-4 w-4 animate-spin" />} Salvar e sair</Button>

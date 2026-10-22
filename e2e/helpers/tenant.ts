@@ -1,19 +1,15 @@
 // Segundo CLIENTE para testes de isolamento (Fase 6): usuário próprio, sem workspace da Bee.
 // Cria via API administrativa (chave secreta lida pela Management API — nada em arquivo),
 // entra com senha e devolve um cliente REST/RPC/funções com o JWT dele.
-import { execSync } from 'node:child_process';
+import { managementFetch } from './management';
 import { loadEnv } from './env';
 
 const REF = 'djlorvdehedcupeykyes';
 let _svc: string | null = null;
 
-function mgmt(): string {
-  const raw = execSync('security find-generic-password -s "Supabase CLI" -w').toString().trim();
-  return Buffer.from(raw.replace(/^go-keyring-base64:/, ''), 'base64').toString();
-}
 async function serviceKey(): Promise<string> {
   if (_svc) return _svc;
-  const r = await fetch(`https://api.supabase.com/v1/projects/${REF}/api-keys?reveal=true`, { headers: { Authorization: `Bearer ${mgmt()}` } });
+  const r = await managementFetch(`https://api.supabase.com/v1/projects/${REF}/api-keys?reveal=true`, {});
   const keys = (await r.json()) as Array<{ type: string; api_key: string }>;
   _svc = keys.find((k) => k.type === 'secret')?.api_key ?? '';
   if (!_svc) throw new Error('chave secreta indisponível');

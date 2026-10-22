@@ -1129,7 +1129,7 @@ export function NewPost() {
       if (!dataUrl) {
         throw new Error('Não consegui renderizar a imagem (o fundo não carregou). Tente de novo em instantes ou abra a edição manual.');
       }
-      const { publicUrl } = await uploadAssetImage({
+      const { publicUrl } = await uploadAssetImage({ immutable: true,
         userId: currentUser.id, assetId: item.post.id, dataUrl, filename: 'render.png',
       });
       const renderedSlides: Record<string, string> = { slide1: publicUrl };

@@ -163,7 +163,7 @@ export async function generateHiveImage(params: {
   const dataUrl = await renderFabricToDataUrl(slide, { width: CANVAS.w, height: CANVAS.h, format: 'jpeg' });
   if (!dataUrl) throw new Error('Falha ao renderizar a imagem da Hive.');
 
-  const { publicUrl } = await uploadAssetImage({
+  const { publicUrl } = await uploadAssetImage({ immutable: true,
     userId: params.userId,
     assetId: params.postId,
     dataUrl,

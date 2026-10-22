@@ -2,6 +2,7 @@
 // Path convention: {user_id}/assets/{asset_id}/{filename}
 
 import * as tus from 'tus-js-client';
+import { imageAssetPath } from './storagePath';
 import { MEDIA_BUCKET, supabase } from './supabase';
 
 function dataUrlToBlob(dataUrl: string): Blob {
@@ -29,6 +30,7 @@ interface UploadParams {
   dataUrl: string;
   // sufixo do nome (ex: "preview.png"). Default usa timestamp.
   filename?: string;
+  immutable?: boolean;
 }
 
 // Converte um data URL (ex.: PNG do editor) em JPEG. O Instagram exige JPEG;
@@ -58,15 +60,16 @@ export async function uploadAssetImage({
   assetId,
   dataUrl,
   filename,
+  immutable = false,
 }: UploadParams): Promise<{ path: string; publicUrl: string }> {
   const blob = dataUrlToBlob(dataUrl);
   const ext = blob.type.split('/')[1] || 'png';
   const finalName = filename ?? `${Date.now()}.${ext}`;
-  const path = `${userId}/assets/${assetId}/${finalName}`;
+  const path = imageAssetPath(userId, assetId, finalName, immutable);
 
   const { error } = await supabase.storage
     .from(MEDIA_BUCKET)
-    .upload(path, blob, { upsert: true, contentType: blob.type, cacheControl: '3600' });
+    .upload(path, blob, { upsert: !immutable, contentType: blob.type, cacheControl: '3600' });
   if (error) throw error;
 
   const { data } = supabase.storage.from(MEDIA_BUCKET).getPublicUrl(path);
