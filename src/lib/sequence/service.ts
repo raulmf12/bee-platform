@@ -148,7 +148,7 @@ async function renderOne(post: UserPost, u: PostUnit, total: number, dir: Sequen
   const slide = composeSequencePage({ layout: u.layout, title: u.title ?? '', body: u.body ?? '', position: u.position, total, direction: dir, colors: design.colors, spiralUrl: design.spiralUrl, canvas });
   const dataUrl = await renderFabricToDataUrl(slide, { width: canvas.w, height: canvas.h, format: 'jpeg' });
   if (!dataUrl) throw new Error(`Falha ao renderizar a página ${u.position}.`);
-  const { publicUrl } = await uploadAssetImage({ userId: post.user_id, assetId: post.id, dataUrl, filename: `unit-${u.id}-${opts.fileTag}.jpg` });
+  const { publicUrl } = await uploadAssetImage({ immutable: true, userId: post.user_id, assetId: post.id, dataUrl, filename: `unit-${u.id}-${opts.fileTag}.jpg` });
   return { fabric_json: slide, rendered_url: `${publicUrl.split('?')[0]}?v=${Date.now()}`, assets: { ...u.assets } };
 }
 

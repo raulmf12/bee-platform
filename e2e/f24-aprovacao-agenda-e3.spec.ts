@@ -96,7 +96,7 @@ test.describe('F24 · Aprovação e agenda (E3)', () => {
     await expect(page.getByText(/Peça aprovada · sem data/)).toBeVisible({ timeout: 30_000 });
     const [a] = await sql<{ status: string; image_approved: boolean; slide: string | null }>(`select status, image_approved, rendered_slides->>'slide1' slide from user_posts where id='${pid}'`);
     expect(a).toMatchObject({ status: 'approved', image_approved: true });
-    expect(a.slide).toContain('/render.png');
+    expect(a.slide).toMatch(/\/render-[0-9a-f-]+\.png$/);
     await page.locator('#sched').fill(`${tomorrowKey}T15:00`);
     await expect(page.getByText(/Programado para .*Esta é a versão que será publicada/).first()).toBeVisible({ timeout: 30_000 });
     const [s] = await sql<{ status: string; pkg: string | null; d: string }>(`select status, scheduled_package_id pkg, scheduled_date::text d from user_posts where id='${pid}'`);
@@ -105,6 +105,47 @@ test.describe('F24 · Aprovação e agenda (E3)', () => {
     await page.getByRole('button', { name: 'Ver na agenda' }).click();
     await expect(page.getByTestId('piece-panel')).toBeVisible();
     await expect(page.getByTestId('panel-move')).toBeVisible();
+  });
+
+  test('edição imediata: frase, legenda e imagem aprovadas chegam ao pacote agendado', async ({ page }) => {
+    const fabric = { version: '6.0.0', background: '#ffffff', objects: [{
+      type: 'Textbox', version: '6.0.0', name: 'bee-quote', text: 'Frase original',
+      left: 100, top: 100, width: 700, fontSize: 48, fontFamily: 'Arial', fill: '#111111',
+    }] };
+    const pid = await piece({ extra: { rendered_slides: null, carousel_fabric_json: [fabric] } });
+    await page.goto(`/posts/${pid}`);
+    await expect.poll(async () => (await sql<{ s: string | null }>(`select rendered_slides->>'slide1' s from user_posts where id='${pid}'`))[0].s, { timeout: 30_000 }).not.toBeNull();
+    const [before] = await sql<{ s: string }>(`select rendered_slides->>'slide1' s from user_posts where id='${pid}'`);
+    await page.locator('#caption').fill('Legenda completamente revisada');
+    const canvas = page.locator('canvas.upper-canvas');
+    const box = await canvas.boundingBox();
+    if (!box) throw new Error('Canvas não encontrado');
+    // Ponto sobre a primeira linha do Textbox; coordenadas ajustadas ao zoom CSS.
+    const scale = box.width / 1080;
+    await canvas.dblclick({ position: { x: 200 * scale, y: 125 * scale } });
+    await page.keyboard.press('ControlOrMeta+A');
+    await page.keyboard.insertText('Frase revisada para publicação');
+    // Sai da edição e salva sem aguardar o debounce de onChange.
+    await page.getByRole('button', { name: /^Salvar$|^Salvo$/ }).click();
+    await expect(page.getByText('Texto e arte salvos', { exact: true })).toBeVisible();
+    const [saved] = await sql<{ quote: string; caption: string; image: string }>(`select carousel_text->>'quote' quote, caption, rendered_slides->>'slide1' image from user_posts where id='${pid}'`);
+    expect(saved.quote).toBe('Frase revisada para publicação');
+    expect(saved.caption).toBe('Legenda completamente revisada');
+    expect(saved.image).not.toBe(before.s);
+    await page.getByRole('button', { name: /Aprovar · Stand-by/ }).click();
+    await expect(page.getByText(/Peça aprovada · sem data/)).toBeVisible({ timeout: 30_000 });
+    await page.reload();
+    await expect(page.getByRole('combobox').first()).toContainText('Aprovado');
+    await page.locator('#sched').fill(`${tomorrowKey}T15:00`);
+    await expect(page.getByText(/Programado para .*Esta é a versão que será publicada/).first()).toBeVisible({ timeout: 30_000 });
+    await page.getByRole('button', { name: 'Ver na agenda' }).click();
+    await expect(page.getByTestId('piece-panel')).toBeVisible();
+    const [pkg] = await sql<{ manifest: { texts: { quote: string; caption: string }; files: Array<{ source_url: string; url: string; sha256: string }> } }>(`select p.manifest from publication_packages p join user_posts u on u.scheduled_package_id=p.id where u.id='${pid}'`);
+    expect(pkg.manifest.texts).toMatchObject({ quote: saved.quote, caption: saved.caption });
+    expect(pkg.manifest.files[0].source_url).toBe(saved.image);
+    const image = await page.request.get(pkg.manifest.files[0].url);
+    expect(image.ok()).toBeTruthy();
+    expect(createHash('sha256').update(await image.body()).digest('hex')).toBe(pkg.manifest.files[0].sha256);
   });
 
   test('plano em lote durável: recarregar a página mostra as pendências e retoma só elas (02/T19)', async ({ page }) => {
@@ -121,6 +162,7 @@ test.describe('F24 · Aprovação e agenda (E3)', () => {
     await page.getByRole('button', { name: 'Aplicar (2)' }).click();
     await expect(page.getByTestId('plan-row').filter({ hasText: 'Linha boa' })).toHaveAttribute('data-result', 'ok');
     await page.reload();
+    await expect(page.getByTestId('queue-count')).toHaveText('1');
     await expect(page.getByTestId('open-plan-banner')).toContainText('1 de 2');
     await page.getByRole('button', { name: 'Retomar pendências' }).click();
     await expect(page.getByTestId('plan-row').filter({ hasText: 'Linha boa' })).toHaveAttribute('data-result', 'ok');

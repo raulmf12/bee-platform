@@ -19,6 +19,7 @@ export default defineConfig({
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL: `http://localhost:${PORT}`,
+    launchOptions: { executablePath: process.env.E2E_CHROMIUM_EXECUTABLE_PATH || undefined },
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',

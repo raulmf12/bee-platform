@@ -3,7 +3,8 @@
 // Layout embedded:   [MiniToolbar] / [Sidebar L | Painel ativo | Canvas | Properties R]
 //                    (sem h-screen — herda altura do parent)
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject } from 'react';
+import type { EditorSnapshot } from '@/lib/editorSnapshot';
 import { Toolbar } from './Toolbar';
 import { EmbeddedToolbar } from './EmbeddedToolbar';
 import { SidebarLeft, type PanelKey } from './SidebarLeft';
@@ -24,6 +25,7 @@ export interface CanvasStudioChangeState {
 }
 
 interface CanvasStudioProps {
+  snapshotRef?: MutableRefObject<(() => EditorSnapshot | null) | null>;
   initialPreset?: string;
   initialFabricJson?: object;
   onBack?: () => void;
@@ -47,6 +49,7 @@ interface CanvasStudioProps {
 }
 
 export function CanvasStudio({
+  snapshotRef,
   initialPreset = 'linkedin-portrait',
   initialFabricJson,
   onBack,
@@ -86,15 +89,34 @@ export function CanvasStudio({
   // async, depois da remontagem — por isso o PostEditor escapava e o editor de
   // template, que espera tudo antes de montar, caia direto na corrida).
   // canvasEpoch muda a cada canvas novo, entao a carga acompanha.
+  const readyEpochRef = useRef<number>(-1);
   const loadedEpochRef = useRef<number>(-1);
   useEffect(() => {
-    if (!initialFabricJson) return;
-    if (!api.fabric.current) return;
-    if (loadedEpochRef.current === api.canvasEpoch) return;
+    readyEpochRef.current = -1;
+    return () => { readyEpochRef.current = -1; };
+  }, [api.canvasEpoch]);
+  useEffect(() => {
+    const canvas = api.fabric.current;
+    if (!canvas || loadedEpochRef.current === api.canvasEpoch) return;
+    if (!initialFabricJson) { readyEpochRef.current = api.canvasEpoch; return; }
     loadedEpochRef.current = api.canvasEpoch;
-    void api.loadFromJson(initialFabricJson);
+    readyEpochRef.current = -1;
+    void api.loadFromJson(initialFabricJson).then(() => {
+      if (api.fabric.current === canvas) readyEpochRef.current = api.canvasEpoch;
+    }).catch(() => { /* Captura permanece bloqueada se a hidratação falhar. */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialFabricJson, api.canvasEpoch]);
+
+  useEffect(() => {
+    if (!snapshotRef) return;
+    const capture = () => {
+      if (readyEpochRef.current !== api.canvasEpoch || !api.fabric.current) return null;
+      const dataUrl = api.exportPng(1);
+      return dataUrl ? { fabricJson: api.toJson(), dataUrl } : null;
+    };
+    snapshotRef.current = capture;
+    return () => { if (snapshotRef.current === capture) snapshotRef.current = null; };
+  }, [snapshotRef, api.canvasEpoch, api.exportPng, api.toJson, api.fabric]);
 
   async function handleSave() {
     if (!onSave) return;

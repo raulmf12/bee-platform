@@ -7,7 +7,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 LOG="${LOG:-/tmp/regressao-$(date +%Y%m%d-%H%M).log}"
-if pgrep -f "playwright test" >/dev/null; then echo "Já existe uma suíte rodando — espere ela terminar." >&2; exit 2; fi
+if pgrep -f '[p]laywright test' >/dev/null; then echo "Já existe uma suíte rodando — espere ela terminar." >&2; exit 2; fi
 KEEP=(); command -v caffeinate >/dev/null && KEEP=(caffeinate -i)
 echo "Rodando… log em $LOG"
 "${KEEP[@]}" npx playwright test --project=e2e --reporter=line "$@" >"$LOG" 2>&1
