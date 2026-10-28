@@ -13,10 +13,10 @@ const cycle = (id: string, o: Partial<CampaignCycle>): CampaignCycle => ({ id, c
 const LI = { account_id: 'li', platform: 'linkedin' as const };
 const IG = { account_id: 'ig', platform: 'instagram' as const };
 
-test.describe('unit · pipeline por ideia/conteúdo', () => {
+test.describe('unit · pipeline por peça (R1)', () => {
   const campaigns = [camp('c1')];
 
-  test('coluna = estágio menos avançado; canais previstos sem peça contam como rascunho', () => {
+  test('cada peça mantém seu estágio e conteúdo pendente continua acessível', () => {
     const ideas = [
       idea('i-backlog', { campaign_id: 'c1', channels: [LI, IG] }),
       idea('i-dev', { campaign_id: 'c1', channels: [LI, IG], status: 'developed' }),
@@ -42,13 +42,16 @@ test.describe('unit · pipeline por ideia/conteúdo', () => {
     ];
     const cards = buildPipeline({ campaigns, ideas, contents, posts });
     const by = (id: string) => cards.find((c) => c.id === id)!;
-    expect(cards.map((c) => c.id).sort()).toEqual(['content:k-draft', 'content:k-pend', 'content:k-sched', 'content:k-val', 'idea:i-backlog', 'post:legacy'].sort());
+    expect(cards.map((c) => c.id).sort()).toEqual(['content:k-draft', 'content:k-val', 'idea:i-backlog', 'post:legacy', 'post:p1', 'post:p2', 'post:p3', 'post:p4', 'post:p6', 'post:p7'].sort());
     expect(by('idea:i-backlog').column).toBe('ideias');
     expect(by('content:k-draft')).toMatchObject({ column: 'rascunho' });
     expect(by('content:k-draft').missingChannels).toEqual([IG]);
-    expect(by('content:k-pend')).toMatchObject({ column: 'pendente', pendingPieces: 1 });
-    expect(by('content:k-pend').pieces.map((p) => p.id)).toEqual(['p2', 'p3', 'p4']);
-    expect(by('content:k-sched')).toMatchObject({ column: 'agendado', nextDate: '2026-09-30T11:00:00Z' });
+    expect(by('post:p1')).toMatchObject({ column: 'aprovado', pendingPieces: 0 });
+    expect(by('post:p3')).toMatchObject({ column: 'pendente', pendingPieces: 1 });
+    expect(by('post:p3').pieces.map(p => p.id)).toEqual(['p3']);
+    expect(by('post:p6')).toMatchObject({ column: 'agendado', nextDate: '2026-09-30T11:00:00Z' });
+    expect(by('post:p7')).toMatchObject({ column: 'publicado', publishedAt: '2026-09-22T11:00:00Z' });
+    expect(by('post:p6').content?.id).toBe('k-sched');
     expect(by('content:k-val')).toMatchObject({ column: 'pendente' });
     expect(by('post:legacy')).toMatchObject({ kind: 'post', column: 'pendente', campaignId: null });
   });
@@ -60,13 +63,23 @@ test.describe('unit · pipeline por ideia/conteúdo', () => {
       post('b', { content_id: 'k2', campaign_id: 'c1', account_id: 'li', status: 'approved' }),
     ];
     const cards = buildPipeline({ campaigns, ideas: [], contents, posts });
-    expect(cards.find((c) => c.id === 'content:k1')).toMatchObject({ campaignId: null, column: 'publicado' });
-    expect(filterCards(cards, { ...NO_FILTER, campaign: 'none' }).map((c) => c.id)).toEqual(['content:k1']);
-    expect(filterCards(cards, { ...NO_FILTER, campaign: 'c1' }).map((c) => c.id)).toEqual(['content:k2']);
-    expect(filterCards(cards, { ...NO_FILTER, account: 'li' }).map((c) => c.id)).toEqual(['content:k2']);
-    expect(filterCards(cards, { ...NO_FILTER, platform: 'instagram' }).map((c) => c.id)).toEqual(['content:k1']);
-    expect(filterCards(cards, { ...NO_FILTER, editorial: 'ed-b' }).map((c) => c.id)).toEqual(['content:k2']);
+    expect(cards.find((c) => c.id === 'post:a')).toMatchObject({ campaignId: null, column: 'publicado' });
+    expect(filterCards(cards, { ...NO_FILTER, campaign: 'none' }).map((c) => c.id)).toEqual(['post:a']);
+    expect(filterCards(cards, { ...NO_FILTER, campaign: 'c1' }).map((c) => c.id)).toEqual(['post:b']);
+    expect(filterCards(cards, { ...NO_FILTER, account: 'li' }).map((c) => c.id)).toEqual(['post:b']);
+    expect(filterCards(cards, { ...NO_FILTER, platform: 'instagram' }).map((c) => c.id)).toEqual(['post:a']);
+    expect(filterCards(cards, { ...NO_FILTER, editorial: 'ed-b' }).map((c) => c.id)).toEqual(['post:b']);
   });
+  test('conta sem atribuição não cobre outra conta; descarte da origem não esconde peça', () => {
+    const ideas = [idea('i', { channels: [IG] })];
+    const contents = [content('c', { idea_id: 'i' }), content('descartado', { status: 'discarded' })];
+    const posts = [post('sem-conta', { content_id: 'c', platform: 'instagram', account_id: null }), post('historico', { content_id: 'descartado', status: 'published' })];
+    const cards = buildPipeline({ campaigns, ideas, contents, posts });
+    expect(cards.find(c => c.id === 'content:c')?.missingChannels).toEqual([IG]);
+    expect(cards.find(c => c.id === 'post:historico')?.column).toBe('publicado');
+    expect(filterCards(cards, { ...NO_FILTER, account: 'ig' }).some(c => c.id === 'post:sem-conta')).toBe(false);
+  });
+
 });
 
 test.describe('unit · home regente', () => {
