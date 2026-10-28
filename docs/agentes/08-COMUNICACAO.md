@@ -6,7 +6,7 @@
 - **Comece pelo resultado.** A primeira frase diz se ficou pronto e com que evidência.
 - **Pergunte pouco e com recomendação.** "Recomendo A (motivo). Sigo?" Ele costuma responder "pode seguir as recomendações". Liste as decisões numeradas para que a resposta seja curta.
 - **Honestidade sobre limites.** O que não foi testado (ex.: publicação real), o que falhou e o que você não conseguiu fazer (ex.: "não consegui pausar o cron: falta permissão") aparecem explicitamente, nunca escondidos no meio.
-- **Explique conceitos quando ele perguntar**, em linguagem simples e com analogia do dia a dia. Exemplo: "regressão completa = rodar de novo todos os 174 testes que simulam o Marcos usando a Hive, para garantir que consertar uma coisa não quebrou outra".
+- **Explique conceitos quando ele perguntar**, em linguagem simples e com analogia do dia a dia. Exemplo: "regressão completa = rodar de novo todos os 191 testes que simulam o Marcos usando a Hive, para garantir que consertar uma coisa não quebrou outra".
 
 ### Formato do relatório de entrega
 

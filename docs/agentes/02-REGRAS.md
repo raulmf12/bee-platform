@@ -154,7 +154,7 @@ Níveis:
 - O nome do teste cita o critério do documento (`04/T03`, `03 §20`).
 - Teste mais fraco para passar não vale: se o teste antigo contradiz uma decisão nova, atualize-o e diga qual decisão mudou.
 
-**D4 🟠 Nunca afirme que está pronto sem evidência.** Relate exatamente "build ok", "spec X 9/9" e "regressão 174/174 em 38 min". Se não rodou, diga que não rodou.
+**D4 🟠 Nunca afirme que está pronto sem evidência.** Relate exatamente "build ok", "spec X 9/9" e "regressão 191/191 em 35 min". Se não rodou, diga que não rodou.
 
 ## E. Processo e comunicação
 

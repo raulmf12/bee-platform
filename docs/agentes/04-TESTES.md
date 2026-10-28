@@ -2,7 +2,7 @@
 
 ## 1. O que é a "regressão completa"
 
-É rodar **todos** os testes automatizados de uma vez: hoje, **174 testes em ~38 min**. Cada teste abre o app num navegador de verdade, faz o que o Marcos faria (agendar, aprovar, voltar, publicar com token falso…) e confere o resultado na tela e no banco. Os testes `unit-*` testam funções puras, em milissegundos.
+É rodar **todos** os testes automatizados de uma vez: hoje, **191 testes em ~35 min** (27/10/2026). Cada teste abre o app num navegador de verdade, faz o que o Marcos faria (agendar, aprovar, voltar, publicar com token falso…) e confere o resultado na tela e no banco. Os testes `unit-*` testam funções puras, em milissegundos.
 
 **Por que toda mudança exige a regressão completa:** a Hive é muito acoplada. Agenda, editor, produção e publicação compartilham contratos. Uma mudança "só na agenda" já quebrou o editor e a produção (um trigger novo da E4 bloqueou a aplicação de candidatos na F16). Só a suíte inteira pega isso.
 
@@ -105,7 +105,7 @@ test.describe('FNN · <tema>', () => {
 
 - [ ] `npm run build` ok
 - [ ] Spec(s) da área ok, incluindo os testes novos
-- [ ] `npm run regressao` → **N/N passed**, com N anotado (hoje 174 + os novos)
+- [ ] `npm run regressao` → **N/N passed**, com N anotado (hoje 191 + os novos)
 - [ ] Nenhum `skip`/`only`/`retries` novo (`git diff | grep -E "\.only|\.skip|retries"`)
 - [ ] Banco do usuário de teste limpo (o `afterAll` cuida disso)
 - [ ] Relatório com a linha de evidência: "regressão completa N/N (DD/MM, X min)"

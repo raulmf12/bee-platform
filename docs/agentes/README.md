@@ -30,4 +30,4 @@ Guia completo para qualquer agente (Claude Code, Codex, Cursor, Gemini, Copilot�
 - Mudou um contrato, um processo ou um comando? Atualize o doc correspondente **no mesmo commit**.
 - Pagou um bug não óbvio? Uma entrada em [07-ARMADILHAS](07-ARMADILHAS.md).
 - Iniciativa nova? Uma linha na tabela de [01-CONTEXTO §11](01-CONTEXTO.md#11-histórico-de-iniciativas).
-- O número de testes da regressão muda com o tempo. O que vale é "todos verdes" (hoje: 174).
+- O número de testes da regressão muda com o tempo. O que vale é "todos verdes" (hoje: 191).
