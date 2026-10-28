@@ -21,6 +21,10 @@ test('403 impede novas requisições sem trocar token', async () => {
   await expect(client('https://api.supabase.com/v1/projects/test/api-keys')).rejects.toThrow('bloqueado');
   expect(calls).toBe(1);
 });
+test('erro do banco chega com o motivo (regras PTxxx/CHECK são conferidas pela mensagem)', async () => {
+  const client = createManagementFetch(() => 'teste', async () => new Response('{"message":"ERROR: pacote imutável"}', { status: 400 }));
+  await expect(client('https://api.supabase.com/v1/projects/test/database/query')).rejects.toThrow(/HTTP 400: .*imutável/);
+});
 test('recusa destino externo antes de obter token', async () => {
   const client = createManagementFetch(() => { throw new Error('não obter'); });
   await expect(client('https://example.com')).rejects.toThrow('Destino administrativo inválido');

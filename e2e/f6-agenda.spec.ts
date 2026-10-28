@@ -48,6 +48,9 @@ test.describe('F6 · agenda orquestradora', () => {
 
   // Arrasto como um usuário: vários movimentos (o 1º dragover re-renderiza a grade).
   async function dragInto(page: Page, src: Locator, dst: Locator) {
+    // O arraste usa coordenadas da janela: em meses com 5–6 semanas o dia pode cair abaixo da dobra
+    // (ex.: amanhã na última linha). Janela alta o bastante para origem e destino ficarem visíveis.
+    await page.setViewportSize({ width: 1440, height: 1300 });
     const a = (await src.boundingBox())!, b = (await dst.boundingBox())!;
     await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
     await page.mouse.down();

@@ -99,6 +99,10 @@ Cada item: **sintoma → causa → regra**. Antes de depurar algo parecido, proc
 
 ## IA e conteúdo
 
+- **"A Hive não conseguiu ler seu momento" e toda a IA parada (27/10/2026).**
+  - Causa: acabaram os créditos pré-pagos do Gemini. O Google responde **402 RESOURCE_EXHAUSTED** em todos os modelos, e o erro na tela é genérico.
+  - Regra: diante de falha geral de IA, teste a chave antes de mexer em código (`curl …/v1beta/models/<modelo>:generateContent?key=…`). A recarga é feita pelo dono da chave em ai.studio/projects → Billing.
+
 - **Sempre o mesmo template (100% M01-B).**
   - Causa: o LLM classifica a voz provocativa sempre como "Tensão".
   - Regra: variedade de forma é **forçada no código** (`IG_VARIANT_ROTATION`).
@@ -129,3 +133,12 @@ Cada item: **sintoma → causa → regra**. Antes de depurar algo parecido, proc
 - **Bundle velho.**
   - Causa: `campaign-plan.js` desatualizado em relação a `plan.ts`, e o `campaign-tick` se comporta diferente do teste.
   - Regra: `npm run build:edge-shared` + redeploy.
+- **Teste de regra do banco recebendo só "HTTP 400".**
+  - Causa: helper administrativo (`e2e/helpers/management.ts`) que lança erro sem ler o corpo da resposta. Os testes que conferem a recusa do banco (`/imutável/`, `/fora da seleção/`…) perdem a mensagem.
+  - Regra: o erro do helper sempre carrega o corpo (o motivo do banco).
+- **Arraste no calendário que só falha em certas datas.**
+  - Causa: o dia de destino (ex.: "amanhã" na 5ª ou 6ª semana do mês) fica abaixo da área visível, e o `page.mouse` usa coordenadas da janela.
+  - Regra: antes de arrastar, deixe a janela alta o bastante para origem e destino ficarem visíveis (`setViewportSize`). Teste que passa num dia e falha no outro é suspeito de data.
+- **Rajada de "Management API: HTTP 502" no fim da suíte.**
+  - Causa: instabilidade da API de administração do Supabase, não do app.
+  - Regra: rode de novo só os specs afetados antes de investigar.

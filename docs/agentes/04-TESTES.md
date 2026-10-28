@@ -15,7 +15,9 @@
 ## 2. Como rodar
 
 ```bash
-scripts/regressao.sh                                   # suíte inteira (~38 min), log em /tmp/regressao-*.log
+npm run regressao:check                                # só confere se a máquina está pronta
+npm run regressao                                      # suíte inteira (~38 min) — Windows, macOS ou Linux
+scripts/regressao.sh                                   # equivalente em bash (macOS/Linux), log em /tmp/regressao-*.log
 scripts/regressao.sh e2e/f24-aprovacao-agenda-e3.spec.ts   # um spec
 scripts/regressao.sh e2e/f25-publicacao-e4.spec.ts -g "reconcilia"   # um teste pelo nome
 npx playwright show-report                             # relatório HTML da última execução
@@ -103,7 +105,7 @@ test.describe('FNN · <tema>', () => {
 
 - [ ] `npm run build` ok
 - [ ] Spec(s) da área ok, incluindo os testes novos
-- [ ] `scripts/regressao.sh` → **N/N passed**, com N anotado (hoje 174 + os novos)
+- [ ] `npm run regressao` → **N/N passed**, com N anotado (hoje 174 + os novos)
 - [ ] Nenhum `skip`/`only`/`retries` novo (`git diff | grep -E "\.only|\.skip|retries"`)
 - [ ] Banco do usuário de teste limpo (o `afterAll` cuida disso)
 - [ ] Relatório com a linha de evidência: "regressão completa N/N (DD/MM, X min)"

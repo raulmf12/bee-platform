@@ -20,7 +20,7 @@ A Hive organiza **Campanha → Ciclo → Ideia → Conteúdo → Peças → Agen
 
 1. **Nunca publicar de verdade** em rede social (LinkedIn/Instagram do Marcos ou de qualquer cliente) sem autorização explícita e específica do Raul.
    - Testes de publicação usam contas com **token falso**: a rede devolve 4xx antes de criar o post.
-2. **Regressão completa obrigatória** antes de qualquer push que mexa em `src/`, `supabase/` ou `e2e/`: `scripts/regressao.sh`, cerca de 40 minutos, todos os testes verdes.
+2. **Regressão completa obrigatória** antes de qualquer push que mexa em `src/`, `supabase/` ou `e2e/`: `npm run regressao` (funciona em Windows, macOS e Linux), cerca de 40 minutos, todos os testes verdes.
    - Mudança só em `docs/` ou em texto: build basta.
    - Detalhes em [04-TESTES](docs/agentes/04-TESTES.md).
 3. **Nunca rodar duas suítes de teste ao mesmo tempo**, e **nunca editar `src/` enquanto a regressão roda**. Existe um único usuário de teste, e o cleanup de uma suíte apaga os dados da outra.
@@ -29,7 +29,7 @@ A Hive organiza **Campanha → Ciclo → Ideia → Conteúdo → Peças → Agen
    - Nada de contornar RLS, trigger, portão ou bloqueio. Se uma regra do banco recusa, ela está certa até prova em contrário.
 5. **Dados reais são do Marcos.** Não apague, não "limpe" e não altere em massa dados que não sejam do usuário de teste sem confirmação explícita.
    - Antes de `UPDATE`/`DELETE` em produção, rode o `SELECT` equivalente e mostre o que vai mudar.
-6. **Banco por migration versionada, aplicada pela Management API** (`scripts/sql.sh -f`).
+6. **Banco por migration versionada, aplicada pela Management API** (`npm run sql -- -f <arquivo>`).
    - **Nunca** use `supabase db push`: o histórico remoto é inconsistente e o push reaplicaria seeds duplicando dados.
    - Toda migration é **idempotente** e tem **rollback** em `supabase/rollback/`.
 7. **Um contrato por tema; nada de solução paralela por tela.** Agendar passa pelo `schedule-piece`, aprovar por `approve_piece`/`merge_post_review`, publicar por `publishOne`, e a prontidão vem de `piece_readiness`.
@@ -67,9 +67,10 @@ O app antigo continua rodando até o Netlify terminar o deploy, então nunca que
 |---|---|
 | Typecheck + build (o portão do Netlify) | `npm run build` |
 | Rodar o app | `npm run dev` |
-| Um spec (iteração) | `scripts/regressao.sh e2e/f25-publicacao-e4.spec.ts` |
-| Regressão completa | `scripts/regressao.sh` |
-| SQL em produção | `scripts/sql.sh "select …"` · `scripts/sql.sh -f arquivo.sql` |
+| Máquina pronta para testar? | `npm run regressao:check` |
+| Um spec (iteração) | `npm run regressao -- e2e/f25-publicacao-e4.spec.ts` |
+| Regressão completa | `npm run regressao` (Windows: ver [REGRESSAO-WINDOWS](docs/agentes/REGRESSAO-WINDOWS.md)) |
+| SQL em produção | `npm run sql -- "select …"` · `npm run sql -- -f arquivo.sql` (no macOS/Linux também `scripts/sql.sh`) |
 | Deploy de edge function | `npx supabase functions deploy <nome> --project-ref djlorvdehedcupeykyes` |
 | Bundle compartilhado do plano | `npm run build:edge-shared` (depois redeploy `campaign-tick`) |
 | Quem importa um módulo `_shared` | `grep -l "_shared/publish.ts" supabase/functions/*/index.ts` |

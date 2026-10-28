@@ -19,6 +19,9 @@ Guia completo para qualquer agente (Claude Code, Codex, Cursor, Gemini, Copilot�
 
 | Script | Uso |
 |---|---|
+| `npm run regressao` (`scripts/regressao.mjs`) | Regressão multiplataforma (Windows/macOS/Linux): confere a máquina antes (Node, dependências, `.env`, token, navegador, disco), mantém o PC acordado, log em arquivo, resumo das falhas, trava contra duas suítes. `npm run regressao:check` só confere |
+| `npm run sql` (`scripts/sql.mjs`) | SQL em produção, multiplataforma |
+| [REGRESSAO-WINDOWS](REGRESSAO-WINDOWS.md) | Passo a passo para rodar a regressão num PC Windows |
 | `scripts/sql.sh` | SQL em produção pela Management API (`"select …"` ou `-f arquivo.sql`). Para com aviso em caso de 403 |
 | `scripts/regressao.sh` | Regressão completa ou specs escolhidos, com `caffeinate`, log em arquivo, saída filtrada e trava contra duas suítes |
 

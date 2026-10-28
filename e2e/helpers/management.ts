@@ -22,7 +22,8 @@ export function createManagementFetch(token = managementToken, request: typeof f
       blocked = true;
       throw new Error('Supabase 403: pare e aguarde o Raul.');
     }
-    if (!response.ok) throw new Error(`Management API: HTTP ${response.status}.`);
+    // O corpo traz o motivo do banco (ex.: RAISE ... 'imutável'): os testes de regra conferem essa mensagem.
+    if (!response.ok) throw new Error(`Management API: HTTP ${response.status}: ${(await response.text().catch(() => '')).slice(0, 400)}`);
     return response;
   };
 }
