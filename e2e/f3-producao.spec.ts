@@ -83,7 +83,7 @@ test.describe('F3 · planejamento e pauta', () => {
     expect(cy.plan.needs.find((n) => n.function === 'produtos')?.count).toBe(1);
   });
 
-  test('nova seleção substitui as ideias da Hive e mantém as suas', async ({ page }) => {
+  test('nova seleção guarda ideias anteriores e permite retomá-las', async ({ page }) => {
     await mockPauta(page);
     const { camp } = await setup();
     await page.goto(`/producao?campaign=${camp.id}`);
@@ -97,7 +97,13 @@ test.describe('F3 · planejamento e pauta', () => {
     await expect(page.getByTestId('idea-title').filter({ hasText: 'Nova seleção' })).toHaveCount(4);
     await expect(page.getByTestId('idea-title').filter({ hasText: 'Ideia minha que fica' })).toHaveCount(1);
     const rows = await sql<{ status: string; n: number }>(`select status, count(*)::int n from ideas where cycle_id='${camp.cycleIds[0]}' group by 1 order by 1`);
-    expect(rows).toEqual([{ status: 'discarded', n: 4 }, { status: 'proposed', n: 5 }]);
+    expect(rows).toEqual([{ status: 'backlog', n: 4 }, { status: 'proposed', n: 5 }]);
+    await page.reload();
+    await expect(page.getByTestId('saved-ideas')).toContainText('4 ideias guardadas');
+    await page.getByTestId('saved-ideas').getByRole('button', { name: 'Retomar ideia' }).first().click();
+    await expect(page.getByTestId('saved-ideas')).toContainText('3 ideias guardadas');
+    await expect(page.getByTestId('idea-card')).toHaveCount(6);
+
   });
 
   test('trilho revisita o planejamento em modo leitura', async ({ page }) => {

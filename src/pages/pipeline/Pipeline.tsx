@@ -1,5 +1,5 @@
 // PIPELINE editorial (Kanban) — "Seu fluxo de conteúdo, do planejamento à publicação."
-// 1 card = 1 ideia do backlog ou 1 conteúdo com suas peças (D10). A campanha aparece
+// R1: ideias, conteúdos pendentes e peças individuais. A campanha aparece
 // discretamente; o protagonista é a ideia/conteúdo. Banner da Hive acima das colunas.
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
@@ -102,7 +102,7 @@ export function Pipeline() {
   const linkFor = (c: PipelineCard): string => {
     const campId = c.content?.campaign_id ?? c.idea?.campaign_id;
     const cyc = c.content?.cycle_id ?? c.idea?.cycle_id;
-    if (c.kind !== 'post' && campId && cyc) return `/producao?campaign=${campId}&cycle=${cyc}${c.kind === 'content' && c.content ? `&content=${c.content.id}` : ''}`;
+    if (c.kind !== 'post' && campId && cyc) return `/producao?campaign=${campId}&cycle=${cyc}${c.kind === 'content' && c.content ? `&content=${c.content.id}` : '&step=3'}`;
     if (c.kind !== 'post' && campId) return `/campanhas/${campId}`;
     return c.pieces[0] ? postClickRoute(c.pieces[0]) : '/pipeline';
   };
@@ -210,7 +210,7 @@ export function Pipeline() {
       {open && (
         <>
           <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setOpenId(null)} aria-hidden />
-          <aside role="dialog" aria-label="Manifestações do conteúdo" data-testid="card-drawer"
+          <aside role="dialog" aria-label="Detalhes do trabalho" data-testid="card-drawer"
             className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l bg-background shadow-2xl">
             <div className="flex items-start justify-between gap-2 border-b p-4">
               <div className="min-w-0">
@@ -233,9 +233,9 @@ export function Pipeline() {
                 </div>
               ) : (
                 <>
-                  {open.content?.body?.frase && <p className="font-display text-base">“{open.content.body.frase}”</p>}
+                  {open.kind === 'content' && open.content?.body?.frase && <p className="font-display text-base">“{open.content.body.frase}”</p>}
                   <div className="space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Manifestações</p>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{open.kind === 'post' ? 'Peça' : 'Desdobramentos a preparar'}</p>
                     {open.pieces.map((p) => (
                       <Link key={p.id} to={postClickRoute(p)} state={{ from: `/pipeline?${params.toString()}${params.toString() ? '&' : ''}focus=${p.id}` }} data-testid="drawer-piece" className="flex items-center gap-3 rounded-lg border p-2 hover:bg-accent/5">
                         <span className="h-14 w-11 shrink-0 overflow-hidden rounded border bg-secondary/40">
@@ -311,6 +311,8 @@ function CardView({ card: c, onOpen, link, editorial, cycle, cycleLabel, campaig
         {editorial && <p className="text-muted-foreground">{editorial}</p>}
       </button>
 
+      {c.kind === 'post' && c.content && <p className="mt-1 text-xs text-muted-foreground" data-testid="piece-origin">Origem: {c.content.title}</p>}
+      {c.kind === 'post' && c.pieces[0]?.codigo && <p className="mt-1 font-mono text-[10px] text-muted-foreground">{c.pieces[0].codigo}</p>}
       {c.kind === 'idea' ? (
         <div className="mt-2 space-y-1">
           <p className="font-medium text-accent">{c.origin === 'user' ? 'Ideia do usuário' : c.origin === 'result' ? 'Ideia do resultado' : 'Ideia-mãe'}</p>
@@ -320,10 +322,10 @@ function CardView({ card: c, onOpen, link, editorial, cycle, cycleLabel, campaig
         </div>
       ) : (
         <div className="mt-2 space-y-1">
-          {c.column === 'pendente' && c.pendingPieces > 0 && c.content?.status !== 'pending_validation' && (
+          {c.column === 'pendente' && c.pendingPieces > 0 && (c.kind === 'post' || c.content?.status !== 'pending_validation') && (
             <p className="inline-block rounded bg-amber-500/15 px-1.5 py-0.5 font-medium text-amber-700 dark:text-amber-400">{c.pendingPieces} {c.pendingPieces === 1 ? 'peça para revisar' : 'peças para revisar'}</p>
           )}
-          {c.content?.status === 'pending_validation' && <p className="inline-block rounded bg-amber-500/15 px-1.5 py-0.5 font-medium text-amber-700 dark:text-amber-400">Conteúdo para validar</p>}
+          {c.kind === 'content' && c.content?.status === 'pending_validation' && <p className="inline-block rounded bg-amber-500/15 px-1.5 py-0.5 font-medium text-amber-700 dark:text-amber-400">Conteúdo para validar</p>}
           {c.column === 'agendado' ? scheduled.map((p) => (
             <p key={p.id} className="flex items-center gap-1"><NetIcon platform={p.platform} />{NET(p.platform)} · {accountLabel(p)} · {format(new Date(p.scheduled_date!), "dd MMM · HH:mm", { locale: ptBR })}</p>
           )) : units(c.pieces).map(({ p, options }) => (

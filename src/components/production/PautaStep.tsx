@@ -8,7 +8,7 @@ import { AcjChip } from '@/components/acj/AcjChip';
 import { acjCycleApi } from '@/lib/acj/api';
 import { ACJ_META, acjColor } from '@/lib/acj/library';
 import { approvePauta, generatePauta, swapIdea } from '@/lib/campaign/pauta';
-import { ideaApi } from '@/lib/campaignApi';
+import { cycleApi, ideaApi } from '@/lib/campaignApi';
 import {
   ACJ_IDS, FUNCTION_COLORS, FUNCTION_SHORT, STRATEGIC_FUNCTIONS,
   type AcjCyclePlan, type BeeEditorial, type Campaign, type CampaignCycle, type Idea, type SocialAccount,
@@ -27,7 +27,8 @@ export function PautaStep({ campaign, cycle, ideas, editorials, accounts, onChan
   const [busy, setBusy] = useState<string | null>(null);
   const [acjPlan, setAcjPlan] = useState<AcjCyclePlan | null>(null);
   useEffect(() => { acjCycleApi.current(cycle.id).then(setAcjPlan).catch(() => setAcjPlan(null)); }, [cycle.id]);
-  const live = ideas.filter((i) => i.status !== 'discarded');
+  const live = ideas.filter((i) => i.status !== 'discarded' && i.status !== 'backlog');
+  const saved = ideas.filter(i => i.status === 'backlog');
   const approved = cycle.status !== 'pauta_ready' && cycle.status !== 'planned';
   const pieces = live.reduce((a, i) => a + i.channels.length, 0);
   const accountsUsed = new Set(live.flatMap((i) => i.channels.map((c) => c.account_id))).size;
@@ -72,11 +73,11 @@ export function PautaStep({ campaign, cycle, ideas, editorials, accounts, onChan
 
   const approve = () => run('approve', async () => {
     const c = await approvePauta(cycle, ideas);
-    onChange(ideas.map((i) => (i.status === 'discarded' ? i : { ...i, status: 'approved' as const })), c);
+    onChange(ideas.map((i) => (i.status !== 'proposed' && i.status !== 'approved' ? i : { ...i, status: 'approved' as const })), c);
     onApproved(c);
   });
 
-  if (live.length === 0) {
+  if (live.length === 0 && saved.length === 0) {
     return (
       <div className="space-y-4 rounded-2xl border border-dashed p-8 text-center" data-testid="pauta-empty">
         <p className="font-display text-lg font-semibold">O planejamento está confirmado, mas ainda não há pauta.</p>
@@ -100,6 +101,22 @@ export function PautaStep({ campaign, cycle, ideas, editorials, accounts, onChan
         <div className="rounded-2xl border bg-card p-4"><p className="font-display text-2xl font-bold" data-testid="pauta-count">{live.length} ideias</p><p className="text-xs text-muted-foreground">Pauta recomendada</p></div>
         <div className="rounded-2xl border bg-card p-4"><p className="font-display text-2xl font-bold" data-testid="pauta-pieces">{pieces} peças</p><p className="text-xs text-muted-foreground">Potencial de desdobramento</p></div>
       </div>
+
+      {saved.length > 0 && <section className="rounded-2xl border bg-card p-4" data-testid="saved-ideas">
+        <h2 className="font-semibold">Você tem {saved.length} ideias guardadas neste ciclo</h2>
+        <p className="text-sm text-muted-foreground">Retome quando quiser desenvolver uma delas.</p>
+        {saved.map(idea => <div key={idea.id} className="mt-2 flex items-center justify-between gap-3 text-sm">
+          <span>{idea.title}</span>
+          {<Button size="sm" variant="outline" disabled={!!busy} onClick={() => run(`resume-${idea.id}`, async () => {
+            const updated = await ideaApi.update(idea.id, { status: approved ? 'approved' : 'proposed' });
+            onChange(ideas.map(i => i.id === idea.id ? updated : i));
+            if (approved) {
+              const resumed = await cycleApi.update(cycle.id, { status: 'developing' });
+              onApproved(resumed);
+            }
+          })}>Retomar ideia</Button>}
+        </div>)}
+      </section>}
 
       <ol className="space-y-3">
         {live.map((idea, idx) => (
@@ -135,6 +152,10 @@ export function PautaStep({ campaign, cycle, ideas, editorials, accounts, onChan
                       {busy === `swap-${idea.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Repeat2 className="h-3.5 w-3.5" />} Trocar ideia
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => setEditing(idea.id)} disabled={!!busy} aria-label={`Editar ideia ${idx + 1}`}><Pencil className="h-3.5 w-3.5" /> Editar</Button>
+                    <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => run(`park-${idea.id}`, async () => {
+                      const updated = await ideaApi.update(idea.id, { status: 'backlog' });
+                      onChange(ideas.map(i => i.id === idea.id ? updated : i));
+                    })}>Guardar para depois</Button>
                     <Button size="sm" variant="ghost" onClick={() => remove(idea)} disabled={!!busy} aria-label={`Remover ideia ${idx + 1}`}><Trash2 className="h-3.5 w-3.5" /> Remover</Button>
                   </div>
                 )}
@@ -151,7 +172,7 @@ export function PautaStep({ campaign, cycle, ideas, editorials, accounts, onChan
       ) : (
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setEditing('new')} disabled={!!busy}><Plus className="h-4 w-4" /> Adicionar ideia à pauta</Button>
-          <Button variant="ghost" onClick={() => confirm('Pedir uma nova seleção? As ideias propostas pela Hive serão substituídas (as suas ficam).') && generate('refresh')} disabled={!!busy}>
+          <Button variant="ghost" onClick={() => confirm('Pedir uma nova seleção? As propostas atuais da Hive ficarão guardadas para retomar depois (as suas ficam).') && generate('refresh')} disabled={!!busy}>
             {busy === 'refresh' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Pedir nova seleção à Hive
           </Button>
         </div>
@@ -184,7 +205,7 @@ export function PautaStep({ campaign, cycle, ideas, editorials, accounts, onChan
 
       {!approved && (
         <div className="flex justify-end">
-          <Button variant="accent" size="lg" onClick={approve} disabled={!!busy || editing !== null}>
+          <Button variant="accent" size="lg" onClick={approve} disabled={!!busy || editing !== null || live.length === 0}>
             {busy === 'approve' ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Aprovar pauta e desenvolver conteúdos <ArrowRight className="h-4 w-4" />
           </Button>
         </div>

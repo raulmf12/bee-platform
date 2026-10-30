@@ -104,13 +104,14 @@ test.describe('F7 · home, pipeline e navegação', () => {
     const count = (col: string) => page.getByTestId(`col-${col}`).getByTestId('col-count');
     await expect(count('ideias')).toHaveText('1');
     await expect(count('rascunho')).toHaveText('0');
-    await expect(count('pendente')).toHaveText('2');
-    await expect(count('aprovado')).toHaveText('0');
+    await expect(count('pendente')).toHaveText('3');
+    await expect(count('aprovado')).toHaveText('1');
     await expect(count('agendado')).toHaveText('1');
     await expect(count('publicado')).toHaveText('1');
-    const multi = page.getByTestId('pipeline-card').filter({ hasText: 'A cultura da sua empresa' });
-    await expect(multi).toContainText('1 peça para revisar');
-    await expect(multi).toContainText('Imagem · Instagram · 2 opções');
+    const multi = page.getByTestId('col-pendente').getByTestId('pipeline-card').filter({ hasText: 'A cultura da sua empresa' });
+    await expect(multi).toHaveCount(2);
+    await expect(multi.first()).toContainText('1 peça para revisar');
+    await expect(page.getByTestId('col-aprovado')).toContainText('A cultura da sua empresa');
     await expect(page.getByTestId('col-ideias')).toContainText('Sugerida pela Hive');
     await expect(page.getByTestId('pipeline-banner')).toContainText('1 peça pronta espera sua revisão.');
     if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/f7-pipeline.png` });
@@ -136,13 +137,15 @@ test.describe('F7 · home, pipeline e navegação', () => {
     expect((await sql<{ status: string }>(`select status from ideas where title='A pergunta que ficou de uma reunião'`))[0].status).toBe('discarded');
 
     // Manifestações do conteúdo (sem as alternativas arquivadas) e ida à revisão.
-    await multi.getByRole('button').first().click();
+    await multi.first().getByRole('button').first().click();
     const drawer = page.getByTestId('card-drawer');
-    await expect(drawer.getByTestId('drawer-piece')).toHaveCount(3);
-    await expect(drawer).toContainText('Frase de A cultura da sua empresa');
+    await expect(drawer.getByTestId('drawer-piece')).toHaveCount(1);
+    await expect(drawer).toContainText('Instagram');
     if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/f7-drawer.png` });
+    const selectedHref = await drawer.getByTestId('drawer-piece').getAttribute('href');
+    expect(selectedHref).toMatch(/^\/posts\/novo\?retomar=1&post=/);
     await drawer.getByRole('link', { name: /Revisar/ }).click();
-    await expect(page).toHaveURL(new RegExp(`/producao\\?campaign=${a.id}&cycle=${c1}`));
+    expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe(selectedHref);
   });
 
   test('Criar → Um conteúdo → desenvolver → validar → peças, sempre "Sem campanha"', async ({ page }) => {

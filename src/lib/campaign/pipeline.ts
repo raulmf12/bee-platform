@@ -1,7 +1,5 @@
-// Pipeline (Kanban) por IDEIA / CONTEÚDO (D10): 1 card = 1 ideia do backlog ou
-// 1 conteúdo-mãe com suas N peças. A coluna é o estágio MENOS avançado entre as
-// peças (e canais previstos ainda sem peça contam como rascunho). Peças antigas,
-// sem conteúdo, viram cards próprios até o backfill do cutover. Determinístico.
+// Pipeline R1: ideias e trabalho editorial pendente mantêm seus cartões.
+// Cada peça aparece individualmente no próprio estágio, vinculada à origem.
 import type { Campaign, CampaignCycle, Content, Idea, IdeaChannel, StrategicFunction, UserPost } from '@/types';
 
 export type PipelineColumn = 'ideias' | 'rascunho' | 'pendente' | 'aprovado' | 'agendado' | 'publicado';
@@ -14,8 +12,6 @@ export const PIPELINE_COLUMNS: Array<{ key: PipelineColumn; label: string }> = [
   { key: 'agendado', label: 'Agendado' },
   { key: 'publicado', label: 'Publicado' },
 ];
-
-const ORDER: PipelineColumn[] = PIPELINE_COLUMNS.map((c) => c.key);
 
 export interface PipelineCard {
   id: string;
@@ -49,17 +45,7 @@ export function stageOfPost(p: UserPost): PipelineColumn {
   }
 }
 
-const minCol = (cols: PipelineColumn[]): PipelineColumn =>
-  cols.reduce((m, c) => (ORDER.indexOf(c) < ORDER.indexOf(m) ? c : m), 'publicado' as PipelineColumn);
-
-const covers = (p: UserPost, ch: IdeaChannel) => (ch.account_id && p.account_id ? p.account_id === ch.account_id : p.platform === ch.platform);
-
-// Grupo de alternativas = uma unidade de revisão.
-function countPending(pieces: UserPost[]): number {
-  const groups = new Set<string>();
-  for (const p of pieces) if (p.status === 'pending_approval') groups.add(p.alternative_group ?? p.id);
-  return groups.size;
-}
+const covers = (p: UserPost, ch: IdeaChannel) => p.platform === ch.platform && (!ch.account_id || p.account_id === ch.account_id);
 
 export function buildPipeline(d: {
   campaigns: Campaign[]; ideas: Idea[]; contents: Content[]; posts: UserPost[];
@@ -70,7 +56,7 @@ export function buildPipeline(d: {
   const live = d.posts.filter((p) => p.status !== 'archived');
   const byContent = new Map<string, UserPost[]>();
   for (const p of live) if (p.content_id) byContent.set(p.content_id, [...(byContent.get(p.content_id) ?? []), p]);
-  const contentIds = new Set(d.contents.map((c) => c.id));
+  const contentById = new Map(d.contents.map((c) => [c.id, c]));
   const developedIdeas = new Set(d.contents.filter((c) => c.status !== 'discarded' && c.idea_id).map((c) => c.idea_id!));
 
   for (const i of d.ideas) {
@@ -88,32 +74,30 @@ export function buildPipeline(d: {
     const pieces = (byContent.get(c.id) ?? []).sort((a, b) => a.created_at.localeCompare(b.created_at));
     const channels = idea?.channels?.length ? idea.channels : pieces.map((p) => ({ account_id: p.account_id ?? undefined, platform: p.platform as IdeaChannel['platform'] }));
     const missing = c.status === 'validated' ? channels.filter((ch) => !pieces.some((p) => covers(p, ch))) : [];
-    let column: PipelineColumn;
-    if (c.status === 'developing') column = 'rascunho';
-    else if (c.status === 'pending_validation') column = 'pendente';
-    else column = minCol([...pieces.map(stageOfPost), ...(missing.length || !pieces.length ? ['rascunho' as const] : [])]);
-    if (column === 'ideias') column = 'rascunho';
-    const scheduled = pieces.filter((p) => p.status === 'scheduled' && p.scheduled_date).map((p) => p.scheduled_date!).sort();
-    const published = pieces.filter((p) => p.status === 'published' && p.published_at).map((p) => p.published_at!).sort();
+    // Conteúdo é trabalho editorial. Peças prontas nunca ficam escondidas pelo
+    // estágio de uma irmã. Mantemos o conteúdo só quando há trabalho pendente.
+    if (c.status === 'validated' && pieces.length && !missing.length) continue;
+    const column: PipelineColumn = c.status === 'pending_validation' ? 'pendente' : 'rascunho';
     cards.push({
       id: `content:${c.id}`, kind: 'content', title: c.title, column, campaignId: camp(c.campaign_id), cycleId: c.cycle_id ?? null,
-      fn: c.strategic_function ?? null, editorialSlug: c.editorial_slug ?? null, channels, pieces,
-      pendingPieces: c.status === 'pending_validation' ? 1 : countPending(pieces), missingChannels: missing,
-      origin: idea?.origin, idea, content: c, nextDate: scheduled[0] ?? null, publishedAt: published[published.length - 1] ?? null,
+      fn: c.strategic_function ?? null, editorialSlug: c.editorial_slug ?? null, channels: missing, pieces: [],
+      pendingPieces: c.status === 'pending_validation' ? 1 : 0, missingChannels: missing,
+      origin: idea?.origin, idea, content: c, nextDate: null, publishedAt: null,
       updatedAt: c.updated_at,
     });
   }
 
-  // Peças sem conteúdo (histórico antes do backfill / fluxos legados).
+  // Cada peça tem coluna, conta, data e ação próprias, inclusive as legadas.
   for (const p of live) {
-    if (p.content_id && contentIds.has(p.content_id)) continue;
+    const content = p.content_id ? contentById.get(p.content_id) : undefined;
+    const idea = content?.idea_id ? d.ideas.find(i => i.id === content.idea_id) : undefined;
     cards.push({
       id: `post:${p.id}`, kind: 'post', title: (p.carousel_text?.quote as string | undefined) || p.title || p.caption?.slice(0, 80) || 'Post',
-      column: stageOfPost(p), campaignId: camp(p.campaign_id), cycleId: p.cycle_id ?? null, fn: null,
-      editorialSlug: (p.metadata?.editorial_slug as string | undefined) ?? null,
+      column: stageOfPost(p), campaignId: camp(p.campaign_id ?? content?.campaign_id), cycleId: p.cycle_id ?? content?.cycle_id ?? null, fn: content?.strategic_function ?? null,
+      editorialSlug: (p.metadata?.editorial_slug as string | undefined) ?? content?.editorial_slug ?? null,
       channels: [{ account_id: p.account_id ?? undefined, platform: p.platform as IdeaChannel['platform'] }], pieces: [p],
       pendingPieces: p.status === 'pending_approval' ? 1 : 0, missingChannels: [], nextDate: p.status === 'scheduled' ? p.scheduled_date ?? null : null,
-      publishedAt: p.published_at ?? null, updatedAt: p.updated_at,
+      publishedAt: p.published_at ?? null, updatedAt: p.updated_at, content, idea,
     });
   }
   return cards;
@@ -145,9 +129,10 @@ export function sortColumn(col: PipelineColumn, cards: PipelineCard[], cycles: C
 // Marca de repetição na CRIAÇÃO (ideia/conteúdo/peça gerados aqui). Posts importados
 // (Instagram/LinkedIn) nunca entram: são o histórico, não criação.
 export function repeatOf(c: Pick<PipelineCard, 'idea' | 'content' | 'pieces'>): { text: string; date: string | null } | null {
-  const fromIdea = c.idea?.repeat_of;
+  // Alertas de origem não provam duplicidade da peça em sua conta de destino.
+  const fromIdea = c.pieces.length ? null : c.idea?.repeat_of;
   if (fromIdea) return { text: fromIdea.text, date: fromIdea.said_at };
-  const fromContent = c.content?.metadata?.repeat;
+  const fromContent = c.pieces.length ? null : c.content?.metadata?.repeat;
   if (fromContent?.verdict === 'repeat') return { text: fromContent.of_text ?? '', date: fromContent.of_date };
   for (const p of c.pieces) {
     const r = (p.metadata as { repeat?: { verdict?: string; of_text?: string | null; of_date?: string | null }; imported_from?: string } | null);
