@@ -78,3 +78,5 @@ A regressão roda contra o **banco de produção**, então um PR que depende de 
 ## A prévia do Netlify
 
 Cada PR ganha um link de prévia ("Deploy Preview") para **ver** a mudança. Atenção: a prévia usa o **banco real**. O que se clica nela (aprovar, agendar, publicar) acontece de verdade na conta do Marcos. Use-a para olhar, não para testar ações.
+
+<!-- PR de teste da regressão no GitHub (03/11/2026). -->
